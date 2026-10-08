@@ -11,11 +11,17 @@ struct AnkiIOSApp: App {
 struct AppRootView: View {
     @State private var container: ModelContainer?
     @State private var failure: String?
+    @State private var store: StudyStore?
+    @State private var diagnosticOnly = false
 
     var body: some View {
         Group {
             if let container {
-                Phase0View().modelContainer(container)
+                if diagnosticOnly {
+                    Phase0View().modelContainer(container)
+                } else if let store {
+                    MainTabs(store: store, probeContainer: container)
+                }
             } else if let failure {
                 ContentUnavailableView {
                     Label("保存領域を開けません", systemImage: "externaldrive.badge.exclamationmark")
@@ -44,7 +50,23 @@ struct AppRootView: View {
                 storeURL = directory.appendingPathComponent(name).appendingPathExtension("store")
             }
             #endif
-            container = try PersistenceController.makeContainer(storeURL: storeURL)
+            let probe = try PersistenceController.makeContainer(storeURL: storeURL)
+            #if DEBUG
+            diagnosticOnly = ProcessInfo.processInfo.arguments.contains("-phase0-test-store")
+            #endif
+            if !diagnosticOnly {
+                var studyURL: URL?
+                #if DEBUG
+                let args = ProcessInfo.processInfo.arguments
+                if let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
+                    let directory = URL.applicationSupportDirectory.appendingPathComponent("UITestStores")
+                    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                    studyURL = directory.appendingPathComponent(args[index + 1]).appendingPathExtension("store")
+                }
+                #endif
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL))
+            }
+            container = probe
             failure = nil
         } catch {
             failure = error.localizedDescription

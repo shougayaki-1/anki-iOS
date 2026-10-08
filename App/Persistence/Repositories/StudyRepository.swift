@@ -1,0 +1,309 @@
+import Foundation
+import SwiftData
+
+extension PersistenceController {
+    static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
+        let schema = Schema(versionedSchema: StudySchema.self)
+        let config: ModelConfiguration
+        if let storeURL {
+            config = ModelConfiguration("Study", schema: schema, url: storeURL, cloudKitDatabase: .none)
+        } else if inMemory {
+            config = ModelConfiguration("Study", schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+        } else {
+            let directory = URL.applicationSupportDirectory.appendingPathComponent("Study")
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            config = ModelConfiguration("Study", schema: schema,
+                                        url: directory.appendingPathComponent("Study.store"), cloudKitDatabase: .none)
+        }
+        return try ModelContainer(for: schema, configurations: [config])
+    }
+}
+
+@MainActor
+final class StudyRepository {
+    let context: ModelContext
+    var calendar: Calendar
+    var save: (ModelContext) throws -> Void
+
+    init(container: ModelContainer, calendar: Calendar = .current,
+         save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
+        context = ModelContext(container); context.autosaveEnabled = false
+        self.calendar = calendar; self.save = save
+    }
+
+    func transaction<T>(_ body: () throws -> T) throws -> T {
+        do {
+            let result = try body()
+            try save(context)
+            return result
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    func initialize(now: Date) throws {
+        try transaction {
+            if try decks().isEmpty { context.insert(Deck(name: "マイデッキ", now: now)) }
+            if try context.fetch(FetchDescriptor<StudyPreferences>()).isEmpty {
+                context.insert(StudyPreferences())
+            }
+            // Process restart must not count time spent while the app was absent.
+            if let draft = try session() { draft.activeSince = nil }
+        }
+    }
+
+    func decks() throws -> [Deck] {
+        try context.fetch(FetchDescriptor<Deck>(sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]))
+    }
+    func notes() throws -> [Note] { try context.fetch(FetchDescriptor<Note>()) }
+    func cards() throws -> [StudyCard] { try context.fetch(FetchDescriptor<StudyCard>()) }
+    func logs() throws -> [StudyReviewLog] {
+        try context.fetch(FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence)]))
+    }
+    func session() throws -> SessionDraft? { try context.fetch(FetchDescriptor<SessionDraft>()).first }
+    func preferences() throws -> StudyPreferences {
+        guard let value = try context.fetch(FetchDescriptor<StudyPreferences>()).first else { throw StudyError.missingRecord }
+        return value
+    }
+    func settings() throws -> StudySettings {
+        let p = try preferences()
+        return StudySettings(desiredRetention: p.desiredRetention, dailyNewLimit: p.dailyNewLimit,
+                             dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour)
+    }
+    func updateSettings(_ value: StudySettings) throws {
+        guard (0.8...0.97).contains(value.desiredRetention), value.dailyNewLimit >= 0,
+              (0...23).contains(value.dayStartHour), value.dailyGoal == nil || value.dailyGoal! > 0 else {
+            throw StudyError.invalidContent
+        }
+        try transaction {
+            let p = try preferences()
+            p.desiredRetention = value.desiredRetention; p.dailyNewLimit = value.dailyNewLimit
+            p.dailyGoal = value.dailyGoal; p.dayStartHour = value.dayStartHour
+        }
+    }
+
+    @discardableResult
+    func createDeck(name: String, now: Date) throws -> UUID {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw StudyError.invalidContent }
+        return try transaction {
+            let deck = Deck(name: name, now: now); context.insert(deck); return deck.id
+        }
+    }
+
+    func validate(_ input: NoteInput) throws -> Data {
+        guard [.basic, .written].contains(input.kind) else { throw StudyError.unsupportedContent }
+        guard !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw StudyError.invalidContent }
+        guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
+        return try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer,
+                                                   explanation: input.explanation))
+    }
+
+    @discardableResult
+    func createNote(_ input: NoteInput, now: Date) throws -> UUID {
+        let content = try validate(input)
+        let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+        let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
+        return try transaction {
+            let note = Note(input: input, content: content, now: now)
+            context.insert(note)
+            context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now))
+            return note.id
+        }
+    }
+
+    func updateNote(id: UUID, input: NoteInput, resetHistory: Bool = false, now: Date) throws {
+        let content = try validate(input)
+        try transaction {
+            guard let note = try notes().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
+            note.deckID = input.deckID; note.type = input.kind.rawValue; note.contentPayload = content
+            note.defaultResponseMode = input.responseMode.rawValue; note.updatedAt = now
+            if resetHistory {
+                let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+                let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
+                for card in try cards().filter({ $0.noteID == id }) {
+                    card.fsrsPayload = payload; card.dueDate = now; card.updatedAt = now
+                }
+                // Historical logs remain for analysis, and continue to count toward today's new quota.
+            }
+            if let draft = try session(), let cardID = draft.cardID,
+               try cards().contains(where: { $0.id == cardID && $0.noteID == id }) {
+                draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = now; draft.elapsedMs = 0
+                draft.undoLogID = nil
+            }
+        }
+    }
+
+    func deleteNote(id: UUID) throws {
+        try transaction {
+            let removed = try cards().filter { $0.noteID == id }
+            let ids = Set(removed.map(\.id))
+            if let draft = try session() {
+                if let cardID = draft.cardID, ids.contains(cardID) {
+                    draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil
+                }
+                if let logID = draft.undoLogID, try logs().contains(where: { $0.id == logID && ids.contains($0.cardID) }) {
+                    draft.undoLogID = nil
+                }
+            }
+            for card in removed { context.delete(card) }
+            if let note = try notes().first(where: { $0.id == id }) { context.delete(note) }
+            // ReviewLog is intentionally retained even after content deletion.
+        }
+    }
+
+    func setSuspended(cardID: UUID, value: Bool, now: Date) throws {
+        try transaction {
+            guard let card = try cards().first(where: { $0.id == cardID }) else { throw StudyError.missingRecord }
+            card.isSuspended = value; card.updatedAt = now
+            if let draft = try session(), draft.cardID == cardID, value {
+                draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false
+            }
+        }
+    }
+
+    func snapshot(_ card: StudyCard) throws -> SchedulerSnapshot {
+        try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
+    }
+
+    func noteItems() throws -> [NoteItem] {
+        let scheduler = try ReviewScheduler()
+        let noteMap = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0) })
+        let deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, $0.name) })
+        return try cards().sorted { $0.createdAt > $1.createdAt }.map { card in
+            guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type),
+                  let mode = ResponseMode(rawValue: note.defaultResponseMode) else { throw StudyError.missingRecord }
+            let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            guard content.schemaVersion == 1 else { throw StudyError.unsupportedContent }
+            return NoteItem(id: note.id, cardID: card.id, deckID: note.deckID,
+                            deckName: deckMap[note.deckID] ?? "", kind: kind, content: content,
+                            responseMode: mode, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended)
+        }
+    }
+
+    func queueCards() throws -> [QueueCard] {
+        let scheduler = try ReviewScheduler()
+        return try cards().map { card in
+            let state = try scheduler.summary(snapshot(card)).state
+            return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
+                             suspended: card.isSuspended)
+        }
+    }
+    func queueLogs() throws -> [QueueLog] {
+        try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew) }
+    }
+    func counts(now: Date) throws -> HomeCounts {
+        try ReviewQueueBuilder(calendar: calendar).counts(cards: queueCards(), logs: queueLogs(),
+                                                        settings: settings(), now: now)
+    }
+
+    func start(mode: StudyMode, now: Date) throws {
+        try transaction {
+            if let existing = try session() { context.delete(existing) }
+            let draft = SessionDraft(mode: mode, now: now)
+            context.insert(draft)
+            try selectNext(draft: draft, now: now)
+        }
+    }
+    func resume(now: Date) throws {
+        try transaction {
+            guard let draft = try session() else { throw StudyError.noSession }
+            if draft.cardID == nil { try selectNext(draft: draft, now: now) }
+            else { draft.activeSince = now }
+        }
+    }
+    func selectNext(draft: SessionDraft, now: Date) throws {
+        let ids = try ReviewQueueBuilder(calendar: calendar).queue(
+            cards: queueCards(), logs: queueLogs(), settings: settings(),
+            mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
+            reviewStreak: draft.reviewStreak, now: now)
+        draft.cardID = ids.first; draft.typedDraft = ""; draft.answerRevealed = false
+        draft.elapsedMs = 0; draft.updatedAt = now
+        draft.activeSince = draft.cardID == nil ? nil : now
+        if let id = draft.cardID, let item = try noteItems().first(where: { $0.cardID == id }) {
+            draft.answerMode = item.responseMode.rawValue
+        }
+    }
+    func updateDraft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil, now: Date) throws {
+        try transaction {
+            guard let draft = try session() else { throw StudyError.noSession }
+            if let mode { draft.answerMode = mode.rawValue }
+            if let text { draft.typedDraft = text }
+            if let revealed { draft.answerRevealed = revealed }
+            draft.updatedAt = now
+        }
+    }
+    func setSessionActive(_ active: Bool, now: Date) throws {
+        try transaction {
+            guard let draft = try session() else { return }
+            if let since = draft.activeSince {
+                draft.elapsedMs += max(0, Int(now.timeIntervalSince(since) * 1000))
+            }
+            draft.activeSince = active && draft.cardID != nil ? now : nil
+            draft.updatedAt = now
+        }
+    }
+
+    func grade(_ grade: ReviewGrade, now: Date) throws {
+        try transaction {
+            guard let draft = try session(), let cardID = draft.cardID, draft.answerRevealed,
+                  let card = try cards().first(where: { $0.id == cardID && !$0.isSuspended }) else {
+                throw StudyError.noSession
+            }
+            let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+            let before = try snapshot(card)
+            let summary = try scheduler.summary(before)
+            if summary.state == "new", try counts(now: now).newRemaining == 0 { throw StudyError.newLimitReached }
+            let transition = try scheduler.review(before, grade: grade, now: now)
+            let after = try JSONEncoder().encode(transition.after)
+            let duration = draft.elapsedMs + (draft.activeSince.map { max(0, Int(now.timeIntervalSince($0) * 1000)) } ?? 0)
+            let log = StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                                     mode: ResponseMode(rawValue: draft.answerMode) ?? .mental,
+                                     durationMs: duration, wasNew: summary.state == "new",
+                                     sequence: (try logs().map(\.sequence).max() ?? 0) + 1)
+            context.insert(log)
+            card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+            card.updatedAt = now
+            draft.undoLogID = log.id
+            if !draft.touchedCardIDs.contains(card.id) { draft.touchedCardIDs.append(card.id) }
+            if summary.state == "new" { draft.reviewStreak = 0 }
+            else if summary.state == "review" { draft.reviewStreak += 1 }
+            try selectNext(draft: draft, now: now)
+        }
+    }
+
+    func undo(now: Date) throws {
+        try transaction {
+            guard let draft = try session(), let logID = draft.undoLogID,
+                  let latest = try logs().last, latest.id == logID,
+                  let card = try cards().first(where: { $0.id == latest.cardID }),
+                  card.fsrsPayload == latest.fsrsAfter else { throw StudyError.cannotUndo }
+            let before = try JSONDecoder().decode(SchedulerSnapshot.self, from: latest.fsrsBefore)
+            card.fsrsPayload = latest.fsrsBefore
+            card.dueDate = try ReviewScheduler().summary(before).dueDate
+            card.updatedAt = latest.previousUpdatedAt
+            draft.cardID = card.id; draft.answerMode = latest.responseMode
+            draft.typedDraft = ""; draft.answerRevealed = false; draft.undoLogID = nil
+            draft.elapsedMs = 0; draft.activeSince = now; draft.updatedAt = now
+            draft.reviewStreak = 0
+            if latest.wasNew { draft.touchedCardIDs.removeAll { $0 == card.id } }
+            context.delete(latest)
+        }
+    }
+
+    func presentation(now: Date) throws -> ReviewPresentation? {
+        guard let draft = try session() else { return nil }
+        let mode = StudyMode(rawValue: draft.mode) ?? .review
+        let item = try noteItems().first(where: { $0.cardID == draft.cardID })
+        let short = try queueCards().filter {
+            !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
+                && (mode != .new || draft.touchedCardIDs.contains($0.id))
+        }.map(\.due).min()
+        return ReviewPresentation(card: item, mode: mode,
+                                  responseMode: ResponseMode(rawValue: draft.answerMode) ?? .mental,
+                                  typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
+                                  canUndo: draft.undoLogID != nil, nextShortDue: short)
+    }
+}
