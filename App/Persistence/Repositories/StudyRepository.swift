@@ -3,7 +3,7 @@ import SwiftData
 
 extension PersistenceController {
     static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: StudySchemaV2.self)
+        let schema = Schema(versionedSchema: StudySchemaV3.self)
         let config: ModelConfiguration
         if let storeURL {
             config = ModelConfiguration("Study", schema: schema, url: storeURL, cloudKitDatabase: .none)
@@ -23,12 +23,13 @@ extension PersistenceController {
 final class StudyRepository {
     let context: ModelContext
     var calendar: Calendar
+    var mediaStore: MediaStore
     var save: (ModelContext) throws -> Void
 
-    init(container: ModelContainer, calendar: Calendar = .current,
+    init(container: ModelContainer, calendar: Calendar = .current, mediaStore: MediaStore = MediaStore(),
          save: @escaping (ModelContext) throws -> Void = { try $0.save() }) {
         context = ModelContext(container); context.autosaveEnabled = false
-        self.calendar = calendar; self.save = save
+        self.calendar = calendar; self.save = save; self.mediaStore = mediaStore
     }
 
     func transaction<T>(_ body: () throws -> T) throws -> T {
@@ -99,16 +100,19 @@ final class StudyRepository {
     }
 
     func validate(_ input: NoteInput) throws -> Data {
-        guard [.basic, .written].contains(input.kind) else { throw StudyError.unsupportedContent }
+        if let imageID = input.imageID { guard try assets().contains(where: { $0.id == imageID }) else { throw StudyError.missingRecord } }
         guard !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw StudyError.invalidContent }
+              ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { throw StudyError.invalidContent }
         guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
-        return try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer,
-                                                   explanation: input.explanation))
+        let content = TextContent(question: input.question, answer: input.answer,
+                                  explanation: input.explanation, reverseEnabled: input.reverseEnabled,
+                                  imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks)
+        _ = try CardGeneration.variants(kind: input.kind, content: content)
+        return try JSONEncoder().encode(content)
     }
 
     @discardableResult
-    func createNote(_ input: NoteInput, now: Date) throws -> UUID {
+    func createNote(_ input: NoteInput, clearingDraft key: String? = nil, now: Date) throws -> UUID {
         let content = try validate(input)
         let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
         let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
@@ -116,26 +120,39 @@ final class StudyRepository {
             let note = Note(input: input, content: content, now: now)
             note.tagIDs = try tagIDs(for: input.tagNames)
             context.insert(note)
-            context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now))
+            let value = try JSONDecoder().decode(TextContent.self, from: content)
+            for key in try CardGeneration.variants(kind: input.kind, content: value) {
+                context.insert(StudyCard(noteID: note.id, variantKey: key, payload: payload, now: now))
+            }
+            try removeEditorDraftInTransaction(key: key)
             return note.id
         }
     }
 
-    func updateNote(id: UUID, input: NoteInput, resetHistory: Bool = false, now: Date) throws {
+    func updateNote(id: UUID, input: NoteInput, resetHistory: Bool = false, clearingDraft key: String? = nil, now: Date) throws {
         let content = try validate(input)
         try transaction {
             guard let note = try notes().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
             note.deckID = input.deckID; note.type = input.kind.rawValue; note.contentPayload = content
             note.defaultResponseMode = input.responseMode.rawValue; note.updatedAt = now
             note.tagIDs = try tagIDs(for: input.tagNames)
-            if resetHistory {
-                let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
-                let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
-                for card in try cards().filter({ $0.noteID == id }) {
+            let value = try JSONDecoder().decode(TextContent.self, from: content)
+            let variants = try CardGeneration.variants(kind: input.kind, content: value)
+            let existing = try cards().filter { $0.noteID == id }
+            let payload = try JSONEncoder().encode(ReviewScheduler(desiredRetention: settings().desiredRetention).newCard(now: now))
+            for card in existing {
+                if !variants.contains(card.variantKey) {
+                    if let draft = try session(), draft.cardID == card.id { draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false }
+                    context.delete(card)
+                } else if resetHistory {
                     card.fsrsPayload = payload; card.dueDate = now; card.updatedAt = now
                 }
-                // Historical logs remain for analysis, and continue to count toward today's new quota.
             }
+            for key in variants where !existing.contains(where: { $0.variantKey == key }) {
+                context.insert(StudyCard(noteID: id, variantKey: key, payload: payload, now: now))
+            }
+            // Historical logs remain even when a variant is removed.
+            try removeEditorDraftInTransaction(key: key)
             if let draft = try session(), let cardID = draft.cardID,
                try cards().contains(where: { $0.id == cardID && $0.noteID == id }) {
                 draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = now; draft.elapsedMs = 0
@@ -158,6 +175,7 @@ final class StudyRepository {
             }
             for card in removed { context.delete(card) }
             if let note = try notes().first(where: { $0.id == id }) { context.delete(note) }
+            try removeEditorDraftInTransaction(key: "edit:\(id.uuidString)")
             // ReviewLog is intentionally retained even after content deletion.
         }
     }
@@ -185,9 +203,11 @@ final class StudyRepository {
             guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type),
                   let mode = ResponseMode(rawValue: note.defaultResponseMode) else { throw StudyError.missingRecord }
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
-            guard content.schemaVersion == 1 else { throw StudyError.unsupportedContent }
-            return NoteItem(id: note.id, cardID: card.id, deckID: note.deckID,
-                            deckName: deckMap[note.deckID] ?? "", kind: kind, content: content,
+            guard (1...2).contains(content.schemaVersion) else { throw StudyError.unsupportedContent }
+            return NoteItem(noteID: note.id, cardID: card.id, deckID: note.deckID,
+                            deckName: deckMap[note.deckID] ?? "", kind: kind,
+                            content: try CardGeneration.displayed(kind: kind, content: content, variant: card.variantKey),
+                            sourceContent: content, variantKey: card.variantKey,
                             responseMode: mode, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
         }
     }

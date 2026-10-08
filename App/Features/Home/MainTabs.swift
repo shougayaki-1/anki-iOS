@@ -27,7 +27,7 @@ struct MainTabs: View {
         .alert("処理に失敗しました", isPresented: Binding(
             get: { store.failure != nil }, set: { if !$0 { store.failure = nil } }
         )) { Button("閉じる", role: .cancel) { store.failure = nil } }
-        message: { Text((store.failure ?? "") + "\n変更は確定されていません。操作をもう一度お試しください。") }
+        message: { Text(store.failure ?? "") }
         .onChange(of: scenePhase) { _, phase in
             store.perform {
                 try store.repository.setSessionActive(phase == .active && store.showingReview, now: store.clock())

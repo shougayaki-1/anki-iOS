@@ -23,8 +23,10 @@ struct ImportView: View {
     @State private var failure: String?
     @State private var result: ImportResult?
 
-    init(store: StudyStore) {
+    init(store: StudyStore, initialText: String = "", sourceName: String = "貼り付け") {
         self.store = store
+        _text = State(initialValue: initialText)
+        _source = State(initialValue: sourceName)
         _deckID = State(initialValue: store.decks.first?.id ?? UUID())
     }
 
@@ -62,7 +64,7 @@ struct ImportView: View {
                     Section("登録先") {
                         Picker("デッキ", selection: $deckID) { ForEach(store.decks) { Text($0.name).tag($0.id) } }
                         Picker("カード形式", selection: $kind) {
-                            ForEach([NoteKind.basic, .written], id: \.self) { Text($0.title).tag($0) }
+                            ForEach([NoteKind.basic, .written, .cloze], id: \.self) { Text($0.title).tag($0) }
                         }
                         TextField("タグ（カンマ区切り）", text: $tagText).accessibilityIdentifier("importTags")
                         Picker("重複の扱い", selection: $action) {
@@ -89,7 +91,7 @@ struct ImportView: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("一括登録")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeImport") }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focused = false } }
             }
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText]) { result in
@@ -121,14 +123,17 @@ struct ImportView: View {
         }
     }
     private func incomplete(_ row: ImportRow) -> Bool {
-        ImportParser.normalized(row.question).isEmpty || ImportParser.normalized(row.answer).isEmpty
+        ImportParser.normalized(row.question).isEmpty || (kind != .cloze && ImportParser.normalized(row.answer).isEmpty)
     }
     private func isDuplicate(_ row: ImportRow) -> Bool {
         (try? store.repository.duplicate(of: NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer))) != nil
     }
     private func preview() {
         do {
-            if format == "Q/A" { rows = try ImportParser.pasted(text) }
+            if format == "Q/A" {
+                rows = try ImportParser.pasted(text)
+                if text.contains("{{c") { kind = .cloze }
+            }
             else {
                 let table = try ImportParser.table(text, delimiter: format == "CSV" ? "," : "\t")
                 columnCount = max(2, table.rows.map(\.count).max() ?? 2)

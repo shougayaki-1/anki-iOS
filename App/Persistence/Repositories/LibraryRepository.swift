@@ -161,7 +161,10 @@ extension StudyRepository {
                 }
                 let note = Note(input: input, content: content, now: now)
                 note.tagIDs = try tagIDs(for: tagNames); context.insert(note)
-                context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: fresh, now: now))
+                let value = try JSONDecoder().decode(TextContent.self, from: content)
+                for key in try CardGeneration.variants(kind: kind, content: value) {
+                    context.insert(StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now))
+                }
                 imported += 1
             }
             context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))

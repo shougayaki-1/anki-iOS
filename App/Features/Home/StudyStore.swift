@@ -16,8 +16,8 @@ final class StudyStore {
     var failure: String?
     var showingReview = false
 
-    init(container: ModelContainer, clock: @escaping () -> Date = Date.init) throws {
-        repository = StudyRepository(container: container)
+    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore()) throws {
+        repository = StudyRepository(container: container, mediaStore: mediaStore)
         self.clock = clock
         try repository.initialize(now: clock())
         scope = try repository.scope()

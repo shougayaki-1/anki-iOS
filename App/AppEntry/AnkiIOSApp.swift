@@ -56,15 +56,17 @@ struct AppRootView: View {
             #endif
             if !diagnosticOnly {
                 var studyURL: URL?
+                var mediaStore = MediaStore()
                 #if DEBUG
                 let args = ProcessInfo.processInfo.arguments
                 if let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
                     let directory = URL.applicationSupportDirectory.appendingPathComponent("UITestStores")
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     studyURL = directory.appendingPathComponent(args[index + 1]).appendingPathExtension("store")
+                    mediaStore = MediaStore(root: URL.applicationSupportDirectory.appendingPathComponent("UITestMedia").appendingPathComponent(args[index + 1]))
                 }
                 #endif
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL))
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore)
             }
             container = probe
             failure = nil

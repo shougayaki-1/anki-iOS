@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @Bindable var store: StudyStore
     @State private var adding = false
+    @State private var ocr = false
     @State private var importing = false
     @State private var addingDeck = false
     @State private var deckName = ""
@@ -42,6 +43,9 @@ struct LibraryView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button("文字認識", systemImage: "text.viewfinder") { ocr = true }.accessibilityIdentifier("openOCR")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
@@ -51,6 +55,7 @@ struct LibraryView: View {
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
             .sheet(isPresented: $importing) { ImportView(store: store) }
+            .sheet(isPresented: $ocr) { OCRImportView(store: store) }
 
         }
     }
@@ -69,6 +74,15 @@ struct NoteDetailView: View {
             if let item {
                 List {
                     Section("問題") { Text(item.content.question).textSelection(.enabled) }
+                    if let id = item.sourceContent.imageID {
+                        Section("画像") {
+                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
+                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
+                                               targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
+                                               hideAll: item.sourceContent.hideAllMasks ?? true, revealed: true)
+                            } else { Label("画像を読み込めません。編集から写真を再選択してください。", systemImage: "exclamationmark.triangle") }
+                        }
+                    }
                     Section("解答") { Text(item.content.answer).textSelection(.enabled) }
                     if !item.content.explanation.isEmpty { Section("解説") { Text(item.content.explanation) } }
                     if !item.tagNames.isEmpty { Section("タグ") { Text(item.tagNames.joined(separator: "、")) } }
@@ -93,7 +107,7 @@ struct NoteDetailView: View {
                 .sheet(isPresented: $editing) { NoteEditorView(store: store, item: item) }
                 .confirmationDialog("このカードを削除しますか？", isPresented: $confirmingDelete, titleVisibility: .visible) {
                     Button("削除", role: .destructive) {
-                        if store.perform({ try store.repository.deleteNote(id: item.id) }) { dismiss() }
+                        if store.perform({ try store.repository.deleteNote(id: item.noteID) }) { dismiss() }
                     }
                 } message: { Text("問題と解答は削除されます。過去の回答履歴は残ります。") }
             } else { ContentUnavailableView("カードがありません", systemImage: "rectangle") }

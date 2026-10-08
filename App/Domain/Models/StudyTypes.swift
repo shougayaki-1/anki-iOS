@@ -30,13 +30,17 @@ enum StudyMode: String, Codable, CaseIterable, Identifiable {
 }
 
 struct TextContent: Codable, Equatable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var question: String
     var answer: String
     var explanation: String
+    var reverseEnabled: Bool? = nil
+    var imageID: UUID? = nil
+    var masks: [ImageMask]? = nil
+    var hideAllMasks: Bool? = nil
 }
 
-struct NoteInput {
+struct NoteInput: Codable, Equatable {
     var deckID: UUID
     var kind: NoteKind = .basic
     var question = ""
@@ -44,6 +48,10 @@ struct NoteInput {
     var explanation = ""
     var responseMode: ResponseMode = .mental
     var tagNames: [String] = []
+    var reverseEnabled = false
+    var imageID: UUID? = nil
+    var masks: [ImageMask] = []
+    var hideAllMasks = true
 }
 
 struct StudySettings: Equatable {
@@ -60,12 +68,15 @@ struct DeckItem: Identifiable {
 }
 
 struct NoteItem: Identifiable {
-    let id: UUID
+    let noteID: UUID
+    var id: UUID { cardID }
     let cardID: UUID
     let deckID: UUID
     let deckName: String
     let kind: NoteKind
     let content: TextContent
+    let sourceContent: TextContent
+    let variantKey: String
     let responseMode: ResponseMode
     let summary: ScheduleSummary
     let isSuspended: Bool

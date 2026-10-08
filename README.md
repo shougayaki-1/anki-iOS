@@ -1,6 +1,6 @@
 # anki-iOS
 
-個人用のiPhoneネイティブ暗記アプリ。現在はPhase 2（デッキ管理と一括登録）まで実装済みで、MVP全機能の実装を継続中です。
+個人用のiPhoneネイティブ暗記アプリ。現在はPhase 3（穴埋め・画像・OCR）まで実装済みで、MVP全機能の実装を継続中です。
 
 SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間隔反復学習と、Apple純正アプリに近い操作感・触覚フィードバックを目指します。
 
@@ -45,7 +45,7 @@ SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間
 
 ### 自動テスト・ビルド
 
-Xcodeでは⌘Uで全テストを実行する（Phase 2時点では30件）。CLIでも次の手順で再現できる。シミュレーター名・OSは `xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` の一覧に合わせて変更する。
+Xcodeでは⌘Uで全テストを実行する（Phase 3時点では44件）。CLIでも次の手順で再現できる。シミュレーター名・OSは `xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` の一覧に合わせて変更する。
 
 ```sh
 xcodebuild -resolvePackageDependencies -project AnkiIOS.xcodeproj -scheme AnkiIOS
@@ -153,3 +153,20 @@ UIテストの再起動後スクリーンショットも確認済み。UIテス�
 2026-10-08、日本時間：iPhone 17 Pro / iOS 26.5 Simulatorで**全30件成功、失敗0、スキップ0**。[集計](docs/verification/phase2-test-summary.json)。CSVの引用符内カンマ・改行・エスケープ、列マッピング、欠落値、パース拒否、貼り付け、階層・循環・移動、タグ共有、スコープ、兄弟制御、重複と履歴保全、失敗時の原子性、v1移行を検証。UIで親子デッキ作成→親スコープで学習、貼り付け→プレビュー→成功2／重複スキップ1／エラー1→学習を確認。結果画面を視覚確認済み。Debug Simulator・Release arm64（署名なし）のビルド成功。
 
 結果：`/private/tmp/anki-phase2-tests-v2.xcresult`、Releaseログ：`/private/tmp/anki-phase2-release-final.log`。実機と最低OSは未検証。ネイティブファイル選択ダイアログを経由するUI操作は未自動化（パーサー・保存・貼り付けUIは検証済み）。穴埋め構文・画像・OCRはPhase 3で追加する。
+
+## Phase 3 — 穴埋め・画像・OCR
+
+- カード編集の形式を「穴埋め」にして `{{c1::東京}}` などを入力する。同じ番号は1枚にまとまり、任意のヒントは `{{c1::東京::都市名}}` と書ける。既存番号を維持する限り、文章の順序変更でもCard IDとFSRS状態を保つ。
+- 一問一答では裏表反転カードも追加できる。「出題プレビュー」で生成カードと解答を確認し、保存して次の入力へ進むこともできる。入力下書きは再起動後に復元し、保存確定と同じトランザクションで取り除く。
+- 写真を選択または撮影し、「画像マスク」で範囲をドラッグして追加する。中央への追加、マスク選択・移動、位置・幅・高さの数値調整、削除、個別解答を利用できる。全マスクを隠す／対象だけ隠すを選び、各マスクを独立して復習する。マスクUUIDを維持した位置変更は履歴を保つ。
+- 画像は向きを正規化したJPEGとしてApplication Support/Study/Mediaへ保存。入力上限20MB・40メガピクセル。トリミングではマスク座標を新しい画像に合わせて変換する。画像を読み込めないカードは評価せず、編集から写真を再選択する。
+- ライブラリの文字認識ボタンから写真を選び、Visionで端末内OCRを実行。対応する日本語・英語を選択し、認識結果を編集して一括登録プレビューへ進む。編集画面でも画像の文字を問題文に追加できる。AIによる問題生成は行わない。
+- SwiftData V3にMediaAsset / EditorDraftを追加し、V1→V2→V3の軽量移行を実装。既存モデル宣言は維持する。確定失敗時は下書き・画像参照を保護し、参照のない管理画像を清掃できる。
+
+2026-10-09、日本時間：iPhone 17 Pro / iOS 26.5 Simulatorで全43件同時成功（単体／結合35＋UI8、失敗0）。さらに画像の破損参照保護・編集下書き削除の1件を追加し、最終単体／結合36件を再実行してすべて成功した（検証したテストは合計44件）。[全体集計](docs/verification/phase3-test-summary.json)、[最終単体／結合集計](docs/verification/phase3-unit-summary.json)。
+
+Visionのローカル文字画像認識、独立マスク状態、座標の拡大縮小、トリミング、画像保存失敗、孤立ファイル清掃、下書き保全、V2→V3移行を検証。UIでは穴埋めの下書き→再起動→プレビュー→学習→Undo→編集、PhotosPicker→マスク追加→全画像トリミング→学習→再起動→履歴維持編集、OCR→認識結果修正→一括プレビュー→確定→学習が成功。主要4画面の画像を視覚確認済み。
+
+Form内の複数ボタン同時発火と、全幅・全高マスクのゼロ範囲SliderクラッシュをUI検証で発見して修正。テスト用DB・画像管理領域は通常データから分離する。最終Debug（テスト用）・Release arm64（署名なし）ビルド成功。結果は `/private/tmp/anki-phase3-all-v6.xcresult`、`/private/tmp/anki-phase3-unit-v7.xcresult`、Releaseログ `/private/tmp/anki-phase3-release-v7.log`。実機カメラ・日本語OCR精度・iOS 17実行は未検証。
+
+写真UIテストにはシミュレーターの写真ライブラリに画像が必要。空の場合は `xcrun simctl addmedia booted <画像のパス>` でローカル画像を追加してから実行する。今回の検証ではTOKYO CAPITALと描いた画像を追加し、PhotosPickerの実際の選択画面を使用した。

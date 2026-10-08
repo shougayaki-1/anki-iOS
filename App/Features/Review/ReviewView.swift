@@ -12,6 +12,13 @@ struct ReviewView: View {
                         Text(item.deckName).font(.caption).foregroundStyle(.secondary)
                         Text(item.content.question).font(.title2).textSelection(.enabled)
                             .accessibilityIdentifier("reviewQuestion")
+                        if let id = item.sourceContent.imageID {
+                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
+                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
+                                               targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
+                                               hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
+                            } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
+                        }
                         Picker("回答方法", selection: Binding(get: { review.responseMode }, set: { store.draft(mode: $0) })) {
                             ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
                         }.pickerStyle(.segmented)
@@ -39,10 +46,12 @@ struct ReviewView: View {
                                 } label: { Text(gradeTitle(grade)).frame(maxWidth: .infinity) }
                                 .buttonStyle(.borderedProminent)
                                 .accessibilityIdentifier("grade-\(grade.rawValue)")
+                                .disabled(!imageAvailable(item))
                             }
                         } else {
                             Button("答えを表示") { typingFocused = false; store.draft(revealed: true) }
                                 .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
+                                .disabled(!imageAvailable(item))
                         }
                     } else {
                         ContentUnavailableView("今出題できるカードはありません", systemImage: "checkmark.circle",
@@ -82,5 +91,10 @@ struct ReviewView: View {
         case .good: return "Good · 思い出せた"
         case .easy: return "Easy · 簡単だった"
         }
+    }
+    private func imageAvailable(_ item: NoteItem) -> Bool {
+        guard let id = item.sourceContent.imageID else { return true }
+        guard let url = try? store.repository.assetURL(id: id) else { return false }
+        return UIImage(contentsOfFile: url.path) != nil
     }
 }
