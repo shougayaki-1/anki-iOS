@@ -43,6 +43,23 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section("学習対象") {
+                    Picker("デッキ（子孫を含む）", selection: $store.scope.deckID) {
+                        Text("すべて").tag(UUID?.none)
+                        ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
+                    }.accessibilityIdentifier("studyDeckPicker")
+                    if !store.tags.isEmpty {
+                        DisclosureGroup("タグ（選択したすべてを含む）") {
+                            ForEach(store.tags) { tag in
+                                Toggle(tag.name, isOn: Binding(get: { store.scope.tagIDs.contains(tag.id) }, set: { selected in
+                                    if selected { store.scope.tagIDs.append(tag.id) }
+                                    else { store.scope.tagIDs.removeAll { $0 == tag.id } }
+                                    store.perform { }
+                                }))
+                            }
+                        }
+                    }
+                }
                 Section("今日の学習") {
                     LabeledContent("復習待ち", value: "\(store.counts.due)枚").accessibilityIdentifier("dueCount")
                     LabeledContent("今日の新規残数", value: "\(store.counts.newRemaining)枚")
@@ -77,6 +94,7 @@ struct HomeView: View {
                 }
             }
             .navigationTitle("ホーム")
+            .onChange(of: store.scope.deckID) { _, _ in store.perform { } }
             .confirmationDialog("中断中の学習を新しいモードに切り替えますか？",
                                 isPresented: Binding(get: { replacingWith != nil }, set: { if !$0 { replacingWith = nil } })) {
                 if let mode = replacingWith {

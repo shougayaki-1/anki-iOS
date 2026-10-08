@@ -26,12 +26,14 @@ struct QueueCard {
     let due: Date
     let createdAt: Date
     let suspended: Bool
+    var noteID: UUID? = nil
 }
 
 struct QueueLog {
     let cardID: UUID
     let reviewedAt: Date
     let wasNew: Bool
+    var noteID: UUID? = nil
 }
 
 struct ReviewQueueBuilder {
@@ -43,17 +45,30 @@ struct ReviewQueueBuilder {
         let interval = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let today = logs.filter { $0.reviewedAt >= interval.start && $0.reviewedAt < interval.end }
         let used = Set(today.filter(\.wasNew).map(\.cardID)).count
-        let fresh = cards.filter { !$0.suspended && $0.state == "new" }.count
+        let available = cards.filter { card in
+            guard !card.suspended else { return false }
+            if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
+            guard let noteID = card.noteID else { return true }
+            return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
+        }
+        let fresh = available.filter { $0.state == "new" }.count
         return HomeCounts(
-            due: cards.filter { !$0.suspended && $0.state != "new" && $0.due <= now }.count,
-            totalNew: fresh, newRemaining: min(fresh, max(0, settings.dailyNewLimit - used)),
+            due: available.filter { $0.state != "new" && $0.due <= now }.count,
+            totalNew: cards.filter { !$0.suspended && $0.state == "new" }.count, newRemaining: min(fresh, max(0, settings.dailyNewLimit - used)),
             learnedToday: Set(today.map(\.cardID)).count, answerCount: today.count
         )
     }
 
     func queue(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, mode: StudyMode,
                touched: Set<UUID>, reviewStreak: Int, now: Date) -> [UUID] {
-        let eligible = cards.filter { !$0.suspended }
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let today = logs.filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+        let eligible = cards.filter { card in
+            if card.suspended { return false }
+            if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
+            guard let noteID = card.noteID else { return true }
+            return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
+        }
         let randomized = shuffled(eligible)
         let rank = Dictionary(uniqueKeysWithValues: randomized.enumerated().map { ($0.element.id, $0.offset) })
         let due = eligible.filter { $0.state != "new" && $0.due <= now }.sorted {

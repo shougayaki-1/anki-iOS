@@ -3,7 +3,7 @@ import SwiftData
 
 extension PersistenceController {
     static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: StudySchema.self)
+        let schema = Schema(versionedSchema: StudySchemaV2.self)
         let config: ModelConfiguration
         if let storeURL {
             config = ModelConfiguration("Study", schema: schema, url: storeURL, cloudKitDatabase: .none)
@@ -15,7 +15,7 @@ extension PersistenceController {
             config = ModelConfiguration("Study", schema: schema,
                                         url: directory.appendingPathComponent("Study.store"), cloudKitDatabase: .none)
         }
-        return try ModelContainer(for: schema, configurations: [config])
+        return try ModelContainer(for: schema, migrationPlan: StudyMigrationPlan.self, configurations: [config])
     }
 }
 
@@ -69,7 +69,7 @@ final class StudyRepository {
     func settings() throws -> StudySettings {
         let p = try preferences()
         return StudySettings(desiredRetention: p.desiredRetention, dailyNewLimit: p.dailyNewLimit,
-                             dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour)
+                             dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour, siblingBuryEnabled: try options().siblingBuryEnabled)
     }
     func updateSettings(_ value: StudySettings) throws {
         guard (0.8...0.97).contains(value.desiredRetention), value.dailyNewLimit >= 0,
@@ -80,15 +80,21 @@ final class StudyRepository {
             let p = try preferences()
             p.desiredRetention = value.desiredRetention; p.dailyNewLimit = value.dailyNewLimit
             p.dailyGoal = value.dailyGoal; p.dayStartHour = value.dayStartHour
+            var options = try options(); options.siblingBuryEnabled = value.siblingBuryEnabled
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+                row.payload = try JSONEncoder().encode(options)
+            } else { context.insert(try ExtraPreferences(options: options)) }
         }
     }
 
     @discardableResult
-    func createDeck(name: String, now: Date) throws -> UUID {
+    func createDeck(name: String, parentID: UUID? = nil, now: Date) throws -> UUID {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw StudyError.invalidContent }
         return try transaction {
-            let deck = Deck(name: name, now: now); context.insert(deck); return deck.id
+            if let parentID, try !decks().contains(where: { $0.id == parentID }) { throw StudyError.missingRecord }
+            let deck = Deck(name: name, now: now); deck.parentID = parentID
+            context.insert(deck); return deck.id
         }
     }
 
@@ -108,6 +114,7 @@ final class StudyRepository {
         let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
         return try transaction {
             let note = Note(input: input, content: content, now: now)
+            note.tagIDs = try tagIDs(for: input.tagNames)
             context.insert(note)
             context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now))
             return note.id
@@ -120,6 +127,7 @@ final class StudyRepository {
             guard let note = try notes().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
             note.deckID = input.deckID; note.type = input.kind.rawValue; note.contentPayload = content
             note.defaultResponseMode = input.responseMode.rawValue; note.updatedAt = now
+            note.tagIDs = try tagIDs(for: input.tagNames)
             if resetHistory {
                 let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
                 let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
@@ -171,7 +179,8 @@ final class StudyRepository {
     func noteItems() throws -> [NoteItem] {
         let scheduler = try ReviewScheduler()
         let noteMap = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0) })
-        let deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, $0.name) })
+        let deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, try deckPath($0.id)) })
+        let tagMap = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
         return try cards().sorted { $0.createdAt > $1.createdAt }.map { card in
             guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type),
                   let mode = ResponseMode(rawValue: note.defaultResponseMode) else { throw StudyError.missingRecord }
@@ -179,7 +188,7 @@ final class StudyRepository {
             guard content.schemaVersion == 1 else { throw StudyError.unsupportedContent }
             return NoteItem(id: note.id, cardID: card.id, deckID: note.deckID,
                             deckName: deckMap[note.deckID] ?? "", kind: kind, content: content,
-                            responseMode: mode, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended)
+                            responseMode: mode, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
         }
     }
 
@@ -188,20 +197,22 @@ final class StudyRepository {
         return try cards().map { card in
             let state = try scheduler.summary(snapshot(card)).state
             return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
-                             suspended: card.isSuspended)
+                             suspended: card.isSuspended, noteID: card.noteID)
         }
     }
     func queueLogs() throws -> [QueueLog] {
-        try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew) }
+        let map = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
+        return try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: map[$0.cardID]) }
     }
     func counts(now: Date) throws -> HomeCounts {
         try ReviewQueueBuilder(calendar: calendar).counts(cards: queueCards(), logs: queueLogs(),
                                                         settings: settings(), now: now)
     }
 
-    func start(mode: StudyMode, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), now: Date) throws {
         try transaction {
             if let existing = try session() { context.delete(existing) }
+            try setScopeInTransaction(scope)
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
             try selectNext(draft: draft, now: now)
@@ -216,7 +227,7 @@ final class StudyRepository {
     }
     func selectNext(draft: SessionDraft, now: Date) throws {
         let ids = try ReviewQueueBuilder(calendar: calendar).queue(
-            cards: queueCards(), logs: queueLogs(), settings: settings(),
+            cards: scopedQueueCards(scope()), logs: queueLogs(), settings: settings(),
             mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
             reviewStreak: draft.reviewStreak, now: now)
         draft.cardID = ids.first; draft.typedDraft = ""; draft.answerRevealed = false
@@ -297,7 +308,7 @@ final class StudyRepository {
         guard let draft = try session() else { return nil }
         let mode = StudyMode(rawValue: draft.mode) ?? .review
         let item = try noteItems().first(where: { $0.cardID == draft.cardID })
-        let short = try queueCards().filter {
+        let short = try scopedQueueCards(scope()).filter {
             !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()

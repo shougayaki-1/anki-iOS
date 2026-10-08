@@ -6,6 +6,8 @@ import Observation
 final class StudyStore {
     let repository: StudyRepository
     var clock: () -> Date
+    var scope = LearningScope()
+    var tags: [TagItem] = []
     var decks: [DeckItem] = []
     var notes: [NoteItem] = []
     var counts = HomeCounts()
@@ -18,14 +20,17 @@ final class StudyStore {
         repository = StudyRepository(container: container)
         self.clock = clock
         try repository.initialize(now: clock())
+        scope = try repository.scope()
         try reload()
     }
 
     func reload() throws {
         repository.calendar = .current
-        decks = try repository.decks().map { DeckItem(id: $0.id, name: $0.name) }
+        decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
+        if let id = scope.deckID, !decks.contains(where: { $0.id == id }) { scope.deckID = nil }
         notes = try repository.noteItems()
-        counts = try repository.counts(now: clock())
+        tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
+        counts = try repository.scopedCounts(scope: scope, now: clock())
         settings = try repository.settings()
         review = try repository.presentation(now: clock())
     }
@@ -36,7 +41,7 @@ final class StudyStore {
         catch { failure = error.localizedDescription; return false }
     }
     func start(_ mode: StudyMode) {
-        if perform({ try repository.start(mode: mode, now: clock()) }) { showingReview = true }
+        if perform({ try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
     }
     func resume() {
         if perform({ try repository.resume(now: clock()) }) { showingReview = true }

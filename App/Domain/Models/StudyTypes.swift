@@ -43,6 +43,7 @@ struct NoteInput {
     var answer = ""
     var explanation = ""
     var responseMode: ResponseMode = .mental
+    var tagNames: [String] = []
 }
 
 struct StudySettings: Equatable {
@@ -50,6 +51,7 @@ struct StudySettings: Equatable {
     var dailyNewLimit = 10
     var dailyGoal: Int? = 20
     var dayStartHour = 4
+    var siblingBuryEnabled = true
 }
 
 struct DeckItem: Identifiable {
@@ -67,6 +69,8 @@ struct NoteItem: Identifiable {
     let responseMode: ResponseMode
     let summary: ScheduleSummary
     let isSuspended: Bool
+    var tagNames: [String] = []
+    var tagIDs: [UUID] = []
 }
 
 struct HomeCounts: Equatable {

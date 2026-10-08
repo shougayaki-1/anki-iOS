@@ -3,13 +3,14 @@ import SwiftUI
 struct LibraryView: View {
     @Bindable var store: StudyStore
     @State private var adding = false
+    @State private var importing = false
     @State private var addingDeck = false
     @State private var deckName = ""
     @State private var search = ""
 
     var filtered: [NoteItem] {
         store.notes.filter {
-            search.isEmpty || "\($0.content.question) \($0.content.answer) \($0.deckName)".localizedCaseInsensitiveContains(search)
+            search.isEmpty || "\($0.content.question) \($0.content.answer) \($0.deckName) \($0.tagNames.joined(separator: " "))".localizedCaseInsensitiveContains(search)
         }
     }
 
@@ -39,19 +40,18 @@ struct LibraryView: View {
             .searchable(text: $search, prompt: "問題・解答・デッキを検索")
             .navigationTitle("ライブラリ")
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("デッキ追加") { addingDeck = true } }
+                ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
                 }
             }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
-            .alert("デッキ追加", isPresented: $addingDeck) {
-                TextField("デッキ名", text: $deckName)
-                Button("追加") {
-                    if store.perform({ try store.repository.createDeck(name: deckName, now: store.clock()) }) { deckName = "" }
-                }
-                Button("キャンセル", role: .cancel) { deckName = "" }
-            }
+            .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
+            .sheet(isPresented: $importing) { ImportView(store: store) }
+
         }
     }
 }
@@ -71,6 +71,7 @@ struct NoteDetailView: View {
                     Section("問題") { Text(item.content.question).textSelection(.enabled) }
                     Section("解答") { Text(item.content.answer).textSelection(.enabled) }
                     if !item.content.explanation.isEmpty { Section("解説") { Text(item.content.explanation) } }
+                    if !item.tagNames.isEmpty { Section("タグ") { Text(item.tagNames.joined(separator: "、")) } }
                     Section("学習状態") {
                         LabeledContent("形式", value: item.kind.title)
                         LabeledContent("回答方法", value: item.responseMode.title)

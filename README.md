@@ -1,6 +1,6 @@
 # anki-iOS
 
-個人用のiPhoneネイティブ暗記アプリ。現在はPhase 1（基本のカードと復習）を実装済みで、MVP全機能の実装を継続中です。
+個人用のiPhoneネイティブ暗記アプリ。現在はPhase 2（デッキ管理と一括登録）まで実装済みで、MVP全機能の実装を継続中です。
 
 SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間隔反復学習と、Apple純正アプリに近い操作感・触覚フィードバックを目指します。
 
@@ -45,7 +45,7 @@ SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間
 
 ### 自動テスト・ビルド
 
-Xcodeでは⌘Uで全テストを実行する（Phase 1時点では20件）。CLIでも次の手順で再現できる。シミュレーター名・OSは `xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` の一覧に合わせて変更する。
+Xcodeでは⌘Uで全テストを実行する（Phase 2時点では30件）。CLIでも次の手順で再現できる。シミュレーター名・OSは `xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` の一覧に合わせて変更する。
 
 ```sh
 xcodebuild -resolvePackageDependencies -project AnkiIOS.xcodeproj -scheme AnkiIOS
@@ -134,3 +134,22 @@ UIテストの再起動後スクリーンショットも確認済み。UIテス�
 - 結果バンドル `/private/tmp/anki-phase1-tests-v2.xcresult`、最終ビルドログ `/private/tmp/anki-phase1-debug-final.log`、`/private/tmp/anki-phase1-release-final.log`。一時ファイルのため永続保管は保証しない。
 
 実機・iOS 17ランタイムでの動作、触覚の感触、性能規模試験は未検証。階層・タグ・一括登録・穴埋め・画像・通知・完全バックアップ・詳細統計は後続Phaseで実装する。全体の進捗は [implementation-progress.md](docs/implementation-progress.md) に記録する。
+
+
+## Phase 2 — デッキ管理と一括登録
+
+- ライブラリの「デッキ管理」から親子デッキを作成・改名・移動できる。自分や子孫を親にする循環は拒否。削除時は子孫ノートを別デッキへ移動／ノートとカードも削除を選び、過去の回答履歴を保持する。
+- カード編集でカンマ区切りのタグを指定。タグはデッキから独立し、表記を正規化して共有する。問題・解答・デッキ階層・タグを検索できる。
+- ホームでデッキ（子孫を含む）とタグ（選択したすべてを含む）を絞り込む。新規上限と日次目標は全体で共通。セッションに学習対象を保存し、再開時もその範囲を利用する。
+- ライブラリの一括登録からUTF-8 CSV / TSV / TXTファイル、Q:/A:・タブ区切りの貼り付けを取り込む。ファイル上限10MB。ヘッダー有無と問題・解答の列を選び、プレビューで各行を編集・除外してから確定する。通常文章は編集用テキストとして扱い、問いを自動生成しない。
+- 同一デッキの形式・正規化した問題と解答から重複候補を判定。初期はスキップ。別ノート追加／更新は明示選択し、更新の未学習リセットも明示操作とする。手入力でも重複確認を表示する。
+- 保存成功・スキップ・行エラーを表示し、ImportBatchに結果を保存。保存失敗時はNote/Card/Tag/Batchのすべてをrollbackする。
+- 同じNoteの兄弟Cardは同日出題を抑制し、短期学習・再学習だけ例外にする。設定で変更可能。抑制によるFSRS状態・dueの変更はしない。
+
+### 移行と検証
+
+`StudySchema` v1モデルは変更せず、v2にTag / ImportBatch / SessionScope / ExtraPreferencesを追加。SchemaMigrationPlanの軽量移行を実装し、実際のv1ディスクストアからUUID・FSRS・ReviewLog・SessionDraftを維持するテストが成功。
+
+2026-10-08、日本時間：iPhone 17 Pro / iOS 26.5 Simulatorで**全30件成功、失敗0、スキップ0**。[集計](docs/verification/phase2-test-summary.json)。CSVの引用符内カンマ・改行・エスケープ、列マッピング、欠落値、パース拒否、貼り付け、階層・循環・移動、タグ共有、スコープ、兄弟制御、重複と履歴保全、失敗時の原子性、v1移行を検証。UIで親子デッキ作成→親スコープで学習、貼り付け→プレビュー→成功2／重複スキップ1／エラー1→学習を確認。結果画面を視覚確認済み。Debug Simulator・Release arm64（署名なし）のビルド成功。
+
+結果：`/private/tmp/anki-phase2-tests-v2.xcresult`、Releaseログ：`/private/tmp/anki-phase2-release-final.log`。実機と最低OSは未検証。ネイティブファイル選択ダイアログを経由するUI操作は未自動化（パーサー・保存・貼り付けUIは検証済み）。穴埋め構文・画像・OCRはPhase 3で追加する。

@@ -24,6 +24,13 @@ struct SettingsView: View {
                         get: { store.settings.dayStartHour }, set: { value in update { $0.dayStartHour = value } }
                     ), in: 0...23)
                 }
+                Section("関連カード") {
+                    Toggle("同じノートの兄弟カードを同日抑制", isOn: Binding(
+                        get: { store.settings.siblingBuryEnabled }, set: { value in update { $0.siblingBuryEnabled = value } }
+                    ))
+                    Text("短期学習・再学習は例外です。復習予定そのものは変更しません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("FSRS-6") {
                     Slider(value: Binding(get: { store.settings.desiredRetention }, set: { value in
                         update { $0.desiredRetention = value }
