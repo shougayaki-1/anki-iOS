@@ -61,7 +61,7 @@ xcrun devicectl device process launch --device '<接続端末のIdentifier>' dev
 
 通常起動では通知・カメラ権限を要求しない。通知をオンにするとき、カメラを使うときに要求する。写真はシステムの選択画面から取り込む。
 
-2026-10-09の実機準備：Xcode 27.0（27A266a）、Developer Directory `/Applications/Xcode.app/Contents/Developer` でSPMの固定リビジョン解決を確認し、実機arm64向けDebugの署名なしコンパイルに成功（インストール可能な署名済みアプリの検証ではない）。SETBはXcodeの保存済み情報にCompany／非Personal Teamとして登録され、既存の別アプリ用開発プロファイルも期限内だった。ローカルには有効なApple Development署名identityが2件ある。ただしApple Accounts画面は未サインインで、現在の有料メンバーシップと権限はオンライン未確認。自動プロビジョニングを許可した署名ビルドは `No Accounts` と本アプリ用プロファイル未取得で停止した。`devicectl`の端末一覧にはシミュレーターだけが表示され、接続実機の機種・iOSバージョンは未確認。署名・インストール・起動・SwiftData初期化・操作と再起動後の保存確認は未検証。SETB所属アカウントへのサインインと実機の接続準備後に再実行する。
+2026-10-09の実機準備：Xcode 27.0（27A266a）、Developer Directory `/Applications/Xcode.app/Contents/Developer` でSPMの固定リビジョン解決を確認し、実機arm64向けDebugの署名なしコンパイルに成功（インストール可能な署名済みアプリの検証ではない）。SETBはXcodeの保存済み情報にCompany／非Personal Teamとして登録され、既存の別アプリ用開発プロファイルも期限内だった。ローカルには有効なApple Development署名identityが2件ある。その後、SETB所属アカウントへのサインイン、SETB, NPOのApp ManagerロールとCertificates, Identifiers & Profiles権限をXcodeで確認した。自動プロビジョニングを許可して署名ビルドを再実行したところ、Appleは `Unable to process request - PLA Update available` を返した。チームのAccount Holderによる最新のProgram License Agreementへの同意が必要で、現状はメンバーシップのリソースにアクセスできず、本アプリ用プロファイルを取得できない。Account HolderがApple DeveloperのAccount画面で契約を確認・同意した後に再実行する。現在のメンバーシップ有効性の確認も契約更新後に行う。`devicectl`の端末一覧にはシミュレーターだけが表示され、接続実機の機種・iOSバージョンは未確認。署名・インストール・起動・SwiftData初期化・操作と再起動後の保存確認は未検証。契約更新と実機の接続準備後に再実行する。
 
 ### 依存関係とFSRSの採用理由
 
