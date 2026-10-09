@@ -28,7 +28,7 @@ struct ReviewView: View {
                                                hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
                             } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
                         }
-                        if typeSize.isAccessibilitySize { modePicker(review).pickerStyle(.menu) }
+                        if typeSize.isAccessibilitySize { accessibleModePicker(review) }
                         else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
                         if review.responseMode == .typing && !review.answerRevealed {
                             TextField("自分の回答", text: Binding(get: { store.review?.typedDraft ?? "" }, set: { store.draft(text: $0) }), axis: .vertical)
@@ -121,6 +121,37 @@ struct ReviewView: View {
         Picker("回答方法", selection: Binding(get: { review.responseMode }, set: { store.draft(mode: $0) })) {
             ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
         }.accessibilityIdentifier("reviewModePicker")
+    }
+
+    private func accessibleModePicker(_ review: ReviewPresentation) -> some View {
+        Menu {
+            ForEach(ResponseMode.allCases, id: \.self) { mode in
+                Button {
+                    store.draft(mode: mode)
+                } label: {
+                    if review.responseMode == mode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Text(mode.title)
+                    }
+                }
+                .accessibilityIdentifier("response-mode-\(mode.rawValue)")
+            }
+        } label: {
+            HStack {
+                Text("回答方法")
+                Spacer(minLength: 12)
+                Text(review.responseMode.title).foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
+            }
+            .font(.body)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("回答方法")
+        .accessibilityValue(review.responseMode.title)
+        .accessibilityIdentifier("reviewModePicker")
     }
 
     private func gradeColor(_ grade: ReviewGrade) -> Color {

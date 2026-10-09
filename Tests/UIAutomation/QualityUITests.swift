@@ -87,7 +87,11 @@ final class QualityUITests: XCTestCase {
         app.tabBars.buttons["ホーム"].tap()
         let start = app.buttons["start-new"]; scrollTo(start, app: app); start.tap()
         let mode = app.descendants(matching: .any)["reviewModePicker"]
-        scrollTo(mode, app: app); mode.tap(); app.buttons["文字入力"].firstMatch.tap()
+        scrollTo(mode, app: app); mode.tap()
+        let typingMode = app.buttons["response-mode-typing"]
+        XCTAssertTrue(typingMode.waitForExistence(timeout: 5)); typingMode.tap()
+        expectation(for: NSPredicate(format: "value == %@", "文字入力"), evaluatedWith: mode)
+        waitForExpectations(timeout: 5)
         let input = app.descendants(matching: .any)["typedAnswer"]
         scrollTo(input, app: app); input.tap(); input.typeText("Tokyo")
         if app.buttons["完了"].exists { app.buttons["完了"].tap() }
