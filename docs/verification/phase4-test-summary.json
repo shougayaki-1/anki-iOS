@@ -1,0 +1,46 @@
+{
+  "devicesAndConfigurations" : [
+    {
+      "device" : {
+        "architecture" : "arm64",
+        "deviceId" : "622E0166-B007-4976-AF1D-77381FC7C1BF",
+        "deviceName" : "iPhone 17 Pro",
+        "modelName" : "iPhone 17 Pro",
+        "osBuildNumber" : "23F77",
+        "osVersion" : "26.5",
+        "platform" : "iOS Simulator"
+      },
+      "expectedFailures" : 0,
+      "failedTests" : 0,
+      "passedTests" : 63,
+      "skippedTests" : 0,
+      "testPlanConfiguration" : {
+        "configurationId" : "1",
+        "configurationName" : "Test Scheme Action"
+      }
+    }
+  ],
+  "environmentDescription" : "AnkiIOS · Built with macOS 27.0.1",
+  "expectedFailures" : 0,
+  "failedTests" : 0,
+  "finishTime" : 1791504488.779,
+  "passedTests" : 63,
+  "result" : "Passed",
+  "skippedTests" : 0,
+  "startTime" : 1791504063.434,
+  "statistics" : [
+
+  ],
+  "testFailures" : [
+
+  ],
+  "title" : "Test - AnkiIOS",
+  "topInsights" : [
+    {
+      "category" : "Longest Test Runs",
+      "impact" : "61% of duration",
+      "text" : "2 longest test runs with outlier durations exceeding 0.40s (three standard deviations)"
+    }
+  ],
+  "totalTestCount" : 63
+}
