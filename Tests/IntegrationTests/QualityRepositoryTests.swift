@@ -1,10 +1,29 @@
 import XCTest
 import SwiftData
+import UserNotifications
 import UIKit
 @testable import AnkiIOS
 
 @MainActor
 final class QualityRepositoryTests: XCTestCase {
+    func testAuthorizedNotificationDiagnosticsAndTestCleanup() async throws {
+        guard ProcessInfo.processInfo.environment["ANKI_NOTIFICATION_DIAGNOSTICS"] == "1" else {
+            throw XCTSkip("実機のテスト通知診断・後片付けが指定されていません。")
+        }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        let pending = await center.pendingNotificationRequests()
+        let delivered = await center.deliveredNotifications()
+        let tests = pending.filter { $0.identifier.hasPrefix("review-test-") }
+        let testDelivered = delivered.filter { $0.request.identifier.hasPrefix("review-test-") }
+        let earliest = tests.compactMap { ($0.trigger as? UNCalendarNotificationTrigger)?.nextTriggerDate() }.min()
+        print("Notification diagnostics: authorization=\(settings.authorizationStatus.rawValue), alerts=\(settings.alertSetting.rawValue), center=\(settings.notificationCenterSetting.rawValue), scheduledSummary=\(settings.scheduledDeliverySetting.rawValue), testPending=\(tests.count), testDelivered=\(testDelivered.count), nextTestDelay=\(earliest?.timeIntervalSinceNow ?? -1)")
+        center.removePendingNotificationRequests(withIdentifiers: tests.map(\.identifier))
+        center.removeDeliveredNotifications(withIdentifiers: testDelivered.map { $0.request.identifier })
+        let remaining = await center.pendingNotificationRequests()
+        XCTAssertFalse(remaining.contains { $0.identifier.hasPrefix("review-test-") })
+        XCTAssertEqual(Set(remaining.map(\.identifier)), Set(pending.filter { !$0.identifier.hasPrefix("review-test-") }.map(\.identifier)))
+    }
     func testIdentityAssetsAndPrimaryButtonContrast() throws {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "暗記ノート")
         let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any])
