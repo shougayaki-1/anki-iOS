@@ -24,11 +24,57 @@ final class QualityRepositoryTests: XCTestCase {
         XCTAssertFalse(remaining.contains { $0.identifier.hasPrefix("review-test-") })
         XCTAssertEqual(Set(remaining.map(\.identifier)), Set(pending.filter { !$0.identifier.hasPrefix("review-test-") }.map(\.identifier)))
     }
+    func testLegacyReviewOptionsAndSettingsDiskRestartPreserveStudyState() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("Study.store")
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+        try repo.initialize(now: now)
+        let row = try ExtraPreferences(options: StudyOptions())
+        row.payload = Data("{\"schemaVersion\":1,\"siblingBuryEnabled\":true}".utf8)
+        repo.context.insert(row); try repo.context.save()
+        XCTAssertEqual(try repo.settings().reviewAppearance, ReviewAppearance())
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.good, now: now)
+        let cards = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate) }, logs = try repo.logs().map(\.id)
+        var settings = try repo.settings()
+        settings.reviewAppearance = ReviewAppearance(gesturesEnabled: true, textSize: .larger, imageDisplay: .compact, answerFirst: true, animationsEnabled: false)
+        try repo.updateSettings(settings)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+        XCTAssertEqual(try reopened.settings(), settings)
+        let actual = try reopened.cards()
+        XCTAssertEqual(actual.count, cards.count)
+        for (id, fsrs, due) in cards {
+            let card = try XCTUnwrap(actual.first { $0.id == id })
+            XCTAssertEqual(card.fsrsPayload, fsrs); XCTAssertEqual(card.dueDate, due)
+        }
+        XCTAssertEqual(try reopened.logs().map(\.id), logs)
+        XCTAssertThrowsError(try JSONDecoder().decode(StudyOptions.self, from: Data("{\"schemaVersion\":2,\"siblingBuryEnabled\":true,\"reviewAppearance\":{\"gesturesEnabled\":true,\"textSize\":\"bad\",\"imageDisplay\":\"hidden\",\"answerFirst\":false,\"animationsEnabled\":true}}".utf8)))
+    }
     func testIdentityAssetsAndPrimaryButtonContrast() throws {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "暗記ノート")
         let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any])
         let primary = try XCTUnwrap(icons["CFBundlePrimaryIcon"] as? [String: Any])
         XCTAssertEqual(primary["CFBundleIconName"] as? String, "AppIcon")
+        func luminance(_ color: UIColor, traits: UITraitCollection) -> Double {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            XCTAssertTrue(color.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a))
+            func linear(_ value: CGFloat) -> Double {
+                let v = Double(value)
+                return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+            }
+            return linear(r) * 0.2126 + linear(g) * 0.7152 + linear(b) * 0.0722
+        }
+        let secondary = try XCTUnwrap(UIColor(named: "SecondaryText"))
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            let foreground = luminance(secondary, traits: traits)
+            for background in [UIColor.systemBackground, .systemGroupedBackground, .secondarySystemGroupedBackground] {
+                let back = luminance(background, traits: traits)
+                XCTAssertGreaterThanOrEqual((max(foreground, back) + 0.05) / (min(foreground, back) + 0.05), 4.5)
+            }
+        }
         for name in ["AccentColor", "SecondaryText", "PrimaryAction", "GradeAgain", "GradeHard", "GradeGood", "GradeEasy"] {
             let color = try XCTUnwrap(UIColor(named: name))
             for style in [UIUserInterfaceStyle.light, .dark] where name != "AccentColor" && name != "SecondaryText" {

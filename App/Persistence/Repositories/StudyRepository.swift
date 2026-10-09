@@ -71,7 +71,8 @@ final class StudyRepository {
         let p = try preferences(), options = try options()
         return StudySettings(desiredRetention: p.desiredRetention, dailyNewLimit: p.dailyNewLimit,
                              dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour, siblingBuryEnabled: options.siblingBuryEnabled,
-                             notification: options.notification ?? NotificationOptions(), hapticsMode: options.hapticsMode ?? .standard)
+                             notification: options.notification ?? NotificationOptions(), hapticsMode: options.hapticsMode ?? .standard,
+                             reviewAppearance: options.reviewAppearance ?? ReviewAppearance())
     }
     func updateSettings(_ value: StudySettings) throws {
         guard (0.8...0.97).contains(value.desiredRetention), value.dailyNewLimit >= 0,
@@ -84,6 +85,7 @@ final class StudyRepository {
             p.dailyGoal = value.dailyGoal; p.dayStartHour = value.dayStartHour
             var options = try options(); options.schemaVersion = 2; options.siblingBuryEnabled = value.siblingBuryEnabled
             options.notification = value.notification; options.hapticsMode = value.hapticsMode
+            options.reviewAppearance = value.reviewAppearance
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(options)
             } else { context.insert(try ExtraPreferences(options: options)) }
