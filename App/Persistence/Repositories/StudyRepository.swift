@@ -196,12 +196,12 @@ final class StudyRepository {
         try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
     }
 
-    func noteItems() throws -> [NoteItem] {
+    func noteItems(cardID: UUID? = nil) throws -> [NoteItem] {
         let scheduler = try ReviewScheduler()
         let noteMap = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0) })
         let deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, try deckPath($0.id)) })
         let tagMap = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
-        return try cards().sorted { $0.createdAt > $1.createdAt }.map { card in
+        return try cards().filter { cardID == nil || $0.id == cardID }.sorted { $0.createdAt > $1.createdAt }.map { card in
             guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type),
                   let mode = ResponseMode(rawValue: note.defaultResponseMode) else { throw StudyError.missingRecord }
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
@@ -255,7 +255,7 @@ final class StudyRepository {
         draft.cardID = ids.first; draft.typedDraft = ""; draft.answerRevealed = false
         draft.elapsedMs = 0; draft.updatedAt = now
         draft.activeSince = draft.cardID == nil ? nil : now
-        if let id = draft.cardID, let item = try noteItems().first(where: { $0.cardID == id }) {
+        if let id = draft.cardID, let item = try noteItems(cardID: id).first {
             draft.answerMode = item.responseMode.rawValue
         }
     }
@@ -329,7 +329,7 @@ final class StudyRepository {
     func presentation(now: Date) throws -> ReviewPresentation? {
         guard let draft = try session() else { return nil }
         let mode = StudyMode(rawValue: draft.mode) ?? .review
-        let item = try noteItems().first(where: { $0.cardID == draft.cardID })
+        let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
         let short = try scopedQueueCards(scope()).filter {
             !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))

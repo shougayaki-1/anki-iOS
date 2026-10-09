@@ -1,6 +1,6 @@
 # anki-iOS
 
-個人用のiPhoneネイティブ暗記アプリ。現在はPhase 3（穴埋め・画像・OCR）まで実装済みで、MVP全機能の実装を継続中です。
+個人用のiPhoneネイティブ暗記アプリ。Phase 1〜5のMVPを実装し、利用可能なシミュレーターで検証済みです。
 
 SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間隔反復学習と、Apple純正アプリに近い操作感・触覚フィードバックを目指します。
 
@@ -28,10 +28,12 @@ SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間
 1. Xcodeで `AnkiIOS.xcodeproj` を開く。検証環境はXcode 26.5 / Swift 6.3.2。Deployment TargetはiOS 17.0、iPhone専用。
 2. Swift Package Managerの依存解決を待つ（初回のみネット接続が必要）。追加ツールやプロジェクト生成処理は不要。
 3. Scheme `AnkiIOS` とiPhoneシミュレーターを選び、Run（⌘R）。
-4. 設定→「Phase 0検証」で「検証して保存」を押す。仮想日時で `good → good → again → good` を実行し、UUID、遷移、回答4回・忘却1回、次回日時を保存・表示する。
-5. アプリを終了して再起動し、同じUUID・保存件数・状態・次回日時が表示されることを確認する。「検証して保存」を再度押すと別の検証レコードが追加される。
+4. ライブラリの＋から形式を選び、問題と解答を入力して保存する。画像・穴埋めの操作は各Phaseの説明を参照。
+5. ホームで「新しく覚える」または「まとめて学習」を選び、答え表示→4段階評価で学習する。期限到来後は「復習する」。Undoと中断／再開を利用でき、再起動後も履歴・予定・下書きを保持する。
 
-実機では、iOS 17以降のiPhoneを接続し、Xcodeの **Signing & Capabilities → Team** に自分のApple IDのチームを指定する。Bundle Identifierが重複する場合は自分のものに変更する。iPhoneでDeveloper Modeを有効にし、必要な信頼設定を済ませて、その端末を選択して⌘R。通知・カメラ・写真の権限はPhase 0では不要。
+DebugビルドのPhase 0診断は設定→「Phase 0検証」→「検証して保存」。仮想日時で `good → good → again → good` を実行し、UUID・回答4回・忘却1回・次回日時を記録する。再起動で同じ値を確認でき、再度保存すると別レコードを追加する。
+
+実機では、iOS 17以降のiPhoneを接続し、Xcodeの **Signing & Capabilities → Team** に自分のApple IDのチームを指定する。Bundle Identifierが重複する場合は自分のものに変更する。iPhoneでDeveloper Modeを有効にし、必要な信頼設定を済ませて、その端末を選択して⌘R。通常起動では通知・カメラ権限を要求しない。通知をオンにするとき、カメラを使うときに要求する。写真はシステムの選択画面から取り込む。
 
 ### 依存関係とFSRSの採用理由
 
@@ -45,7 +47,7 @@ SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間
 
 ### 自動テスト・ビルド
 
-Xcodeでは⌘Uで全テストを実行する（Phase 3時点では44件）。CLIでも次の手順で再現できる。シミュレーター名・OSは `xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` の一覧に合わせて変更する。
+Xcodeでは⌘Uで全テストを実行する。CLIでも次の手順で再現できる。シミュレーター名・OSは `xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` の一覧に合わせて変更する。
 
 ```sh
 xcodebuild -resolvePackageDependencies -project AnkiIOS.xcodeproj -scheme AnkiIOS
@@ -54,7 +56,7 @@ xcodebuild test \
   -project AnkiIOS.xcodeproj -scheme AnkiIOS \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.5' \
   -derivedDataPath build/DerivedData \
-  -resultBundlePath build/Phase0.xcresult \
+  -resultBundlePath build/MVP.xcresult \
   CODE_SIGNING_ALLOWED=NO
 
 xcodebuild build \
@@ -152,7 +154,7 @@ UIテストの再起動後スクリーンショットも確認済み。UIテス�
 
 2026-10-08、日本時間：iPhone 17 Pro / iOS 26.5 Simulatorで**全30件成功、失敗0、スキップ0**。[集計](docs/verification/phase2-test-summary.json)。CSVの引用符内カンマ・改行・エスケープ、列マッピング、欠落値、パース拒否、貼り付け、階層・循環・移動、タグ共有、スコープ、兄弟制御、重複と履歴保全、失敗時の原子性、v1移行を検証。UIで親子デッキ作成→親スコープで学習、貼り付け→プレビュー→成功2／重複スキップ1／エラー1→学習を確認。結果画面を視覚確認済み。Debug Simulator・Release arm64（署名なし）のビルド成功。
 
-結果：`/private/tmp/anki-phase2-tests-v2.xcresult`、Releaseログ：`/private/tmp/anki-phase2-release-final.log`。実機と最低OSは未検証。ネイティブファイル選択ダイアログを経由するUI操作は未自動化（パーサー・保存・貼り付けUIは検証済み）。穴埋め構文・画像・OCRはPhase 3で追加する。
+結果：`/private/tmp/anki-phase2-tests-v2.xcresult`、Releaseログ：`/private/tmp/anki-phase2-release-final.log`。実機と最低OSは未検証。Phase 2時点ではファイル選択UIは未自動化だったが、Phase 5で標準Filesを経由するCSV取込も検証済み。穴埋め・画像・OCRはPhase 3で追加済み。
 
 ## Phase 3 — 穴埋め・画像・OCR
 
@@ -181,4 +183,23 @@ Form内の複数ボタン同時発火と、全幅・全高マスクのゼロ範�
 
 ZIPは[PKWAREの形式仕様](https://pkware.cachefly.net/webdocs/casestudies/APPNOTE.TXT)に沿った無圧縮UTF-8ファイルの限定プロファイル。CRC32とSHA-256、パス、中央ディレクトリとローカルレコード、UUIDと参照、FSRSとdue、画像形式と寸法を検証する。上限は合計200MB・1万ファイル・1エントリー50MB（画像20MB）。暗号化・ZIP64・再圧縮したZIPは拒否する。ファイル内容を外部送信しない。古いDBは自動削除しないため、繰り返し復元すると保存容量が増える。現在データの画像清掃は参照のない管理画像だけを対象にする。
 
-2026-10-09、日本時間：iPhone 17 Pro / iOS 26.5 Simulatorで**全63件成功、失敗0・スキップ0**（単体／結合53＋UI10）。[集計](docs/verification/phase4-test-summary.json)。完全復元・復元後Undo、原子的保存の失敗保護、不正バックアップ拒否、通知の日付・DST・時間帯・差分・非同期競合を検証した。標準ファイルUIで書出し→選択→置換復元→再起動と、通知のOS予約30件→オフで0件→再起動が成功。復元後・予約画面の画像を確認済み。Debugテスト用ビルド、Release arm64（署名なし）とも成功。結果 `/private/tmp/anki-phase4-all-v3.xcresult`、Releaseログ `/private/tmp/anki-phase4-release-v1.log`。実機の触覚感触・通知の実配信・カメラ・iOS 17は未検証。品質仕上げはPhase 5で続ける。
+2026-10-09、日本時間：iPhone 17 Pro / iOS 26.5 Simulatorで**全63件成功、失敗0・スキップ0**（単体／結合53＋UI10）。[集計](docs/verification/phase4-test-summary.json)。完全復元・復元後Undo、原子的保存の失敗保護、不正バックアップ拒否、通知の日付・DST・時間帯・差分・非同期競合を検証した。標準ファイルUIで書出し→選択→置換復元→再起動と、通知のOS予約30件→オフで0件→再起動が成功。復元後・予約画面の画像を確認済み。Debugテスト用ビルド、Release arm64（署名なし）とも成功。結果 `/private/tmp/anki-phase4-all-v3.xcresult`、Releaseログ `/private/tmp/anki-phase4-release-v1.log`。実機の触覚感触・通知の実配信・カメラ・iOS 17は未検証。Phase 5の最終結果は以下に記録。
+
+## Phase 5 — 品質仕上げ（完了）
+
+学習時の表示生成を対象カードに限定。保存失敗と、保存成功後の画面更新失敗を別に扱い、保存済み評価を未確定と誤表示しない。削除したデッキの新規入力下書きは残ったデッキに切り替えて編集でき、削除ノートの編集下書きは除去する。復元が中断して残った管理画像を清掃できる。バックアップの極端な日時・数値・セッション時間も切替前に拒否する。
+
+最大Dynamic Typeでは回答方式を標準メニューで選択し、問題・解答の読み上げフォーカスを更新する。学習中にも目標進捗と達成を文字で表示し、達成をアクセシビリティ通知する。画像マスクは、ドラッグ以外に中央追加と位置／寸法の標準Sliderから編集できる。
+
+利用時は、ライブラリで登録・編集・管理、一括登録でCSV等と貼り付け、文字認識で写真からOCR、ホームで学習、記録で統計、設定で通知・触覚・バックアップを操作する。バックアップは検証成功後にファイルUIへ渡す。アプリ削除前に、本アプリの保存領域以外にもファイルを保管する。アプリ削除では同じアプリ内のDocumentsも削除される。
+
+
+### 最終検証結果（2026-10-09、日本時間）
+
+- iPhone 17 Pro / iOS 26.5 Simulatorで**全71件成功、失敗0・スキップ0**（単体／結合58＋UI13、Phase 0の6件を含む）。[全体集計](docs/verification/phase5-test-summary.json)。
+- 最後にtypingの解答比較で入力欄の重複表示を除去し、関連UI2件を再実行して成功。[再検証集計](docs/verification/phase5-typing-summary.json)。再起動後の入力下書き・回答方式変更、ダーク／最大Dynamic Typeの比較・採点を検証し、最終画面を視覚確認した。追加2件は全71件に含まれる同じテスト。
+- 最終Debug Simulator（UIテスト用）とRelease arm64 iOS（署名なし）のビルド成功。全体結果 `/private/tmp/anki-phase5-all-v3.xcresult`、最終UI結果 `/private/tmp/anki-phase5-typing-final.xcresult`、Releaseログ `/private/tmp/anki-phase5-release-final2.log`。これらは一時ファイルで永続保管は保証しない。JSON集計と再現可能なテストはリポジトリに保存。
+- 1000ノート・3000カード・10000履歴の規模試験：初期読み込み0.66秒、学習開始・評価・Undo 1.20秒、完全バックアップ・検証・復元・再読み込み2.99秒。単発のシミュレーター測定で、実機の性能保証ではない。
+- 標準FilesからCSV取込、破損バックアップ拒否後のデータ保持、3000枚のホーム→学習→Undo→再起動→再開、最大Dynamic Type・ダーク・アクセシビリティ要素検出／説明の監査も成功。
+
+実機・iOS 17ランタイム、実際の通知配信／タップ、カメラ、日本語OCR精度、触覚の感触、VoiceOver音声、実際のReduce Motion設定、実機の機内モードは未検証。実装と検証の対応・実機での確認手順は [MVP受け入れ検証](docs/mvp-acceptance.md)、Phase別の記録は [実装進捗](docs/implementation-progress.md)、追加・変更ファイルは [一覧](docs/verification/mvp-changed-files.txt) にまとめた。

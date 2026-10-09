@@ -43,7 +43,7 @@ struct NotePreviewView: View {
             }
             .onChange(of: selected) { _, _ in revealed = false }
             .navigationTitle("出題プレビュー")
-            .toolbar { Button("閉じる") { dismiss() } }
+            .toolbar { Button("閉じる") { dismiss() }.accessibilityIdentifier("closePreview") }
         }
     }
 }

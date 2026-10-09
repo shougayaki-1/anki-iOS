@@ -4,15 +4,23 @@ struct ReviewView: View {
     @Bindable var store: StudyStore
     @FocusState private var typingFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    enum ReadingFocus: Hashable { case question, answer }
+    @AccessibilityFocusState private var readingFocus: ReadingFocus?
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     if let review = store.review, let item = review.card {
+                        if let goal = store.settings.dailyGoal {
+                            Text(store.counts.learnedToday >= goal ? "今日の目標を達成しました。学習を続けられます。" : "今日の学習 \(store.counts.learnedToday) / \(goal)枚")
+                                .font(.footnote).accessibilityIdentifier("reviewGoalProgress")
+                        }
                         Text(item.deckName).font(.caption).foregroundStyle(.secondary)
                         Text(item.content.question).font(.title2).textSelection(.enabled)
                             .accessibilityIdentifier("reviewQuestion")
+                            .accessibilityFocused($readingFocus, equals: .question)
                         if let id = item.sourceContent.imageID {
                             if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
                                 StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
@@ -20,10 +28,9 @@ struct ReviewView: View {
                                                hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
                             } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
                         }
-                        Picker("回答方法", selection: Binding(get: { review.responseMode }, set: { store.draft(mode: $0) })) {
-                            ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
-                        }.pickerStyle(.segmented)
-                        if review.responseMode == .typing {
+                        if typeSize.isAccessibilitySize { modePicker(review).pickerStyle(.menu) }
+                        else { modePicker(review).pickerStyle(.segmented) }
+                        if review.responseMode == .typing && !review.answerRevealed {
                             TextField("自分の回答", text: Binding(get: { store.review?.typedDraft ?? "" }, set: { store.draft(text: $0) }), axis: .vertical)
                                 .lineLimit(3...12).textFieldStyle(.roundedBorder).focused($typingFocused)
                                 .accessibilityIdentifier("typedAnswer")
@@ -37,6 +44,7 @@ struct ReviewView: View {
                             }
                             Text("模範解答").font(.headline)
                             Text(item.content.answer).textSelection(.enabled).accessibilityIdentifier("modelAnswer")
+                                .accessibilityFocused($readingFocus, equals: .answer)
                             if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
                             Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
                                 .font(.footnote).foregroundStyle(.secondary)
@@ -66,18 +74,28 @@ struct ReviewView: View {
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
+            .onChange(of: store.review?.answerRevealed) { _, revealed in
+                if revealed == true { readingFocus = .answer }
+            }
+            .onChange(of: store.review?.card?.cardID) { _, _ in readingFocus = .question }
+            .onChange(of: store.counts.learnedToday) { old, new in
+                if let goal = store.settings.dailyGoal, old < goal, new >= goal {
+                    UIAccessibility.post(notification: .announcement, argument: "今日の学習目標を達成しました。学習を続けられます。")
+                }
+            }
             .navigationTitle(store.review?.mode.title ?? "学習")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("中断", action: store.pause).accessibilityIdentifier("pauseStudy") }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Undo", action: store.undo).disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
+                        .accessibilityLabel("直前の評価を取り消す")
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { typingFocused = false } }
             }
-            .alert("保存できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
+            .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
                 Button("閉じる", role: .cancel) { store.failure = nil }
-            } message: { Text((store.failure ?? "") + "\n評価は確定されていません。再度操作してください。") }
+            } message: { Text(store.failure ?? "") }
             .task {
                 while !Task.isCancelled {
                     if store.review?.card == nil { store.refreshQueue() }
@@ -85,6 +103,12 @@ struct ReviewView: View {
                 }
             }
         }.interactiveDismissDisabled()
+    }
+
+    private func modePicker(_ review: ReviewPresentation) -> some View {
+        Picker("回答方法", selection: Binding(get: { review.responseMode }, set: { store.draft(mode: $0) })) {
+            ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
+        }.accessibilityIdentifier("reviewModePicker")
     }
 
     private func gradeTitle(_ grade: ReviewGrade) -> String {

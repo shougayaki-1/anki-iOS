@@ -84,7 +84,10 @@ extension StudyRepository {
                     }
                 }
                 for card in removed { context.delete(card) }
-                for note in affected { context.delete(note) }
+                for note in affected {
+                    try removeEditorDraftInTransaction(key: "edit:\(note.id.uuidString)")
+                    context.delete(note)
+                }
             }
             var selected = try scope()
             if let selectedID = selected.deckID, deleted.contains(selectedID) {

@@ -106,7 +106,7 @@ struct NoteEditorView: View {
             }
             .navigationTitle(item == nil ? "カード追加" : "カード編集")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる（下書き保持）") { persistDraft(); if failure == nil { dismiss() } } }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.accessibilityIdentifier("closeEditor").accessibilityHint("入力中の下書きを保持します") }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { requestSave(next: false) }.accessibilityIdentifier("saveNote")
                         .disabled(!canSave)

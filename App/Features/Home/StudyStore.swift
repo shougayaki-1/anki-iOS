@@ -50,8 +50,10 @@ final class StudyStore {
 
     @discardableResult
     func perform(_ work: () throws -> Void) -> Bool {
-        do { try work(); try reload(); return true }
+        do { try work() }
         catch { failure = error.localizedDescription; return false }
+        do { try reload(); return true }
+        catch { failure = "処理は完了しましたが画面を更新できません。再表示してください。\n" + error.localizedDescription; return false }
     }
     func start(_ mode: StudyMode) {
         if perform({ try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
@@ -61,13 +63,19 @@ final class StudyStore {
     }
     func grade(_ grade: ReviewGrade) {
         let previous = counts.learnedToday
-        if perform({ try repository.grade(grade, now: clock()) }) {
-            let goalReached = settings.dailyGoal.map { previous < $0 && counts.learnedToday >= $0 } ?? false
-            haptics.play(goalReached ? .goal : .grade, mode: settings.hapticsMode)
-        }
+        do { try repository.grade(grade, now: clock()) }
+        catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
+        do { try reload() }
+        catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+        let goalReached = settings.dailyGoal.map { previous < $0 && counts.learnedToday >= $0 } ?? false
+        haptics.play(goalReached ? .goal : .grade, mode: settings.hapticsMode)
     }
     func undo() {
-        if perform({ try repository.undo(now: clock()) }) { haptics.play(.undo, mode: settings.hapticsMode) }
+        do { try repository.undo(now: clock()) }
+        catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
+        do { try reload() }
+        catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+        haptics.play(.undo, mode: settings.hapticsMode)
     }
     func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil) {
         do {

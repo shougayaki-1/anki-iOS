@@ -50,7 +50,8 @@ struct MaskEditorView: View {
                                 drawing = nil; original = nil
                             })
                     }
-                }.accessibilityIdentifier("maskCanvas")
+                }.accessibilityElement(children: .ignore).accessibilityLabel("画像マスクの編集領域")
+                .accessibilityHint("中央への追加と下の位置・大きさの操作でも編集できます").accessibilityIdentifier("maskCanvas")
             Button("中央にマスクを追加") {
                 let mask = ImageMask(rect: MaskRect(x: 0.25, y: 0.25, width: 0.5, height: 0.25))
                 masks.append(mask); selectedID = mask.id

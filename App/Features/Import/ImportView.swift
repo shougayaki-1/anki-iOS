@@ -42,7 +42,7 @@ struct ImportView: View {
                     }
                 } else {
                     Section {
-                        Button("CSV / TSV / TXTファイルを選択") { filePicker = true }
+                        Button("CSV / TSV / TXTファイルを選択") { filePicker = true }.accessibilityIdentifier("selectImportFile")
                         TextEditor(text: $text).focused($focused).frame(minHeight: 130).accessibilityIdentifier("importText")
                         Picker("形式", selection: $format) {
                             Text("Q: / A: または文章").tag("Q/A")

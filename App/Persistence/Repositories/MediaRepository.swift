@@ -20,7 +20,10 @@ extension StudyRepository {
     }
     func editorDraft(key: String) throws -> NoteInput? {
         guard let row = try context.fetch(FetchDescriptor<EditorDraft>()).first(where: { $0.key == key }) else { return nil }
-        return try JSONDecoder().decode(NoteInput.self, from: row.payload)
+        var input = try JSONDecoder().decode(NoteInput.self, from: row.payload)
+        let available = try decks()
+        if !available.contains(where: { $0.id == input.deckID }), let fallback = available.first { input.deckID = fallback.id }
+        return input
     }
     func saveEditorDraft(key: String, input: NoteInput, now: Date) throws {
         let payload = try JSONEncoder().encode(input)
@@ -62,6 +65,20 @@ extension StudyRepository {
                 if !retained.contains(path), try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
                     try mediaStore.remove(path)
                 }
+            }
+        }
+        let restored = try mediaStore.url(for: "restored")
+        if FileManager.default.fileExists(atPath: restored.path) {
+            for folder in try FileManager.default.contentsOfDirectory(at: restored, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]) {
+                let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+                guard UUID(uuidString: folder.lastPathComponent) != nil, attributes.isDirectory == true, attributes.isSymbolicLink != true else { continue }
+                for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+                    guard file.pathExtension == "jpg", UUID(uuidString: file.deletingPathExtension().lastPathComponent) != nil else { continue }
+                    let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    let path = "restored/\(folder.lastPathComponent)/\(file.lastPathComponent)"
+                    if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true { try mediaStore.remove(path) }
+                }
+                if try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty { try FileManager.default.removeItem(at: folder) }
             }
         }
     }

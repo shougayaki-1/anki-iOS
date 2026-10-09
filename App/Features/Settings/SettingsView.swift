@@ -78,9 +78,11 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("データ") { Button("バックアップ・復元") { backup = true }.accessibilityIdentifier("openBackup") }
+                #if DEBUG
                 Section("開発検証") {
                     NavigationLink("Phase 0検証") { Phase0View().modelContainer(probeContainer) }
                 }
+                #endif
             }.navigationTitle("設定")
                 .sheet(isPresented: $backup) { BackupView(store: store) }
         }

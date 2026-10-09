@@ -37,7 +37,8 @@ struct BackupArchive {
             snapshot = try JSONDecoder().decode(BackupData.self, from: data)
         } catch { throw BackupError.invalidData }
         guard manifest.schemaVersion == 1, snapshot.schemaVersion == 1 else { throw BackupError.unsupportedVersion }
-        guard manifest.createdAt.timeIntervalSince1970.isFinite, !manifest.appVersion.isEmpty,
+        try BackupValidation.dates(manifest.createdAt)
+        guard !manifest.appVersion.isEmpty, manifest.appVersion.count <= 128,
               Set(manifest.files.keys) == Set(files.keys).subtracting(["manifest.json"]) else { throw BackupError.invalidArchive }
         for (path, checksum) in manifest.files {
             guard let bytes = files[path], hash(bytes) == checksum else { throw BackupError.checksum }

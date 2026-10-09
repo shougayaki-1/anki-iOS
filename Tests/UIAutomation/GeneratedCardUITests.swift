@@ -35,7 +35,7 @@ final class GeneratedCardUITests: XCTestCase {
         app.buttons["previewReveal"].tap()
         XCTAssertEqual(app.staticTexts["previewAnswer"].label, "Tokyo")
         attach(app, "Phase3-cloze-preview")
-        app.buttons["閉じる"].tap(); app.buttons["saveNote"].tap()
+        app.buttons["closePreview"].tap(); app.buttons["saveNote"].tap()
         XCTAssertTrue(app.buttons["addNote"].waitForExistence(timeout: 5))
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
@@ -77,7 +77,7 @@ final class GeneratedCardUITests: XCTestCase {
         for _ in 0..<6 where !preview.isHittable { scroll(app, up: false) }
         preview.tap()
         XCTAssertTrue(app.staticTexts["previewQuestion"].waitForExistence(timeout: 5))
-        app.buttons["previewReveal"].tap(); app.buttons["閉じる"].tap()
+        app.buttons["previewReveal"].tap(); app.buttons["closePreview"].tap()
         app.buttons["saveNote"].tap()
         XCTAssertTrue(app.buttons["addNote"].waitForExistence(timeout: 5))
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()

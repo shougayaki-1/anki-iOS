@@ -42,6 +42,9 @@ struct AppRootView: View {
 
     private func load() {
         do {
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("-study-test-accessibility") { UITestFixtures.configureAccessibilityScene() }
+            #endif
             // Each UI test gets its own on-disk store, reused across process restarts.
             var storeURL: URL?
             #if DEBUG
@@ -69,9 +72,18 @@ struct AppRootView: View {
                     studyURL = directory.appendingPathComponent(args[index + 1]).appendingPathExtension("store")
                     mediaStore = MediaStore(root: URL.applicationSupportDirectory.appendingPathComponent("UITestMedia").appendingPathComponent(args[index + 1]))
                     notifications = NotificationService(identifierPrefix: "review-test-\(args[index + 1])-")
+                    if args.contains("-study-test-file-fixtures") {
+                        try UITestFixtures.prepare(name: args[index + 1])
+                    }
                 }
                 #endif
                 store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications)
+                #if DEBUG
+                if studyURL != nil, args.contains("-study-test-scale"), let store {
+                    try UITestFixtures.populateScale(store.repository, now: store.clock())
+                    try store.reload()
+                }
+                #endif
             }
             container = probe
             failure = nil

@@ -6,15 +6,21 @@ struct BackupValidation {
         guard Set(values).count == values.count else { throw BackupError.invalidData }
     }
     static func dates(_ dates: Date...) throws {
-        guard dates.allSatisfy({ $0.timeIntervalSince1970.isFinite }) else { throw BackupError.invalidData }
+        guard dates.allSatisfy({ $0.timeIntervalSince1970.isFinite && $0 >= .distantPast && $0 <= .distantFuture }) else { throw BackupError.invalidData }
     }
     static func snapshot(_ data: Data, scheduler: ReviewScheduler) throws -> ScheduleSummary {
         guard data.count <= 64_000 else { throw BackupError.invalidData }
         let value = try JSONDecoder().decode(SchedulerSnapshot.self, from: data)
         let summary = try scheduler.summary(value)
-        guard summary.stability.isFinite, summary.stability >= 0, summary.difficulty.isFinite,
-              (0...10).contains(summary.difficulty), summary.repetitions >= 0, summary.lapses >= 0,
-              summary.learningStep >= 0 else { throw BackupError.invalidData }
+        guard let raw = try JSONSerialization.jsonObject(with: value.cardData) as? [String: Any] else { throw BackupError.invalidData }
+        for field in ["elapsedDays", "lastElapsedDays", "scheduledDays"] {
+            if let number = raw[field] as? NSNumber {
+                guard number.doubleValue.isFinite, abs(number.doubleValue) <= 1_000_000_000 else { throw BackupError.invalidData }
+            }
+        }
+        guard summary.stability.isFinite, (0...1e12).contains(summary.stability), summary.difficulty.isFinite,
+              (0...10).contains(summary.difficulty), (0...1_000_000_000).contains(summary.repetitions), (0...1_000_000_000).contains(summary.lapses),
+              (0...10_000).contains(summary.learningStep) else { throw BackupError.invalidData }
         try dates(summary.dueDate)
         if let date = summary.lastReview { try dates(date) }
         return summary
@@ -58,7 +64,7 @@ struct BackupValidation {
             try dates(note.createdAt, note.updatedAt)
             guard decks[note.deckID] != nil, let kind = NoteKind(rawValue: note.type),
                   ResponseMode(rawValue: note.defaultResponseMode) != nil, Set(note.tagIDs).isSubset(of: tagIDs),
-                  note.contentPayload.count <= 1_000_000 else { throw BackupError.invalidData }
+                  note.contentPayload.count <= StoredZIP.maximumEntryBytes else { throw BackupError.invalidData }
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
             guard (1...2).contains(content.schemaVersion), !ImportParser.normalized(content.question).isEmpty,
                   [.cloze, .imageOcclusion].contains(kind) || !ImportParser.normalized(content.answer).isEmpty else { throw BackupError.invalidData }
@@ -86,7 +92,7 @@ struct BackupValidation {
         for session in data.sessions {
             try dates(session.updatedAt)
             guard session.key == "active", StudyMode(rawValue: session.mode) != nil,
-                  ResponseMode(rawValue: session.answerMode) != nil, session.elapsedMs >= 0, session.reviewStreak >= 0,
+                  ResponseMode(rawValue: session.answerMode) != nil, (0...2_678_400_000).contains(session.elapsedMs), session.reviewStreak >= 0,
                   session.cardID == nil || cardIDs.contains(session.cardID!),
                   session.undoLogID == nil || logIDs.contains(session.undoLogID!) else { throw BackupError.invalidData }
             if let date = session.activeSince { try dates(date) }
