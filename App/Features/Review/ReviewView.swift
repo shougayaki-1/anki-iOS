@@ -7,6 +7,12 @@ struct ReviewView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     enum ReadingFocus: Hashable { case question, answer }
     @AccessibilityFocusState private var readingFocus: ReadingFocus?
+    private var motionReduced: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-study-test-reduce-motion") { return true }
+        #endif
+        return reduceMotion
+    }
 
     var body: some View {
         NavigationStack {
@@ -60,7 +66,7 @@ struct ReviewView: View {
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(gradeColor(grade))
-                                    .foregroundStyle(grade == .hard || grade == .easy ? Color.black : Color.white)
+                                    .foregroundStyle(Color.white)
                                     .accessibilityIdentifier("grade-\(grade.rawValue)")
                                     .disabled(!imageAvailable(item))
                                 }
@@ -72,6 +78,7 @@ struct ReviewView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
+                            .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                             .disabled(!imageAvailable(item))
                         }
                     } else {
@@ -84,8 +91,8 @@ struct ReviewView: View {
                     }
                 }.padding()
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
+            .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
+            .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .onChange(of: store.review?.answerRevealed) { _, revealed in
                 if revealed == true { readingFocus = .answer }
             }
@@ -156,10 +163,10 @@ struct ReviewView: View {
 
     private func gradeColor(_ grade: ReviewGrade) -> Color {
         switch grade {
-        case .again: return .red
-        case .hard: return .orange
-        case .good: return .blue
-        case .easy: return .green
+        case .again: return Color("GradeAgain")
+        case .hard: return Color("GradeHard")
+        case .good: return Color("GradeGood")
+        case .easy: return Color("GradeEasy")
         }
     }
 

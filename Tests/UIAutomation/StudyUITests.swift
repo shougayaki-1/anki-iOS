@@ -1,6 +1,15 @@
 import XCTest
 
 final class StudyUITests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        addUIInterruptionMonitor(withDescription: "Dismiss incidental dictation setup") { alert in
+            for label in ["今はしない", "Not Now"] where alert.buttons[label].exists {
+                alert.buttons[label].tap(); return true
+            }
+            return false
+        }
+    }
     func app() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]
@@ -12,11 +21,21 @@ final class StudyUITests: XCTestCase {
         let add = app.buttons["addNote"]
         XCTAssertTrue(add.waitForExistence(timeout: 15)); add.tap()
         let q = app.descendants(matching: .any)["questionInput"]
+        scrollTo(q, app: app)
         XCTAssertTrue(q.waitForExistence(timeout: 5)); q.tap(); q.typeText(question)
         let a = app.descendants(matching: .any)["answerInput"]
+        scrollTo(a, app: app)
         a.tap(); a.typeText(answer)
         app.buttons["saveNote"].tap()
         XCTAssertTrue(app.staticTexts[question].waitForExistence(timeout: 5))
+    }
+    func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
+        if element.exists && [.textField, .textView].contains(element.elementType) { return }
+        if app.keyboards.firstMatch.exists && app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        for _ in 0..<12 where !element.exists || !element.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.25)))
+        }
     }
     func attach(_ app: XCUIApplication, _ name: String) {
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = name
@@ -49,6 +68,7 @@ final class StudyUITests: XCTestCase {
         let savedDue = due.label
         app.buttons["editNote"].tap()
         let question = app.descendants(matching: .any)["questionInput"]
+        scrollTo(question, app: app)
         question.tap(); question.typeText(" Updated")
         let editedQuestion = question.value as! String
         XCTAssertTrue(editedQuestion.contains("Updated"))
@@ -69,6 +89,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
         app.segmentedControls.buttons["文字入力"].tap()
         let input = app.descendants(matching: .any)["typedAnswer"]
+        scrollTo(input, app: app)
         input.tap(); input.typeText("My draft")
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))

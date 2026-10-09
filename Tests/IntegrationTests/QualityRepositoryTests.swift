@@ -1,9 +1,34 @@
 import XCTest
 import SwiftData
+import UIKit
 @testable import AnkiIOS
 
 @MainActor
 final class QualityRepositoryTests: XCTestCase {
+    func testIdentityAssetsAndPrimaryButtonContrast() throws {
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "暗記ノート")
+        let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any])
+        let primary = try XCTUnwrap(icons["CFBundlePrimaryIcon"] as? [String: Any])
+        XCTAssertEqual(primary["CFBundleIconName"] as? String, "AppIcon")
+        for name in ["AccentColor", "SecondaryText", "PrimaryAction", "GradeAgain", "GradeHard", "GradeGood", "GradeEasy"] {
+            let color = try XCTUnwrap(UIColor(named: name))
+            for style in [UIUserInterfaceStyle.light, .dark] where name != "AccentColor" && name != "SecondaryText" {
+                var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, alpha: CGFloat = 0
+                XCTAssertTrue(color.resolvedColor(with: UITraitCollection(userInterfaceStyle: style)).getRed(&r, green: &g, blue: &b, alpha: &alpha))
+                func linear(_ value: CGFloat) -> Double {
+                    let channel = Double(value)
+                    if channel <= 0.04045 { return channel / 12.92 }
+                    return pow((channel + 0.055) / 1.055, 2.4)
+                }
+                let red: Double = linear(r) * 0.2126
+                let green: Double = linear(g) * 0.7152
+                let blue: Double = linear(b) * 0.0722
+                let luminance: Double = red + green + blue
+                XCTAssertGreaterThanOrEqual(1.05 / (luminance + 0.05), 4.5, name)
+                XCTAssertEqual(alpha, 1)
+            }
+        }
+    }
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     enum Failure: Error { case save }
     func testFailedSaveAndFailedDisplayAfterCommitReportDifferentOutcomes() throws {
