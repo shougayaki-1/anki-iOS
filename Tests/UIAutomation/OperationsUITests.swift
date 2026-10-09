@@ -57,7 +57,8 @@ final class OperationsUITests: XCTestCase {
     }
     func testActualDueNotificationDeliveryAndTapReturnsHome() {
         let app = XCUIApplication()
-        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
+        let id = UUID().uuidString
+        app.launchArguments = ["-study-test-store", id, "-study-test-notification-due"]
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
         app.tabBars.buttons["設定"].tap()
@@ -70,7 +71,7 @@ final class OperationsUITests: XCTestCase {
         app.tabBars.buttons["ライブラリ"].tap()
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let notification = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "復習の時間です")).firstMatch
+        let notification = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "review-test-\(id)-")).firstMatch
         if !notification.waitForExistence(timeout: 190) {
             // Focus or disabled banners can hide the transient presentation.
             // Open Notification Center and select the actual delivered item.

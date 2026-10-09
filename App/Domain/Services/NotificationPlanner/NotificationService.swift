@@ -43,6 +43,9 @@ final class AppleNotificationCenter: LocalNotificationCenter {
         parts.calendar = calendar; parts.timeZone = calendar.timeZone
         let content = UNMutableNotificationContent()
         content.title = "復習の時間です"; content.body = "今日の復習があります。ホームから学習を始めましょう。"
+        #if DEBUG
+        if identifierPrefix.hasPrefix("review-test-") { content.subtitle = identifierPrefix }
+        #endif
         content.sound = .default
         try await center.add(UNNotificationRequest(identifier: item.id, content: content,
                                                   trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false)))
