@@ -31,7 +31,10 @@ final class StudyUITests: XCTestCase {
     }
     func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
         if element.exists && [.textField, .textView].contains(element.elementType) { return }
-        if app.keyboards.firstMatch.exists && app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        if app.keyboards.firstMatch.exists {
+            if app.buttons["dismissBulkKeyboard"].exists { app.buttons["dismissBulkKeyboard"].tap() }
+            else if let done = app.buttons.matching(NSPredicate(format: "label == %@", "完了")).allElementsBoundByIndex.first(where: { $0.isHittable }) { done.tap() }
+        }
         for _ in 0..<12 where !element.exists || !element.isHittable {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75))
                 .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.25)))
@@ -40,6 +43,65 @@ final class StudyUITests: XCTestCase {
     func attach(_ app: XCUIApplication, _ name: String) {
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = name
         image.lifetime = .keepAlways; add(image)
+    }
+
+    func testBulkSelectionTagsMoveSuspendResumeAndConfirmedDeleteKeepHistory() {
+        let app = app()
+        create(app, question: "Bulk one", answer: "Answer one")
+        create(app, question: "Bulk two", answer: "Answer two")
+        app.buttons["デッキ管理"].tap(); app.buttons["デッキ追加"].tap()
+        app.textFields["deckNameInput"].tap(); app.textFields["deckNameInput"].typeText("Bulk destination")
+        app.buttons["保存"].tap(); app.buttons["閉じる"].firstMatch.tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["ライブラリ"].tap()
+        func open(all: Bool = true) {
+            app.buttons["selectLibraryCards"].tap()
+            if all { app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
+            XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains(all ? "2枚" : "1枚"))
+            app.buttons["openBulkManagement"].tap()
+        }
+        func choose(_ title: String) {
+            app.buttons["bulkOperation"].tap(); app.buttons[title].tap()
+        }
+        func previewAndApply(_ count: String) {
+            scrollTo(app.buttons["previewBulkEdit"], app: app); app.buttons["previewBulkEdit"].tap()
+            XCTAssertTrue(app.staticTexts["bulkChangeCounts"].label.contains(count))
+            scrollTo(app.buttons["applyBulkEdit"], app: app); app.buttons["applyBulkEdit"].tap()
+            XCTAssertTrue(app.staticTexts["bulkResult"].waitForExistence(timeout: 5))
+            app.buttons["closeBulkResult"].tap()
+        }
+        open(all: false); choose("停止"); previewAndApply("1枚")
+        XCTAssertTrue(app.staticTexts["一問一答 · 停止中"].exists)
+        open(all: false); choose("再開"); previewAndApply("1枚")
+        XCTAssertFalse(app.staticTexts["一問一答 · 停止中"].exists)
+        open(); choose("タグ追加")
+        app.textFields["bulkTagInput"].tap(); app.textFields["bulkTagInput"].typeText("Shared,shared")
+        previewAndApply("2枚")
+        open(); choose("タグ除去")
+        app.switches["Shared"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        previewAndApply("2枚")
+        open()
+        app.buttons["bulkDestination"].tap(); app.buttons["Bulk destination"].tap()
+        previewAndApply("2枚")
+        XCTAssertTrue(app.staticTexts["Bulk destination"].exists)
+        open(); choose("ノート削除")
+        app.buttons["previewBulkEdit"].tap()
+        XCTAssertTrue(app.staticTexts["bulkTargetCounts"].label.contains("2ノート・2枚"))
+        scrollTo(app.buttons["applyBulkEdit"], app: app); app.buttons["applyBulkEdit"].tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["キャンセル", "Cancel"])).firstMatch
+        XCTAssertTrue(app.buttons["confirmBulkDelete"].firstMatch.waitForExistence(timeout: 5))
+        if cancel.exists { cancel.tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.8)).tap() }
+        XCTAssertFalse(app.buttons["confirmBulkDelete"].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["bulkResult"].exists)
+        app.buttons["applyBulkEdit"].tap(); app.buttons["confirmBulkDelete"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["bulkResult"].waitForExistence(timeout: 5)); app.buttons["closeBulkResult"].tap()
+        XCTAssertTrue(app.staticTexts["カードがありません"].waitForExistence(timeout: 5))
+        app.terminate(); app.launch()
+        app.tabBars.buttons["記録"].tap()
+        XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
     }
 
     func testReviewAppearanceSelectionRestartAndAnswerOrder() {

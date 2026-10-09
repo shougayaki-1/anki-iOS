@@ -8,6 +8,9 @@ struct LibraryView: View {
     @State private var addingDeck = false
     @State private var deckName = ""
     @State private var search = ""
+    @State private var editMode = EditMode.inactive
+    @State private var selection = Set<UUID>()
+    @State private var bulkEditing = false
 
     var filtered: [NoteItem] {
         store.notes.filter {
@@ -17,7 +20,7 @@ struct LibraryView: View {
 
     var body: some View {
         NavigationStack {
-            List {
+            List(selection: $selection) {
                 if filtered.isEmpty {
                     ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
                                            description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
@@ -25,17 +28,39 @@ struct LibraryView: View {
                 ForEach(store.decks) { deck in
                     Section(deck.name) {
                         ForEach(filtered.filter { $0.deckID == deck.id }) { item in
-                            NavigationLink {
-                                NoteDetailView(store: store, cardID: item.cardID)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(item.content.question).lineLimit(2)
-                                    Text(item.kind.title + (item.isSuspended ? " · 停止中" : ""))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                }
+                            if editMode.isEditing {
+                                cardRow(item).tag(item.cardID)
+                            } else {
+                                NavigationLink { NoteDetailView(store: store, cardID: item.cardID) } label: { cardRow(item) }
                             }
                         }
                     }
+                }
+            }
+            .environment(\.editMode, $editMode)
+            .onChange(of: search) { _, _ in selection.removeAll() }
+            .onChange(of: editMode) { _, mode in if !mode.isEditing { selection.removeAll() } }
+            .safeAreaInset(edge: .bottom) {
+                if !store.notes.isEmpty {
+                    VStack(spacing: 8) {
+                        HStack {
+                            if editMode.isEditing {
+                                Text("選択: \(selection.count)枚").accessibilityIdentifier("bulkSelectionCount")
+                            } else { Text("一括操作").font(.subheadline) }
+                            Spacer()
+                            EditButton().environment(\.editMode, $editMode).accessibilityIdentifier("selectLibraryCards")
+                        }
+                        if editMode.isEditing {
+                            HStack {
+                                Button("表示中を全選択") { selection = Set(filtered.map(\.cardID)) }.accessibilityIdentifier("selectAllLibraryCards")
+                                Spacer()
+                                Button("解除") { selection.removeAll() }
+                            }
+                            Button("一括操作") { bulkEditing = true }
+                                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
+                                .disabled(selection.isEmpty).accessibilityIdentifier("openBulkManagement")
+                        }
+                    }.padding().background(.regularMaterial)
                 }
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
@@ -52,6 +77,11 @@ struct LibraryView: View {
                     Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
                 }
             }
+            .sheet(isPresented: $bulkEditing, onDismiss: { selection.removeAll(); editMode = .inactive }) {
+                BulkManagementView(store: store, selection: selection) {
+                    selection.removeAll(); editMode = .inactive; bulkEditing = false
+                }
+            }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
             .sheet(isPresented: $importing) { ImportView(store: store) }
@@ -59,6 +89,14 @@ struct LibraryView: View {
 
         }
     }
+    private func cardRow(_ item: NoteItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(item.content.question).lineLimit(2)
+            Text(item.kind.title + (item.isSuspended ? " · 停止中" : ""))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
 }
 
 struct NoteDetailView: View {
@@ -112,5 +150,133 @@ struct NoteDetailView: View {
                 } message: { Text("問題と解答は削除されます。過去の回答履歴は残ります。") }
             } else { ContentUnavailableView("カードがありません", systemImage: "rectangle") }
         }
+    }
+}
+
+
+private enum BulkOperation: String, CaseIterable {
+    case move, addTags, removeTags, suspend, resume, delete
+    var title: String {
+        switch self {
+        case .move: return "デッキ移動"
+        case .addTags: return "タグ追加"
+        case .removeTags: return "タグ除去"
+        case .suspend: return "停止"
+        case .resume: return "再開"
+        case .delete: return "ノート削除"
+        }
+    }
+}
+
+private struct BulkManagementView: View {
+    @Bindable var store: StudyStore
+    let selection: Set<UUID>
+    let close: () -> Void
+    @State private var operation = BulkOperation.move
+    @State private var destination: UUID?
+    @State private var tagText = ""
+    @State private var removedTags = Set<UUID>()
+    @State private var preview: BulkEditPreview?
+    @State private var result: String?
+    @State private var failure: String?
+    @State private var confirmDelete = false
+    private var action: BulkEditAction? {
+        switch operation {
+        case .move: return destination.map(BulkEditAction.move)
+        case .addTags: return .addTags(tagText.components(separatedBy: CharacterSet(charactersIn: ",、\n")))
+        case .removeTags: return .removeTags(removedTags)
+        case .suspend: return .suspended(true)
+        case .resume: return .suspended(false)
+        case .delete: return .deleteNotes
+        }
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let result {
+                    Section("結果") { Text(result).accessibilityIdentifier("bulkResult") }
+                    Button("閉じる") { close() }.accessibilityIdentifier("closeBulkResult")
+                } else {
+                    Section {
+                        Text("選択カード: \(selection.count)枚")
+                        Picker("操作", selection: $operation) {
+                            ForEach(BulkOperation.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.accessibilityIdentifier("bulkOperation")
+                        if operation == .move {
+                            Picker("移動先", selection: $destination) {
+                                Text("選択してください").tag(UUID?.none)
+                                ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
+                            }.accessibilityIdentifier("bulkDestination")
+                        } else if operation == .addTags {
+                            TextField("追加タグ（カンマ区切り）", text: $tagText).accessibilityIdentifier("bulkTagInput")
+                        } else if operation == .removeTags {
+                            if store.tags.isEmpty { Text("登録済みのタグがありません。") }
+                            ForEach(store.tags) { tag in
+                                Toggle(tag.name, isOn: Binding(get: { removedTags.contains(tag.id) }, set: { value in
+                                    if value { removedTags.insert(tag.id) } else { removedTags.remove(tag.id) }
+                                }))
+                            }
+                        }
+                        Button("変更プレビュー") { prepare() }.disabled(action == nil).accessibilityIdentifier("previewBulkEdit")
+                    }
+                    if let preview {
+                        Section("変更プレビュー") {
+                            Text("選択 \(preview.selectedCount)枚 / 対象 \(preview.notes.count)ノート・\(preview.cards.count)枚")
+                                .accessibilityIdentifier("bulkTargetCounts")
+                            Text("変更: \(preview.changedNotes.count)ノート・\(preview.changedCount)枚").accessibilityIdentifier("bulkChangeCounts")
+                            Text(preview.detail)
+                            if case .suspended = preview.action {} else {
+                                Text("選択カードが属するノート単位で変更します。選んでいない兄弟カードも含まれます。")
+                                    .font(.footnote).fixedSize(horizontal: false, vertical: true)
+                            }
+                            if preview.changedCount == 0 { Text("変更対象はありません。すでに指定した状態です。") }
+                            DisclosureGroup("対象ノートを確認（\(preview.rows.count)件）") {
+                                ForEach(preview.rows) { row in
+                                    VStack(alignment: .leading) {
+                                        Text(row.question).lineLimit(3)
+                                        Text("\(row.deck) · \(row.cardCount)枚").font(.caption)
+                                    }
+                                }
+                            }
+                            Button(preview.action.title, role: preview.action == .deleteNotes ? .destructive : nil) {
+                                if preview.action == .deleteNotes { confirmDelete = true } else { commit(preview) }
+                            }.disabled(preview.changedCount == 0).accessibilityIdentifier("applyBulkEdit")
+                        }
+                    }
+                }
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("一括操作")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close() }.accessibilityIdentifier("closeBulkManagement") }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }.accessibilityIdentifier("dismissBulkKeyboard") }
+            }
+            .onChange(of: operation) { _, _ in preview = nil }
+            .onChange(of: destination) { _, _ in preview = nil }
+            .onChange(of: tagText) { _, _ in preview = nil }
+            .onChange(of: removedTags) { _, _ in preview = nil }
+            .confirmationDialog("対象ノートと兄弟カードを削除しますか？", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("ノートを削除", role: .destructive) { if let preview { commit(preview) } }.accessibilityIdentifier("confirmBulkDelete")
+                Button("キャンセル", role: .cancel) {}
+            } message: { Text("\(preview?.notes.count ?? 0)ノート・\(preview?.cards.count ?? 0)枚と関連編集下書きが削除されます。過去の回答履歴は残ります。") }
+            .alert("一括操作を確定できません", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+                Button("閉じる", role: .cancel) { failure = nil }
+            } message: { Text(failure ?? "") }
+        }
+    }
+    private func prepare() {
+        guard let action else { return }
+        do { preview = try store.repository.previewBulkEdit(cardIDs: selection, action: action) }
+        catch { preview = nil; failure = error.localizedDescription }
+    }
+    private func commit(_ value: BulkEditPreview) {
+        var receipt: BulkEditResult?
+        let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
+        if let receipt {
+            result = "変更済み: \(receipt.changedNotes)ノート・\(receipt.changedCards)枚"
+            if !refreshed { result! += "。表示を更新できません。閉じてアプリを開き直してください。" }
+            preview = nil
+        } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
+        store.failure = nil
     }
 }
