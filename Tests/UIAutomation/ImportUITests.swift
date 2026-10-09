@@ -31,6 +31,49 @@ final class ImportUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
         app.buttons["pauseStudy"].tap()
     }
+    func testLargeCSVCanConfirmWithoutScrollingThroughRows() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        app.launch()
+        let library = app.tabBars.buttons["ライブラリ"]
+        XCTAssertTrue(library.waitForExistence(timeout: 15)); library.tap()
+        app.buttons["openImport"].tap()
+        let text = app.textViews["importText"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5)); text.tap()
+        let csv = "Question,Answer\n" + (1...41).map { "Q\($0),A\($0)" }.joined(separator: "\n")
+        text.typeText(csv)
+        app.buttons["完了"].tap()
+        let format = app.descendants(matching: .any)["importFormat"]
+        for _ in 0..<4 where !format.isHittable { app.swipeUp() }
+        XCTAssertTrue(format.exists); format.tap()
+        app.buttons["CSV（カンマ）"].tap()
+        let preview = app.buttons["previewImport"]
+        for _ in 0..<4 where !preview.isHittable { app.swipeUp() }
+        XCTAssertTrue(preview.isHittable); preview.tap()
+        let confirm = app.buttons["confirmImport"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        XCTAssertTrue(confirm.isHittable, "大量の行をスクロールしなくても確定できる")
+        XCTAssertGreaterThanOrEqual(confirm.frame.height, 48)
+        let previewImage = XCTAttachment(screenshot: app.screenshot())
+        previewImage.name = "Large-CSV-pinned-confirm"; previewImage.lifetime = .keepAlways; add(previewImage)
+        let summary = app.staticTexts["importPageSummary"]
+        for _ in 0..<4 where !summary.isHittable { app.swipeUp() }
+        XCTAssertTrue(summary.label.contains("1〜20 / 41行"))
+        app.buttons["nextImportPage"].tap()
+        XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
+        app.buttons["nextImportPage"].tap()
+        XCTAssertTrue(summary.label.contains("41〜41 / 41行"))
+        app.buttons["previousImportPage"].tap()
+        XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
+        XCTAssertTrue(confirm.isHittable); confirm.tap()
+        app.buttons["確定して保存"].firstMatch.tap()
+        let result = app.staticTexts["importResult"]
+        XCTAssertTrue(result.waitForExistence(timeout: 15))
+        XCTAssertTrue(result.label.contains("成功 41件 / スキップ 0件 / エラー 0件"))
+        let image = XCTAttachment(screenshot: app.screenshot())
+        image.name = "Large-CSV-import-result"; image.lifetime = .keepAlways; add(image)
+    }
+
     func testHierarchyCreationAndParentScopeStudy() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]

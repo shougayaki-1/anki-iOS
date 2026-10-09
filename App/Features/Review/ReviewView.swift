@@ -29,7 +29,7 @@ struct ReviewView: View {
                             } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
                         }
                         if typeSize.isAccessibilitySize { modePicker(review).pickerStyle(.menu) }
-                        else { modePicker(review).pickerStyle(.segmented) }
+                        else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
                         if review.responseMode == .typing && !review.answerRevealed {
                             TextField("自分の回答", text: Binding(get: { store.review?.typedDraft ?? "" }, set: { store.draft(text: $0) }), axis: .vertical)
                                 .lineLimit(3...12).textFieldStyle(.roundedBorder).focused($typingFocused)
@@ -48,19 +48,31 @@ struct ReviewView: View {
                             if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
                             Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
                                 .font(.footnote).foregroundStyle(.secondary)
-                            ForEach(ReviewGrade.allCases, id: \.self) { grade in
-                                Button {
-                                    typingFocused = false
-                                    store.grade(grade)
-                                } label: { Text(gradeTitle(grade)).frame(maxWidth: .infinity) }
-                                .buttonStyle(.borderedProminent)
-                                .accessibilityIdentifier("grade-\(grade.rawValue)")
-                                .disabled(!imageAvailable(item))
+                            VStack(spacing: 12) {
+                                ForEach(ReviewGrade.allCases, id: \.self) { grade in
+                                    Button {
+                                        typingFocused = false
+                                        store.grade(grade)
+                                    } label: {
+                                        Text(gradeTitle(grade)).font(.headline)
+                                            .frame(maxWidth: .infinity, minHeight: 56)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .tint(gradeColor(grade))
+                                    .foregroundStyle(grade == .hard || grade == .easy ? Color.black : Color.white)
+                                    .accessibilityIdentifier("grade-\(grade.rawValue)")
+                                    .disabled(!imageAvailable(item))
+                                }
                             }
                         } else {
-                            Button("答えを表示") { typingFocused = false; store.draft(revealed: true) }
-                                .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
-                                .disabled(!imageAvailable(item))
+                            Button { typingFocused = false; store.draft(revealed: true) } label: {
+                                Text("答えを表示").font(.headline)
+                                    .frame(maxWidth: .infinity, minHeight: 56)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
+                            .disabled(!imageAvailable(item))
                         }
                     } else {
                         ContentUnavailableView("今出題できるカードはありません", systemImage: "checkmark.circle",
@@ -109,6 +121,15 @@ struct ReviewView: View {
         Picker("回答方法", selection: Binding(get: { review.responseMode }, set: { store.draft(mode: $0) })) {
             ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
         }.accessibilityIdentifier("reviewModePicker")
+    }
+
+    private func gradeColor(_ grade: ReviewGrade) -> Color {
+        switch grade {
+        case .again: return .red
+        case .hard: return .orange
+        case .good: return .blue
+        case .easy: return .green
+        }
     }
 
     private func gradeTitle(_ grade: ReviewGrade) -> String {

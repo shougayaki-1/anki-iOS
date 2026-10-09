@@ -80,6 +80,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "My draft")
         app.buttons["revealAnswer"].tap()
         attach(app, "Phase1-typing-restored")
+        XCTAssertGreaterThanOrEqual(app.buttons["grade-3"].frame.height, 56)
         app.buttons["grade-3"].tap(); app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["記録"].tap()
         let count = app.staticTexts["todayAnswerCount"]

@@ -14,6 +14,8 @@ struct ImportView: View {
     @State private var answerColumn = 1
     @State private var columnCount = 2
     @State private var rows: [ImportRow] = []
+    @State private var previewPage = 0
+    private let pageSize = 20
     @State private var deckID: UUID
     @State private var kind = NoteKind.basic
     @State private var tagText = ""
@@ -43,12 +45,13 @@ struct ImportView: View {
                 } else {
                     Section {
                         Button("CSV / TSV / TXTファイルを選択") { filePicker = true }.accessibilityIdentifier("selectImportFile")
-                        TextEditor(text: $text).focused($focused).frame(minHeight: 130).accessibilityIdentifier("importText")
+                        TextEditor(text: $text).focused($focused).frame(height: 160).accessibilityIdentifier("importText")
                         Picker("形式", selection: $format) {
                             Text("Q: / A: または文章").tag("Q/A")
                             Text("CSV（カンマ）").tag("CSV")
                             Text("TSV（タブ）").tag("TSV")
                         }
+                        .accessibilityIdentifier("importFormat")
                         if format != "Q/A" {
                             Toggle("先頭行はヘッダー", isOn: $hasHeader)
                             Picker("問題の列", selection: $questionColumn) {
@@ -72,20 +75,52 @@ struct ImportView: View {
                         }
                         if action == .update { Toggle("更新対象を未学習に戻す", isOn: $resetHistory) }
                     }
-                    ForEach($rows) { $row in
+                    if !rows.isEmpty {
+                        Section {
+                            Text("プレビュー \(previewStart + 1)〜\(previewEnd) / \(rows.count)行")
+                                .accessibilityIdentifier("importPageSummary")
+                            HStack {
+                                Button("前の20行") { previewPage = currentPage - 1 }
+                                    .disabled(currentPage == 0)
+                                    .accessibilityIdentifier("previousImportPage")
+                                Spacer()
+                                Button("次の20行") { previewPage = currentPage + 1 }
+                                    .disabled(currentPage + 1 >= pageCount)
+                                    .accessibilityIdentifier("nextImportPage")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                        }
+                    }
+                    ForEach(previewStart..<previewEnd, id: \.self) { index in
+                        let row = rows[index]
                         Section("\(row.line)行目") {
-                            Toggle("取り込む", isOn: $row.included)
-                            TextField("問題", text: $row.question, axis: .vertical)
-                            TextField("解答", text: $row.answer, axis: .vertical)
+                            Toggle("取り込む", isOn: $rows[index].included)
+                            TextField("問題", text: $rows[index].question, axis: .vertical)
+                            TextField("解答", text: $rows[index].answer, axis: .vertical)
                             if incomplete(row) { Text("問題または解答を入力してください。確定時はエラーとして除外します。")
                                     .font(.footnote).foregroundStyle(.red) }
                             if isDuplicate(row) { Label("同じデッキに重複候補があります", systemImage: "doc.on.doc")
                                     .font(.footnote).foregroundStyle(.orange) }
                         }
                     }
-                    if !rows.isEmpty {
-                        Section { Button("取り込みを確定") { confirming = true }.accessibilityIdentifier("confirmImport") }
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if result == nil && !rows.isEmpty {
+                    VStack(spacing: 8) {
+                        Text("選択 \(rows.filter(\.included).count)件 / 全\(rows.count)行")
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        Button { focused = false; confirming = true } label: {
+                            Text("取り込みを確定").font(.headline)
+                                .frame(maxWidth: .infinity, minHeight: 48)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("confirmImport")
+                        .disabled(!rows.contains(where: \.included))
                     }
+                    .padding(.horizontal).padding(.vertical, 10)
+                    .background(.regularMaterial)
                 }
             }
             .scrollDismissesKeyboard(.interactively)
@@ -122,6 +157,11 @@ struct ImportView: View {
             } message: { Text(failure ?? "") }
         }
     }
+    private var pageCount: Int { max(1, (rows.count + pageSize - 1) / pageSize) }
+    private var currentPage: Int { min(max(0, previewPage), pageCount - 1) }
+    private var previewStart: Int { min(currentPage * pageSize, rows.count) }
+    private var previewEnd: Int { min(previewStart + pageSize, rows.count) }
+
     private func incomplete(_ row: ImportRow) -> Bool {
         ImportParser.normalized(row.question).isEmpty || (kind != .cloze && ImportParser.normalized(row.answer).isEmpty)
     }
@@ -130,6 +170,7 @@ struct ImportView: View {
     }
     private func preview() {
         do {
+            previewPage = 0
             if format == "Q/A" {
                 rows = try ImportParser.pasted(text)
                 if text.contains("{{c") { kind = .cloze }

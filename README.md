@@ -233,3 +233,9 @@ ZIPは[PKWAREの形式仕様](https://pkware.cachefly.net/webdocs/casestudies/AP
 - 標準FilesからCSV取込、破損バックアップ拒否後のデータ保持、3000枚のホーム→学習→Undo→再起動→再開、最大Dynamic Type・ダーク・アクセシビリティ要素検出／説明の監査も成功。
 
 実機・iOS 17ランタイム、実際の通知配信／タップ、カメラ、日本語OCR精度、触覚の感触、VoiceOver音声、実際のReduce Motion設定、実機の機内モードは未検証。実装と検証の対応・実機での確認手順は [MVP受け入れ検証](docs/mvp-acceptance.md)、Phase別の記録は [実装進捗](docs/implementation-progress.md)、追加・変更ファイルは [一覧](docs/verification/mvp-changed-files.txt) にまとめた。
+
+### 実機フィードバックによる操作性改善（2026-10-09）
+
+学習の評価ボタンと「答えを表示」は全幅にし、ラベル領域に56pt以上の高さを確保。評価は文字と色の両方で区別し、回答方式のコントロールも大きく表示する。一括登録の入力欄は長いCSVで画面全体に伸びず、欄内でスクロールする。編集プレビューは20行ずつ「前の20行／次の20行」で移動する。選択件数と「取り込みを確定」は画面下部に固定し、表示中のページに関係なく全ページの選択行を取り込む。既存の重複処理・学習履歴保持・確定確認は維持。
+
+iPhone 17 Pro／iOS 26.5 Simulatorで関連UIテスト3件成功：41行CSVのページ切替・スクロール不要の確定・全41行保存、既存の重複／不完全行処理、学習の下書き再起動保持と評価保存・ボタン高さ。SETB署名のiPhone 15 Pro／iOS 27.0.1向けDebugビルド、データを削除しない更新インストール、通常起動に成功。既存SwiftData保存ファイルの保持も確認。実機での押しやすさは使用者の確認が必要。結果は `/private/tmp/anki-usability-final.xcresult`、実機ビルドログは `/private/tmp/anki-usability-final-device.log`（一時ファイル）。
