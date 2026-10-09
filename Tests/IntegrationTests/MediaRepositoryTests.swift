@@ -81,10 +81,36 @@ final class MediaRepositoryTests: XCTestCase {
         XCTAssertEqual(result.width, 400); XCTAssertEqual(result.height, 200)
         XCTAssertFalse(MaskRect(x: 0.8, y: 0, width: 0.3, height: 1).isValid)
     }
+    func testDirectoryURLsAndSymlinkEscapeAreHandledSafely() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let root = base.appendingPathComponent("Media", isDirectory: true)
+        let outside = base.appendingPathComponent("Outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let media = MediaStore(root: root)
+        let file = try media.url(for: "images/new.jpg")
+        XCTAssertTrue(file.isFileDescendant(of: root))
+        XCTAssertFalse(root.isFileDescendant(of: root))
+        XCTAssertFalse(outside.isFileDescendant(of: root))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("escape"), withDestinationURL: outside)
+        XCTAssertThrowsError(try media.url(for: "escape/new.jpg"))
+    }
     func testVisionOCRRecognizesLocalFixture() async throws {
         let result = try await OCRService.recognize(imageData())
         XCTAssertTrue(result.text.uppercased().contains("TOKYO"), result.text)
         XCTAssertFalse(result.languages.isEmpty)
+    }
+    func testVisionOCRRecognizesJapaneseLocalFixture() async throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1200, height: 400), format: format).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1200, height: 400))
+            ("日本の首都は東京です" as NSString).draw(at: CGPoint(x: 40, y: 80), withAttributes: [.font: UIFont.systemFont(ofSize: 80), .foregroundColor: UIColor.black])
+        }
+        let result = try await OCRService.recognize(XCTUnwrap(image.pngData()))
+        XCTAssertTrue(result.text.contains("日本"))
+        XCTAssertTrue(result.text.contains("東京"))
+        XCTAssertTrue(result.languages.contains("ja-JP"))
     }
     func testDraftCommitFailureAndOrphanCleanupProtectReferencedImages() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

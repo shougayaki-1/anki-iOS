@@ -44,6 +44,48 @@ final class QualityUITests: XCTestCase {
         XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription)
         file.tap()
     }
+    func testAuthorizedDeviceCSVImportAndRestart() throws {
+        guard let name = ProcessInfo.processInfo.environment["ANKI_UI_CSV_FILENAME"], !name.isEmpty else {
+            throw XCTSkip("実機確認で許可されたCSVが指定されていません。")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["openImport"].tap(); app.buttons["selectImportFile"].tap()
+        var file = app.cells.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        if !file.waitForExistence(timeout: 3) {
+            let search = app.searchFields.firstMatch
+            XCTAssertTrue(search.waitForExistence(timeout: 5))
+            search.tap(); search.typeText(name)
+            file = app.cells.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
+        }
+        XCTAssertTrue(file.waitForExistence(timeout: 20))
+        file.tap()
+        let preview = app.buttons["previewImport"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 10)); scrollTo(preview, app: app); preview.tap()
+        let summary = app.staticTexts["importPageSummary"]
+        scrollTo(summary, app: app)
+        XCTAssertTrue(summary.exists)
+        let confirm = app.buttons["confirmImport"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5)); confirm.tap()
+        app.buttons["commitImport"].firstMatch.tap()
+        let result = app.staticTexts["importResult"]
+        XCTAssertTrue(result.waitForExistence(timeout: 20))
+        XCTAssertFalse(result.label.hasPrefix("成功 0件"))
+        XCTAssertTrue(result.label.contains("エラー 0件"))
+        app.buttons["closeImport"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))
+        app.buttons["revealAnswer"].tap()
+        XCTAssertTrue(app.staticTexts["modelAnswer"].waitForExistence(timeout: 5))
+        app.buttons["grade-3"].tap(); app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["pauseStudy"].tap()
+    }
     func testNativeCSVFileImportAndCorruptBackupPreservesData() {
         let app = XCUIApplication(), id = UUID().uuidString
         app.launchArguments = ["-study-test-store", id, "-study-test-file-fixtures"]

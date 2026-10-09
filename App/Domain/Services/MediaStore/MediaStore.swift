@@ -9,8 +9,9 @@ struct MediaStore {
     func url(for relativePath: String) throws -> URL {
         guard !relativePath.hasPrefix("/"), !relativePath.contains("\\"),
               !relativePath.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else { throw MediaError.invalidPath }
-        let file = root.appendingPathComponent(relativePath)
-        guard file.resolvingSymlinksInPath().path.hasPrefix(root.resolvingSymlinksInPath().path + "/") else {
+        let resolvedRoot = root.resolvingSymlinksInPath()
+        let file = resolvedRoot.appendingPathComponent(relativePath)
+        guard file.isFileDescendant(of: resolvedRoot) else {
             throw MediaError.invalidPath
         }
         return file
