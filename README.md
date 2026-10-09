@@ -33,7 +33,35 @@ SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間
 
 DebugビルドのPhase 0診断は設定→「Phase 0検証」→「検証して保存」。仮想日時で `good → good → again → good` を実行し、UUID・回答4回・忘却1回・次回日時を記録する。再起動で同じ値を確認でき、再度保存すると別レコードを追加する。
 
-実機では、iOS 17以降のiPhoneを接続し、Xcodeの **Signing & Capabilities → Team** に自分のApple IDのチームを指定する。Bundle Identifierが重複する場合は自分のものに変更する。iPhoneでDeveloper Modeを有効にし、必要な信頼設定を済ませて、その端末を選択して⌘R。通常起動では通知・カメラ権限を要求しない。通知をオンにするとき、カメラを使うときに要求する。写真はシステムの選択画面から取り込む。
+### 実機向けの署名・起動
+
+アプリ・単体／結合テスト・UIテストのDebug／ReleaseはAutomatic signing、Development Teamは **SETB, NPO（`2Y7P9MQJ4W`）**。Xcodeの保存済みチーム情報と既存の開発用プロファイルで名称・IDを確認した。アプリのBundle Identifierは **`dev.shoug.AnkiIOS`** を維持する。証明書とプロファイルはXcodeで管理し、Personal Teamへの切替は行わない。
+
+1. Xcode → Settings → Apple AccountsでSETBに所属するApple Accountにサインインし、SETB, NPOが表示されることを確認する。認証エラーの場合は再サインインし、2要素認証を完了する。メンバーシップ・契約・Certificates, Identifiers & Profilesの権限も確認する。
+2. iOS 17以降のiPhoneを接続し、ロックを解除する。「このコンピュータを信頼」を承認し、設定 → プライバシーとセキュリティ → デベロッパモードを有効にする（再起動と確認が必要な場合がある）。
+3. `AnkiIOS.xcodeproj` を開き、各ターゲットのSigning & CapabilitiesでAutomatically manage signingとSETB, NPOを確認する。Scheme `AnkiIOS`、接続したiPhone、Debugを選び、⌘Rでビルド・インストール・起動する。端末準備中の場合はWindow → Devices and Simulatorsで状態を確認する。
+4. ホームが表示され、「保存領域を開けません」が出ないことを確認する。確認用デッキとカードを作成し、ホーム → 新しく覚える → 答えを表示 → Goodで評価する。記録・次回予定を確認し、アプリを終了して再起動した後もデッキ・カード・履歴が残ることを確認する。
+
+CLIでは以下で依存解決と署名付きDebugビルドを実行できる。`-allowProvisioningUpdates` はXcodeのアカウントを使って開発用プロファイルの作成・更新を許可する。接続端末を登録する場合は、`xcodebuild -showdestinations -project AnkiIOS.xcodeproj -scheme AnkiIOS` に表示された実機のdestinationを指定し、必要に応じて `-allowProvisioningDeviceRegistration` を追加する。
+
+```sh
+xcodebuild -resolvePackageDependencies -project AnkiIOS.xcodeproj -scheme AnkiIOS
+xcodebuild build \
+  -project AnkiIOS.xcodeproj -scheme AnkiIOS -configuration Debug \
+  -destination 'generic/platform=iOS' \
+  -derivedDataPath build/DeviceDebug -allowProvisioningUpdates
+codesign --verify --deep --strict build/DeviceDebug/Build/Products/Debug-iphoneos/AnkiIOS.app
+xcrun devicectl list devices
+xcrun devicectl device install app --device '<接続端末のIdentifier>' \
+  build/DeviceDebug/Build/Products/Debug-iphoneos/AnkiIOS.app
+xcrun devicectl device process launch --device '<接続端末のIdentifier>' dev.shoug.AnkiIOS
+```
+
+インストール前に、生成されたアプリの`embedded.mobileprovision`がSETBチーム・上記Bundle Identifier・対象端末に対応し、期限内であることを確認する。署名済みビルドの成功と実機での起動確認は別に記録する。Bundle Identifierの利用不可が判明した場合は原因を調べてから変更する。既存データ保護のためアプリの削除、ストアの初期化、既存証明書・プロファイルの削除や取り消しは行わない。既存インストールの署名チームが異なる場合も、アプリを削除せずバックアップを先に取得する。
+
+通常起動では通知・カメラ権限を要求しない。通知をオンにするとき、カメラを使うときに要求する。写真はシステムの選択画面から取り込む。
+
+2026-10-09の実機準備：Xcode 27.0（27A266a）、Developer Directory `/Applications/Xcode.app/Contents/Developer` でSPMの固定リビジョン解決を確認し、実機arm64向けDebugの署名なしコンパイルに成功（インストール可能な署名済みアプリの検証ではない）。SETBはXcodeの保存済み情報にCompany／非Personal Teamとして登録され、既存の別アプリ用開発プロファイルも期限内だった。ローカルには有効なApple Development署名identityが2件ある。ただしApple Accounts画面は未サインインで、現在の有料メンバーシップと権限はオンライン未確認。自動プロビジョニングを許可した署名ビルドは `No Accounts` と本アプリ用プロファイル未取得で停止した。`devicectl`の端末一覧にはシミュレーターだけが表示され、接続実機の機種・iOSバージョンは未確認。署名・インストール・起動・SwiftData初期化・操作と再起動後の保存確認は未検証。SETB所属アカウントへのサインインと実機の接続準備後に再実行する。
 
 ### 依存関係とFSRSの採用理由
 
