@@ -4,7 +4,8 @@ import Observation
 
 @MainActor @Observable
 final class StudyStore {
-    let repository: StudyRepository
+    var repository: StudyRepository
+    let storageLocation: StudyStorageLocation
     var clock: () -> Date
     var scope = LearningScope()
     var tags: [TagItem] = []
@@ -15,10 +16,20 @@ final class StudyStore {
     var review: ReviewPresentation?
     var failure: String?
     var showingReview = false
+    var selectedTab = 0
+    var statistics: StudyStatistics?
+    var notificationPermission = NotificationPermission.unknown
+    var notificationFailure: String?
+    let notifications: NotificationService
+    var scheduledNotificationCount = 0
+    let haptics = HapticsService()
+    @ObservationIgnored private var notificationJob: Task<Void, Never>?
 
-    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore()) throws {
+    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil) throws {
         repository = StudyRepository(container: container, mediaStore: mediaStore)
         self.clock = clock
+        self.storageLocation = storageLocation
+        self.notifications = notifications ?? NotificationService()
         try repository.initialize(now: clock())
         scope = try repository.scope()
         try reload()
@@ -33,6 +44,8 @@ final class StudyStore {
         counts = try repository.scopedCounts(scope: scope, now: clock())
         settings = try repository.settings()
         review = try repository.presentation(now: clock())
+        statistics = try repository.statistics(now: clock())
+        scheduleNotifications()
     }
 
     @discardableResult
@@ -46,13 +59,61 @@ final class StudyStore {
     func resume() {
         if perform({ try repository.resume(now: clock()) }) { showingReview = true }
     }
-    func grade(_ grade: ReviewGrade) { perform { try repository.grade(grade, now: clock()) } }
-    func undo() { perform { try repository.undo(now: clock()) } }
+    func grade(_ grade: ReviewGrade) {
+        let previous = counts.learnedToday
+        if perform({ try repository.grade(grade, now: clock()) }) {
+            let goalReached = settings.dailyGoal.map { previous < $0 && counts.learnedToday >= $0 } ?? false
+            haptics.play(goalReached ? .goal : .grade, mode: settings.hapticsMode)
+        }
+    }
+    func undo() {
+        if perform({ try repository.undo(now: clock()) }) { haptics.play(.undo, mode: settings.hapticsMode) }
+    }
     func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil) {
-        perform { try repository.updateDraft(mode: mode, text: text, revealed: revealed, now: clock()) }
+        do {
+            try repository.updateDraft(mode: mode, text: text, revealed: revealed, now: clock())
+            if let old = review {
+                review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
+                                           typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
+                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue)
+                if revealed == true && !old.answerRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
+            }
+        } catch { failure = error.localizedDescription }
     }
     func pause() {
         if perform({ try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
+    }
+    func restoreBackup(_ backup: ValidatedBackup) throws {
+        notificationJob?.cancel()
+        do {
+            let container = try BackupService.restore(backup, location: storageLocation, mediaStore: repository.mediaStore, now: clock())
+            repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
+            showingReview = false
+            do { scope = try repository.scope(); try reload() }
+            catch { failure = "復元は保存済みですが、画面の更新に失敗しました: " + error.localizedDescription }
+        } catch { scheduleNotifications(); throw error }
+    }
+    func setNotificationEnabled(_ enabled: Bool) async {
+        do {
+            if enabled { _ = try await notifications.enablePermission() }
+            var value = settings; value.notification.enabled = enabled
+            perform { try repository.updateSettings(value) }
+        } catch { notificationFailure = error.localizedDescription }
+    }
+    func scheduleNotifications() {
+        notificationJob?.cancel()
+        notificationJob = Task {
+            do {
+                try await Task.sleep(for: .milliseconds(200))
+                let permission = try await notifications.reconcile(cards: repository.queueCards(), options: settings.notification,
+                                                                    calendar: repository.calendar, now: clock())
+                guard !Task.isCancelled else { return }
+                notificationPermission = permission; notificationFailure = nil
+                scheduledNotificationCount = notifications.scheduledCount
+            } catch {
+                if !Task.isCancelled { notificationFailure = error.localizedDescription }
+            }
+        }
     }
     func refreshQueue() {
         perform {

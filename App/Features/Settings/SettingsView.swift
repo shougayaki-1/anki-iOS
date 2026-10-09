@@ -4,6 +4,9 @@ import SwiftData
 struct SettingsView: View {
     @Bindable var store: StudyStore
     let probeContainer: ModelContainer
+    @Environment(\.openURL) private var openURL
+    @State private var requestingNotification = false
+    @State private var backup = false
 
     var body: some View {
         NavigationStack {
@@ -41,10 +44,45 @@ struct SettingsView: View {
                     Text("変更は次の回答から適用されます。既存の復習予定は変わりません。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("通知") {
+                    Toggle("復習が必要な日だけ通知", isOn: Binding(get: { store.settings.notification.enabled }, set: { enabled in
+                        Task {
+                            requestingNotification = true
+                            defer { requestingNotification = false }
+                            await store.setNotificationEnabled(enabled)
+                        }
+                    })).disabled(requestingNotification).accessibilityIdentifier("notificationToggle")
+                    LabeledContent("予約通知", value: "\(store.scheduledNotificationCount)件").accessibilityIdentifier("notificationCount")
+                    DatePicker("通知時刻", selection: Binding(get: {
+                        Calendar.current.date(bySettingHour: store.settings.notification.hour, minute: store.settings.notification.minute, second: 0, of: store.clock()) ?? store.clock()
+                    }, set: { date in
+                        let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+                        update { $0.notification.hour = parts.hour ?? 20; $0.notification.minute = parts.minute ?? 0 }
+                    }), displayedComponents: .hourAndMinute)
+                    if store.settings.notification.enabled && store.notificationPermission == .denied {
+                        Text("通知権限がありません。設定アプリで許可してください。")
+                        Button("設定アプリを開く") { if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) } }
+                    }
+                    if let failure = store.notificationFailure {
+                        Text(failure).foregroundStyle(.red)
+                        Button("通知を再計画", action: store.scheduleNotifications)
+                    }
+                    Text("新規カードだけでは通知しません。今後30日分を予約し、学習・Undo・予定変更・起動時に更新します。長期間アプリを開かない場合の補充や、iOSの配信時刻は保証されません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("触覚") {
+                    Picker("フィードバック", selection: Binding(get: { store.settings.hapticsMode }, set: { value in update { $0.hapticsMode = value } })) {
+                        ForEach(HapticsMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    Text("答え表示・評価・Undo・目標達成で控えめに反応します。「豊か」は対応実機の目標達成時にカスタムパターンを使います。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("データ") { Button("バックアップ・復元") { backup = true }.accessibilityIdentifier("openBackup") }
                 Section("開発検証") {
                     NavigationLink("Phase 0検証") { Phase0View().modelContainer(probeContainer) }
                 }
             }.navigationTitle("設定")
+                .sheet(isPresented: $backup) { BackupView(store: store) }
         }
     }
     private func update(_ edit: (inout StudySettings) -> Void) {

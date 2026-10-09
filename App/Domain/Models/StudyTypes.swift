@@ -60,6 +60,8 @@ struct StudySettings: Equatable {
     var dailyGoal: Int? = 20
     var dayStartHour = 4
     var siblingBuryEnabled = true
+    var notification = NotificationOptions()
+    var hapticsMode = HapticsMode.standard
 }
 
 struct DeckItem: Identifiable {

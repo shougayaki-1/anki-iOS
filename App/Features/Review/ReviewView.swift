@@ -3,6 +3,7 @@ import SwiftUI
 struct ReviewView: View {
     @Bindable var store: StudyStore
     @FocusState private var typingFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         NavigationStack {
@@ -63,6 +64,8 @@ struct ReviewView: View {
                     }
                 }.padding()
             }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .navigationTitle(store.review?.mode.title ?? "学習")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

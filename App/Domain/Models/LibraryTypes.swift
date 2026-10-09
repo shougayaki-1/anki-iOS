@@ -7,8 +7,10 @@ struct LearningScope: Codable, Equatable {
 }
 
 struct StudyOptions: Codable, Equatable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var siblingBuryEnabled = true
+    var notification: NotificationOptions? = nil
+    var hapticsMode: HapticsMode? = nil
 }
 
 struct TagItem: Identifiable {

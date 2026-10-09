@@ -7,7 +7,9 @@ extension StudyRepository {
     }
     func options() throws -> StudyOptions {
         guard let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first else { return StudyOptions() }
-        return try JSONDecoder().decode(StudyOptions.self, from: row.payload)
+        let value = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
+        guard (1...2).contains(value.schemaVersion) else { throw StudyError.unsupportedContent }
+        return value
     }
     func updateOptions(_ value: StudyOptions) throws {
         let payload = try JSONEncoder().encode(value)

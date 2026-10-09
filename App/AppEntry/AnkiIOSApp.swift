@@ -1,8 +1,11 @@
 import SwiftUI
 import SwiftData
+import UserNotifications
 
 @main
 struct AnkiIOSApp: App {
+    private let notificationDelegate = StudyNotificationDelegate()
+    init() { UNUserNotificationCenter.current().delegate = notificationDelegate }
     var body: some Scene {
         WindowGroup { AppRootView() }
     }
@@ -57,6 +60,7 @@ struct AppRootView: View {
             if !diagnosticOnly {
                 var studyURL: URL?
                 var mediaStore = MediaStore()
+                var notifications = NotificationService()
                 #if DEBUG
                 let args = ProcessInfo.processInfo.arguments
                 if let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
@@ -64,9 +68,10 @@ struct AppRootView: View {
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     studyURL = directory.appendingPathComponent(args[index + 1]).appendingPathExtension("store")
                     mediaStore = MediaStore(root: URL.applicationSupportDirectory.appendingPathComponent("UITestMedia").appendingPathComponent(args[index + 1]))
+                    notifications = NotificationService(identifierPrefix: "review-test-\(args[index + 1])-")
                 }
                 #endif
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore)
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications)
             }
             container = probe
             failure = nil

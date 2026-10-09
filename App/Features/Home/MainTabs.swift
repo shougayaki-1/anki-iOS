@@ -7,27 +7,21 @@ struct MainTabs: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        TabView {
-            HomeView(store: store).tabItem { Label("ホーム", systemImage: "house") }
-            LibraryView(store: store).tabItem { Label("ライブラリ", systemImage: "books.vertical") }
-            NavigationStack {
-                List {
-                    Section("今日の記録") {
-                        LabeledContent("学習カード", value: "\(store.counts.learnedToday)枚")
-                        LabeledContent("回答回数", value: "\(store.counts.answerCount)回").accessibilityIdentifier("todayAnswerCount")
-                        Text("学習日の切替は午前\(store.settings.dayStartHour)時です。")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }.navigationTitle("記録")
-            }.tabItem { Label("記録", systemImage: "chart.bar") }
+        TabView(selection: $store.selectedTab) {
+            HomeView(store: store).tabItem { Label("ホーム", systemImage: "house") }.tag(0)
+            LibraryView(store: store).tabItem { Label("ライブラリ", systemImage: "books.vertical") }.tag(1)
+            StatisticsView(store: store).tabItem { Label("記録", systemImage: "chart.bar") }.tag(2)
             SettingsView(store: store, probeContainer: probeContainer)
-                .tabItem { Label("設定", systemImage: "gearshape") }
+                .tabItem { Label("設定", systemImage: "gearshape") }.tag(3)
         }
         .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
         .alert("処理に失敗しました", isPresented: Binding(
             get: { store.failure != nil }, set: { if !$0 { store.failure = nil } }
         )) { Button("閉じる", role: .cancel) { store.failure = nil } }
         message: { Text(store.failure ?? "") }
+        .onReceive(NotificationCenter.default.publisher(for: .studyNotificationOpened)) { _ in
+            store.pause(); store.selectedTab = 0
+        }
         .onChange(of: scenePhase) { _, phase in
             store.perform {
                 try store.repository.setSessionActive(phase == .active && store.showingReview, now: store.clock())

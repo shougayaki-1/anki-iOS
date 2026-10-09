@@ -6,14 +6,14 @@ extension PersistenceController {
         let schema = Schema(versionedSchema: StudySchemaV3.self)
         let config: ModelConfiguration
         if let storeURL {
-            config = ModelConfiguration("Study", schema: schema, url: storeURL, cloudKitDatabase: .none)
+            config = ModelConfiguration("Study", schema: schema, url: try StudyStorageLocation(canonicalStore: storeURL).activeStore(), cloudKitDatabase: .none)
         } else if inMemory {
             config = ModelConfiguration("Study", schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
         } else {
             let directory = URL.applicationSupportDirectory.appendingPathComponent("Study")
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             config = ModelConfiguration("Study", schema: schema,
-                                        url: directory.appendingPathComponent("Study.store"), cloudKitDatabase: .none)
+                                        url: try StudyStorageLocation(canonicalStore: directory.appendingPathComponent("Study.store")).activeStore(), cloudKitDatabase: .none)
         }
         return try ModelContainer(for: schema, migrationPlan: StudyMigrationPlan.self, configurations: [config])
     }
@@ -68,20 +68,22 @@ final class StudyRepository {
         return value
     }
     func settings() throws -> StudySettings {
-        let p = try preferences()
+        let p = try preferences(), options = try options()
         return StudySettings(desiredRetention: p.desiredRetention, dailyNewLimit: p.dailyNewLimit,
-                             dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour, siblingBuryEnabled: try options().siblingBuryEnabled)
+                             dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour, siblingBuryEnabled: options.siblingBuryEnabled,
+                             notification: options.notification ?? NotificationOptions(), hapticsMode: options.hapticsMode ?? .standard)
     }
     func updateSettings(_ value: StudySettings) throws {
         guard (0.8...0.97).contains(value.desiredRetention), value.dailyNewLimit >= 0,
-              (0...23).contains(value.dayStartHour), value.dailyGoal == nil || value.dailyGoal! > 0 else {
+              (0...23).contains(value.dayStartHour), (0...23).contains(value.notification.hour), (0...59).contains(value.notification.minute), value.dailyGoal == nil || value.dailyGoal! > 0 else {
             throw StudyError.invalidContent
         }
         try transaction {
             let p = try preferences()
             p.desiredRetention = value.desiredRetention; p.dailyNewLimit = value.dailyNewLimit
             p.dailyGoal = value.dailyGoal; p.dayStartHour = value.dayStartHour
-            var options = try options(); options.siblingBuryEnabled = value.siblingBuryEnabled
+            var options = try options(); options.schemaVersion = 2; options.siblingBuryEnabled = value.siblingBuryEnabled
+            options.notification = value.notification; options.hapticsMode = value.hapticsMode
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(options)
             } else { context.insert(try ExtraPreferences(options: options)) }
