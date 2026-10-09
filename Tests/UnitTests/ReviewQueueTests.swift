@@ -2,6 +2,48 @@ import XCTest
 @testable import AnkiIOS
 
 final class ReviewQueueTests: XCTestCase {
+    func testHiddenImagesNeverHideImageOcclusionAndDefaultsStayCompatible() {
+        let defaults = ReviewAppearance()
+        XCTAssertFalse(defaults.gesturesEnabled); XCTAssertTrue(defaults.animationsEnabled)
+        XCTAssertEqual(defaults.textSize, .standard); XCTAssertFalse(defaults.answerFirst)
+        XCTAssertTrue(defaults.showsImage(for: .basic))
+        var hidden = defaults; hidden.imageDisplay = .hidden
+        XCTAssertFalse(hidden.showsImage(for: .basic))
+        XCTAssertTrue(hidden.showsImage(for: .imageOcclusion))
+    }
+    func testSwipeDirectionsThresholdDiagonalAndRetreat() {
+        XCTAssertEqual(ReviewSwipeAction.decide(x: 96, y: 0, revealed: false), .reveal)
+        XCTAssertNil(ReviewSwipeAction.decide(x: 95, y: 0, revealed: false))
+        XCTAssertNil(ReviewSwipeAction.decide(x: -120, y: 0, revealed: false))
+        XCTAssertNil(ReviewSwipeAction.decide(x: 0, y: -120, revealed: false))
+        XCTAssertNil(ReviewSwipeAction.decide(x: 120, y: 100, revealed: true))
+        XCTAssertEqual(ReviewSwipeAction.decide(x: 120, y: 80, revealed: true), .grade(.good))
+        XCTAssertEqual(ReviewSwipeAction.decide(x: -120, y: 0, revealed: true), .grade(.again))
+        XCTAssertEqual(ReviewSwipeAction.decide(x: 0, y: 120, revealed: true), .grade(.hard))
+        XCTAssertEqual(ReviewSwipeAction.decide(x: 0, y: -120, revealed: true), .grade(.easy))
+        XCTAssertNil(ReviewSwipeAction.decide(x: 20, y: 0, revealed: true)) // Returned near the start.
+        XCTAssertNil(ReviewSwipeAction.decide(x: .infinity, y: 0, revealed: true))
+    }
+    func testSwipeGateRejectsChangedCardChangedRevealAndQuickRepeat() {
+        var gate = ReviewSwipeGate()
+        let id = UUID(), now = Date(timeIntervalSince1970: 100)
+        gate.begin(id: id, revealed: false)
+        XCTAssertNil(gate.finish(id: UUID(), revealed: false, x: 120, y: 0, now: now))
+        gate.begin(id: id, revealed: false)
+        XCTAssertNil(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now))
+        gate.begin(id: id, revealed: false); gate.invalidate()
+        gate.begin(id: id, revealed: true)
+        XCTAssertNil(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now))
+        gate.begin(id: id, revealed: false); gate.cancel()
+        XCTAssertNil(gate.finish(id: id, revealed: false, x: 120, y: 0, now: now))
+        gate.begin(id: id, revealed: false)
+        XCTAssertEqual(gate.finish(id: id, revealed: false, x: 120, y: 0, now: now), .reveal)
+        gate.begin(id: id, revealed: true)
+        XCTAssertNil(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(0.1)))
+        gate.begin(id: id, revealed: true)
+        XCTAssertEqual(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(1)), .grade(.good))
+        XCTAssertNil(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(2)))
+    }
     func calendar(_ zone: String = "Asia/Tokyo") -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: zone)!

@@ -12,6 +12,7 @@ struct StudyOptions: Codable, Equatable {
     var notification: NotificationOptions? = nil
     var hapticsMode: HapticsMode? = nil
     var homeScope: LearningScope? = nil
+    var reviewAppearance: ReviewAppearance? = nil
 }
 
 struct TagItem: Identifiable {
@@ -63,5 +64,64 @@ enum LibraryError: LocalizedError {
         case .fileTooLarge: return "ファイルが大きすぎます（上限10MB）。分割して取り込んでください。"
         case .invalidUTF8: return "UTF-8のテキストファイルを選んでください。"
         }
+    }
+}
+
+// Optional in StudyOptions: stores created before these settings retain defaults.
+struct ReviewAppearance: Codable, Equatable {
+    var gesturesEnabled = false
+    var textSize = ReviewTextSize.standard
+    var imageDisplay = ReviewImageDisplay.standard
+    var answerFirst = false
+    var animationsEnabled = true
+    func showsImage(for kind: NoteKind) -> Bool { kind == .imageOcclusion || imageDisplay != .hidden }
+}
+
+
+enum ReviewTextSize: String, Codable, CaseIterable {
+    case standard, larger, extraLarge
+    var title: String {
+        switch self { case .standard: return "標準"; case .larger: return "大きめ"; case .extraLarge: return "特大" }
+    }
+}
+
+enum ReviewImageDisplay: String, Codable, CaseIterable {
+    case standard, compact, hidden
+    var title: String {
+        switch self { case .standard: return "標準"; case .compact: return "コンパクト"; case .hidden: return "非表示" }
+    }
+}
+
+enum ReviewSwipeAction: Equatable {
+    case reveal, grade(ReviewGrade)
+    static func decide(x: Double, y: Double, revealed: Bool) -> Self? {
+        guard x.isFinite, y.isFinite else { return nil }
+        if abs(x) >= 96 && abs(x) >= abs(y) * 1.5 {
+            if !revealed { return x > 0 ? .reveal : nil }
+            return .grade(x > 0 ? .good : .again)
+        }
+        if revealed && abs(y) >= 96 && abs(y) >= abs(x) * 1.5 {
+            return .grade(y > 0 ? .hard : .easy)
+        }
+        return nil
+    }
+}
+
+struct ReviewSwipeGate {
+    private var start: (id: UUID, revealed: Bool)?
+    private var lastAction: Date?
+    private var invalidated = false
+    mutating func begin(id: UUID, revealed: Bool) {
+        if start == nil && !invalidated { start = (id, revealed) }
+    }
+    mutating func cancel() { start = nil; invalidated = false }
+    mutating func invalidate() { if start != nil { invalidated = true } }
+    mutating func finish(id: UUID, revealed: Bool, x: Double, y: Double, now: Date) -> ReviewSwipeAction? {
+        defer { start = nil; invalidated = false }
+        guard !invalidated, let start, start.id == id, start.revealed == revealed,
+              lastAction == nil || now.timeIntervalSince(lastAction!) >= 0.6,
+              let action = ReviewSwipeAction.decide(x: x, y: y, revealed: revealed) else { return nil }
+        lastAction = now
+        return action
     }
 }

@@ -4,6 +4,9 @@ struct ReviewView: View {
     @Bindable var store: StudyStore
     @FocusState private var typingFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @State private var swipeGate = ReviewSwipeGate()
+    @GestureState private var swiping = false
     @Environment(\.dynamicTypeSize) private var typeSize
     enum ReadingFocus: Hashable { case question, answer }
     @AccessibilityFocusState private var readingFocus: ReadingFocus?
@@ -11,7 +14,7 @@ struct ReviewView: View {
         #if DEBUG
         if ProcessInfo.processInfo.arguments.contains("-study-test-reduce-motion") { return true }
         #endif
-        return reduceMotion
+        return reduceMotion || !store.settings.reviewAppearance.animationsEnabled
     }
 
     var body: some View {
@@ -24,16 +27,12 @@ struct ReviewView: View {
                                 .font(.footnote).accessibilityIdentifier("reviewGoalProgress")
                         }
                         Text(item.deckName).font(.caption).foregroundStyle(.secondary)
-                        Text(item.content.question).font(.title2).textSelection(.enabled)
-                            .accessibilityIdentifier("reviewQuestion")
-                            .accessibilityFocused($readingFocus, equals: .question)
-                        if let id = item.sourceContent.imageID {
-                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
-                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
-                                               targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
-                                               hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
-                            } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
+                        if review.answerRevealed && store.settings.reviewAppearance.answerFirst {
+                            answerContent(review, item: item)
+                            Divider()
                         }
+                        questionContent(item)
+                        reviewImage(review, item: item)
                         if typeSize.isAccessibilitySize { accessibleModePicker(review) }
                         else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
                         if review.responseMode == .typing && !review.answerRevealed {
@@ -44,14 +43,7 @@ struct ReviewView: View {
                         }
                         if review.answerRevealed {
                             Divider()
-                            if review.responseMode == .typing {
-                                Text("自分の回答").font(.headline)
-                                Text(review.typedDraft.isEmpty ? "（未入力）" : review.typedDraft)
-                            }
-                            Text("模範解答").font(.headline)
-                            Text(item.content.answer).textSelection(.enabled).accessibilityIdentifier("modelAnswer")
-                                .accessibilityFocused($readingFocus, equals: .answer)
-                            if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
+                            if !store.settings.reviewAppearance.answerFirst { answerContent(review, item: item) }
                             Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
                                 .font(.footnote).foregroundStyle(.secondary)
                             VStack(spacing: 12) {
@@ -81,6 +73,9 @@ struct ReviewView: View {
                             .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                             .disabled(!imageAvailable(item))
                         }
+                        if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
+                            swipePad(review, item: item)
+                        }
                     } else {
                         ContentUnavailableView("今出題できるカードはありません", systemImage: "checkmark.circle",
                                                description: Text("短期学習の期限が来たら、このセッションで続けられます。"))
@@ -91,12 +86,15 @@ struct ReviewView: View {
                     }
                 }.padding()
             }
+            .scrollDisabled(swiping)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .onChange(of: store.review?.answerRevealed) { _, revealed in
+                swipeGate.invalidate()
                 if revealed == true { readingFocus = .answer }
             }
-            .onChange(of: store.review?.card?.cardID) { _, _ in readingFocus = .question }
+            .onChange(of: store.review?.card?.cardID) { _, _ in swipeGate.invalidate(); readingFocus = .question }
+            .onDisappear { swipeGate.cancel() }
             .onChange(of: store.counts.learnedToday) { old, new in
                 if let goal = store.settings.dailyGoal, old < goal, new >= goal {
                     UIAccessibility.post(notification: .announcement, argument: "今日の学習目標を達成しました。学習を続けられます。")
@@ -122,6 +120,81 @@ struct ReviewView: View {
                 }
             }
         }.interactiveDismissDisabled()
+    }
+
+    private var contentFont: Font {
+        switch store.settings.reviewAppearance.textSize {
+        case .standard: return .title2
+        case .larger: return .title
+        case .extraLarge: return .largeTitle
+        }
+    }
+    private var answerFont: Font {
+        switch store.settings.reviewAppearance.textSize {
+        case .standard: return .body
+        case .larger: return .title2
+        case .extraLarge: return .title
+        }
+    }
+    private func questionContent(_ item: NoteItem) -> some View {
+        Text(item.content.question).font(contentFont).textSelection(.enabled)
+            .accessibilityIdentifier("reviewQuestion")
+            .accessibilityFocused($readingFocus, equals: .question)
+    }
+    @ViewBuilder private func answerContent(_ review: ReviewPresentation, item: NoteItem) -> some View {
+        if review.responseMode == .typing {
+            Text("自分の回答").font(.headline)
+            Text(review.typedDraft.isEmpty ? "（未入力）" : review.typedDraft)
+        }
+        Text("模範解答").font(.headline)
+        Text(item.content.answer).font(answerFont).textSelection(.enabled).accessibilityIdentifier("modelAnswer")
+            .accessibilityFocused($readingFocus, equals: .answer)
+        if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
+    }
+    @ViewBuilder private func reviewImage(_ review: ReviewPresentation, item: NoteItem) -> some View {
+        if let id = item.sourceContent.imageID,
+           store.settings.reviewAppearance.showsImage(for: item.kind) {
+            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
+                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
+                               targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
+                               hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
+                    .frame(maxHeight: item.kind != .imageOcclusion && store.settings.reviewAppearance.imageDisplay == .compact ? 180 : nil)
+                    .accessibilityIdentifier("reviewImage")
+            } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
+        }
+    }
+    private func swipePad(_ review: ReviewPresentation, item: NoteItem) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: "hand.draw").accessibilityHidden(true)
+            Text("スワイプ操作").font(.headline)
+            Text(review.answerRevealed ? "← Again　↓ Hard\n→ Good　↑ Easy" : "右へスワイプして答えを表示")
+                .font(.body).multilineTextAlignment(.center)
+            Text("この領域で大きく動かして指を離します。戻すとキャンセルできます。")
+                .font(.footnote).multilineTextAlignment(.center)
+        }
+        .padding(16).frame(maxWidth: .infinity, minHeight: 260)
+        .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .ignore).accessibilityLabel("スワイプ操作領域")
+        .accessibilityIdentifier("reviewSwipePad")
+        .highPriorityGesture(DragGesture(minimumDistance: 0)
+            .updating($swiping) { _, active, _ in active = true }
+            .onChanged { _ in
+                guard !voiceOver, imageAvailable(item) else { return }
+                swipeGate.begin(id: item.cardID, revealed: review.answerRevealed)
+            }
+            .onEnded { value in
+                guard !voiceOver, imageAvailable(item), let current = store.review, let card = current.card else {
+                    swipeGate.cancel(); return
+                }
+                guard let action = swipeGate.finish(id: card.cardID, revealed: current.answerRevealed,
+                                                    x: Double(value.translation.width), y: Double(value.translation.height), now: Date()) else { return }
+                typingFocused = false
+                switch action {
+                case .reveal: store.draft(revealed: true)
+                case .grade(let grade): store.grade(grade)
+                }
+            })
     }
 
     private func modePicker(_ review: ReviewPresentation) -> some View {
