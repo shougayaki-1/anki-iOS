@@ -44,7 +44,10 @@ final class AppleNotificationCenter: LocalNotificationCenter {
         let content = UNMutableNotificationContent()
         content.title = "復習の時間です"; content.body = "今日の復習があります。ホームから学習を始めましょう。"
         #if DEBUG
-        if identifierPrefix.hasPrefix("review-test-") { content.subtitle = identifierPrefix }
+        if identifierPrefix.hasPrefix("review-test-") {
+            content.subtitle = identifierPrefix
+            content.title = "復習テスト \(identifierPrefix.dropFirst("review-test-".count).prefix(8))"
+        }
         #endif
         content.sound = .default
         try await center.add(UNNotificationRequest(identifier: item.id, content: content,
