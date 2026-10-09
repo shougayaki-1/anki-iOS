@@ -58,6 +58,105 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.homeScope(), LearningScope())
     }
 
+    func testBulkMetadataExpandsSiblingsPreservesFSRSHistoryAndDraftText() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let destination = try repo.createDeck(name: "移動先", parentID: deck, now: now)
+        let note = try repo.createNote(NoteInput(deckID: deck, question: "Bulk Q", answer: "Bulk A", tagNames: ["Old"], reverseEnabled: true), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.easy, now: now)
+        let originalCards = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate) }, logs = try repo.logs().map(\.id)
+        let selected = Set([try XCTUnwrap(repo.cards().first?.id)])
+        try repo.saveEditorDraft(key: "edit:\(note.uuidString)", input: NoteInput(deckID: deck, question: "未保存の本文", answer: "下書き", tagNames: ["Old", "Draft only"]), now: now)
+        let move = try repo.previewBulkEdit(cardIDs: selected, action: .move(destination))
+        XCTAssertEqual(move.selectedCount, 1); XCTAssertEqual(move.cards.count, 2); XCTAssertEqual(move.changedNotes.count, 1)
+        _ = try repo.applyBulkEdit(move, now: now.addingTimeInterval(1))
+        _ = try repo.applyBulkEdit(repo.previewBulkEdit(cardIDs: selected, action: .addTags([" 日本 ", "日本", "old", "NEW", "new"])), now: now.addingTimeInterval(2))
+        let old = try XCTUnwrap(repo.tags().first { $0.name == "Old" }?.id)
+        _ = try repo.applyBulkEdit(repo.previewBulkEdit(cardIDs: selected, action: .removeTags([old])), now: now.addingTimeInterval(3))
+        let actual = try XCTUnwrap(repo.notes().first { $0.id == note })
+        XCTAssertEqual(actual.deckID, destination); XCTAssertEqual(actual.tagIDs.count, 2)
+        let draft = try XCTUnwrap(repo.editorDraft(key: "edit:\(note.uuidString)"))
+        XCTAssertEqual(draft.deckID, destination); XCTAssertEqual(draft.question, "未保存の本文")
+        XCTAssertTrue(draft.tagNames.contains("Draft only")); XCTAssertFalse(draft.tagNames.contains("Old"))
+        XCTAssertEqual(try repo.logs().map(\.id), logs)
+        for (id, payload, due) in originalCards {
+            let card = try XCTUnwrap(repo.cards().first { $0.id == id })
+            XCTAssertEqual(card.fsrsPayload, payload); XCTAssertEqual(card.dueDate, due)
+        }
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "bulk"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: MediaStore(root: root.appendingPathComponent("Media")), now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore))
+        XCTAssertEqual(try reopened.notes().first?.tagIDs, actual.tagIDs)
+        XCTAssertEqual(Set(try reopened.cards().map(\.id)), Set(originalCards.map { $0.0 }))
+        XCTAssertEqual(try reopened.logs().map(\.id), logs)
+    }
+    func testBulkSuspensionChangesOnlySelectedCardAndNoopDoesNotSave() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A", reverseEnabled: true), now: now)
+        let selected = Set([try XCTUnwrap(repo.cards().first?.id)])
+        let preview = try repo.previewBulkEdit(cardIDs: selected, action: .suspended(true))
+        XCTAssertEqual(preview.cards.count, 2); XCTAssertEqual(preview.changedCount, 1)
+        _ = try repo.applyBulkEdit(preview, now: now)
+        XCTAssertEqual(try repo.cards().filter(\.isSuspended).count, 1)
+        let noop = try repo.previewBulkEdit(cardIDs: selected, action: .suspended(true))
+        repo.save = { _ in throw Failure.save }
+        XCTAssertEqual(try repo.applyBulkEdit(noop, now: now).changedCards, 0)
+        repo.save = { try $0.save() }
+        _ = try repo.applyBulkEdit(repo.previewBulkEdit(cardIDs: selected, action: .suspended(false)), now: now)
+        XCTAssertFalse(try repo.cards().contains(where: \.isSuspended))
+    }
+    func testBulkEmptyMissingStaleContentDraftAndNewSiblingRejectWithoutPartialSuccess() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let note = try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A"), now: now)
+        let selected = Set([try XCTUnwrap(repo.cards().first?.id)])
+        XCTAssertThrowsError(try repo.previewBulkEdit(cardIDs: [], action: .deleteNotes))
+        XCTAssertThrowsError(try repo.previewBulkEdit(cardIDs: selected.union([UUID()]), action: .deleteNotes))
+        XCTAssertThrowsError(try repo.previewBulkEdit(cardIDs: selected, action: .move(UUID())))
+        XCTAssertThrowsError(try repo.previewBulkEdit(cardIDs: selected, action: .addTags([])))
+        XCTAssertThrowsError(try repo.previewBulkEdit(cardIDs: selected, action: .removeTags([UUID()])))
+        let stale = try repo.previewBulkEdit(cardIDs: selected, action: .deleteNotes)
+        try repo.saveEditorDraft(key: "edit:\(note.uuidString)", input: NoteInput(deckID: deck, question: "下書き"), now: now)
+        XCTAssertThrowsError(try repo.applyBulkEdit(stale, now: now))
+        let beforeEdit = try repo.previewBulkEdit(cardIDs: selected, action: .deleteNotes)
+        try repo.updateNote(id: note, input: NoteInput(deckID: deck, question: "変更後", answer: "A", reverseEnabled: true), resetHistory: false, now: now)
+        XCTAssertThrowsError(try repo.applyBulkEdit(beforeEdit, now: now))
+        XCTAssertEqual(try repo.cards().count, 2); XCTAssertEqual(try repo.notes().count, 1)
+    }
+    func testBulkSaveFailureRollsBackMoveTagsSuspendAndDelete() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let destination = try repo.createDeck(name: "別", now: now)
+        let note = try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A", tagNames: ["Keep"], reverseEnabled: true), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.good, now: now)
+        try repo.saveEditorDraft(key: "edit:\(note.uuidString)", input: NoteInput(deckID: deck, question: "下書き"), now: now)
+        let selected = Set(try repo.cards().map(\.id))
+        let keptTag = try XCTUnwrap(repo.tags().first?.id)
+        for action in [BulkEditAction.move(destination), .addTags(["新タグ"]), .removeTags([keptTag]), .suspended(true), .deleteNotes] {
+            let before = try BackupData.capture(repo).canonical()
+            let preview = try repo.previewBulkEdit(cardIDs: selected, action: action)
+            repo.save = { _ in throw Failure.save }
+            XCTAssertThrowsError(try repo.applyBulkEdit(preview, now: now.addingTimeInterval(1)))
+            repo.save = { try $0.save() }
+            XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        }
+    }
+    func testBulkDeleteKeepsHistoryAndClearsOnlyAffectedSessionAndEditorReferences() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let note = try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A", reverseEnabled: true), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.again, now: now)
+        let log = try XCTUnwrap(repo.logs().first), selected = Set([log.cardID])
+        try repo.saveEditorDraft(key: "edit:\(note.uuidString)", input: NoteInput(deckID: deck, question: "下書き"), now: now)
+        try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "維持する下書き"), now: now)
+        _ = try repo.applyBulkEdit(repo.previewBulkEdit(cardIDs: selected, action: .deleteNotes), now: now)
+        XCTAssertTrue(try repo.notes().isEmpty); XCTAssertTrue(try repo.cards().isEmpty)
+        XCTAssertEqual(try repo.logs().map(\.id), [log.id])
+        XCTAssertNil(try repo.session()?.cardID); XCTAssertNil(try repo.session()?.undoLogID)
+        XCTAssertNil(try repo.editorDraft(key: "edit:\(note.uuidString)")); XCTAssertNotNil(try repo.editorDraft(key: "new"))
+        _ = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "bulk-delete"))
+    }
+
     func testHierarchyScopeAndCyclePreventionPreserveCardIDs() throws {
         let repo = try fixture()
         let root = try repo.decks()[0].id
