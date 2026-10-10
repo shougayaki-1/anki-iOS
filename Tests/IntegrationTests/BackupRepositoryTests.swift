@@ -37,7 +37,13 @@ final class BackupRepositoryTests: XCTestCase {
         try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "下書き", imageID: image), now: now)
         var options = try repo.settings(); options.notification.enabled = true; options.hapticsMode = .rich
         options.reviewAppearance = ReviewAppearance(gesturesEnabled: true, textSize: .extraLarge, imageDisplay: .hidden, answerFirst: true, animationsEnabled: false)
+        let homeScope = LearningScope(deckID: deck, tagIDs: try repo.tags().map(\.id))
+        try repo.applyHomeScope(homeScope)
         try repo.updateSettings(options)
+        XCTAssertEqual(try repo.homeScope(), homeScope)
+        try repo.applyHomeScope(LearningScope())
+        XCTAssertEqual(try repo.settings().reviewAppearance, options.reviewAppearance)
+        try repo.applyHomeScope(homeScope)
         try repo.transaction {
             repo.context.insert(ImportBatch(source: "CSV", now: now, success: 4, skipped: 1, errors: ["行エラー"]))
             try repo.setScopeInTransaction(LearningScope(deckID: deck, tagIDs: repo.tags().map(\.id)))
@@ -63,6 +69,8 @@ final class BackupRepositoryTests: XCTestCase {
             actual.media[index].relativePath = expected.media[index].relativePath
         }
         XCTAssertEqual(actual, expected)
+        XCTAssertEqual(try reopened.homeScope(), try source.homeScope())
+        XCTAssertEqual(try reopened.scope(), try source.scope())
         XCTAssertEqual(try reopened.settings().hapticsMode, .rich)
         XCTAssertEqual(try reopened.settings().reviewAppearance, try source.settings().reviewAppearance)
         XCTAssertEqual(try reopened.session()?.typedDraft, "未確定の回答")
