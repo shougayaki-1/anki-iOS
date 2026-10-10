@@ -119,6 +119,49 @@ final class OrderingUITests: XCTestCase {
         tap("toggleHint", app: app)
         XCTAssertEqual(app.staticTexts["studyHint"].label, "Think of walk")
     }
+    func testDragReordersWithoutRemovingOtherChipsThenChecksFinalSentence() {
+        let app = launch()
+        select([0, 3, 1, 2, 4, 5], app: app)
+        let sentence = app.staticTexts["orderingSentence"]
+        XCTAssertEqual(sentence.value as? String, "I school walk to every day.")
+
+        func move(_ sourceID: Int, before targetID: Int) {
+            let source = app.buttons["ordering-selected-\(sourceID)"]
+            let target = app.buttons["ordering-selected-\(targetID)"]
+            scrollTo(source, app: app); scrollTo(target, app: app)
+            source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.8,
+                       thenDragTo: target.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)))
+        }
+        move(1, before: 3)
+        XCTAssertEqual(sentence.value as? String, "I walk school to every day.")
+        XCTAssertEqual(app.staticTexts["orderingProgress"].label, "選択 6 / 6語句")
+        move(2, before: 3)
+        XCTAssertEqual(sentence.value as? String, "I walk to school every day.")
+        XCTAssertTrue(app.buttons["checkOrdering"].isEnabled)
+        tap("checkOrdering", app: app)
+        XCTAssertTrue(app.staticTexts["modelAnswer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["orderingResult"].label.contains("正解"))
+    }
+
+    func testDragOrderSurvivesPauseAndResume() {
+        let app = launch()
+        select([0, 3, 1, 2], app: app)
+        let source = app.buttons["ordering-selected-1"]
+        let target = app.buttons["ordering-selected-3"]
+        scrollTo(source, app: app); scrollTo(target, app: app)
+        source.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.8,
+                   thenDragTo: target.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)))
+        XCTAssertEqual(app.staticTexts["orderingSentence"].value as? String, "I walk school to")
+        app.buttons["pauseStudy"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        app.buttons["resumeStudy"].tap()
+        XCTAssertEqual(app.staticTexts["orderingSentence"].value as? String, "I walk school to")
+        XCTAssertEqual(app.staticTexts["orderingProgress"].label, "選択 4 / 6語句")
+    }
+
     func testLargestDynamicTypeDarkAndReduceMotion() throws {
         let app = launch(accessibility: true)
         tap("ordering-token-0", app: app)
