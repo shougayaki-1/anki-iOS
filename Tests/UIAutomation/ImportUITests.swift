@@ -88,26 +88,32 @@ final class ImportUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(confirm.frame.height, 48)
         let previewImage = XCTAttachment(screenshot: app.screenshot())
         previewImage.name = "Large-CSV-pinned-confirm"; previewImage.lifetime = .keepAlways; add(previewImage)
-        let summary = app.descendants(matching: .any)["importPageSummary"]
-        // A virtualized Form can start below its page header after preview.
-        // Return toward the top, then locate the header in small steps beside inputs.
-        for _ in 0..<6 {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.3))
-                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75)))
+        let summary = app.staticTexts["importPageSummary"]
+        func reachPageControls() {
+            for _ in 0..<40 {
+                let next = app.buttons["nextImportPage"]
+                let top = app.navigationBars.firstMatch.frame.maxY + 8
+                let bottom = confirm.frame.minY - 8
+                if next.exists && next.isHittable && next.frame.minY >= top && next.frame.maxY <= bottom { return }
+                let above = next.exists && next.frame.minY < top
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: above ? 0.35 : 0.65))
+                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: above ? 0.6 : 0.4)))
+            }
+            XCTFail("Page controls must be inside the unobscured preview")
         }
-        for _ in 0..<20 {
-            if summary.exists && summary.isHittable && summary.frame.minY > app.navigationBars.firstMatch.frame.maxY { break }
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
-                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.45)))
-        }
-        XCTAssertTrue(summary.waitForExistence(timeout: 5))
+        reachPageControls()
         XCTAssertTrue(summary.label.contains("1〜20 / 41行"))
         app.buttons["nextImportPage"].tap()
-        XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "21〜40 / 41行"), evaluatedWith: summary)
+        waitForExpectations(timeout: 5)
+        reachPageControls()
         app.buttons["nextImportPage"].tap()
-        XCTAssertTrue(summary.label.contains("41〜41 / 41行"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "41〜41 / 41行"), evaluatedWith: summary)
+        waitForExpectations(timeout: 5)
+        reachPageControls()
         app.buttons["previousImportPage"].tap()
-        XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "21〜40 / 41行"), evaluatedWith: summary)
+        waitForExpectations(timeout: 5)
         XCTAssertTrue(confirm.isHittable); confirm.tap()
         app.buttons["確定して保存"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
