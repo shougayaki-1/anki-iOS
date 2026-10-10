@@ -7,7 +7,7 @@ struct AnkiIOSApp: App {
     private let notificationDelegate = StudyNotificationDelegate()
     init() { UNUserNotificationCenter.current().delegate = notificationDelegate }
     var body: some Scene {
-        WindowGroup { AppRootView() }
+        WindowGroup { AppRootView().tint(Color("AccentColor")) }
     }
 }
 
@@ -81,6 +81,10 @@ struct AppRootView: View {
                 #if DEBUG
                 if studyURL != nil, args.contains("-study-test-scale"), let store {
                     try UITestFixtures.populateScale(store.repository, now: store.clock())
+                    try store.reload()
+                }
+                if studyURL != nil, args.contains("-study-test-notification-due"), let store {
+                    try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
                     try store.reload()
                 }
                 #endif

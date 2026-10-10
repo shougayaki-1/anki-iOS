@@ -33,6 +33,7 @@ struct NotePreviewView: View {
                             }
                             Button(revealed ? "問題に戻る" : "答えを表示") { revealed.toggle() }
                                 .buttonStyle(.borderedProminent).accessibilityIdentifier("previewReveal")
+                                .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                         }
                         Text("プレビューでは学習履歴を変更しません。").font(.footnote).foregroundStyle(.secondary)
                             .onAppear { selected = variants.first ?? "" }

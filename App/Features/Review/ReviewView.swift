@@ -7,6 +7,12 @@ struct ReviewView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     enum ReadingFocus: Hashable { case question, answer }
     @AccessibilityFocusState private var readingFocus: ReadingFocus?
+    private var motionReduced: Bool {
+        #if DEBUG
+        if ProcessInfo.processInfo.arguments.contains("-study-test-reduce-motion") { return true }
+        #endif
+        return reduceMotion
+    }
 
     var body: some View {
         NavigationStack {
@@ -28,7 +34,7 @@ struct ReviewView: View {
                                                hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
                             } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
                         }
-                        if typeSize.isAccessibilitySize { modePicker(review).pickerStyle(.menu) }
+                        if typeSize.isAccessibilitySize { accessibleModePicker(review) }
                         else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
                         if review.responseMode == .typing && !review.answerRevealed {
                             TextField("自分の回答", text: Binding(get: { store.review?.typedDraft ?? "" }, set: { store.draft(text: $0) }), axis: .vertical)
@@ -60,7 +66,7 @@ struct ReviewView: View {
                                     }
                                     .buttonStyle(.borderedProminent)
                                     .tint(gradeColor(grade))
-                                    .foregroundStyle(grade == .hard || grade == .easy ? Color.black : Color.white)
+                                    .foregroundStyle(Color.white)
                                     .accessibilityIdentifier("grade-\(grade.rawValue)")
                                     .disabled(!imageAvailable(item))
                                 }
@@ -72,6 +78,7 @@ struct ReviewView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
+                            .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                             .disabled(!imageAvailable(item))
                         }
                     } else {
@@ -84,8 +91,8 @@ struct ReviewView: View {
                     }
                 }.padding()
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
+            .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
+            .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .onChange(of: store.review?.answerRevealed) { _, revealed in
                 if revealed == true { readingFocus = .answer }
             }
@@ -123,12 +130,43 @@ struct ReviewView: View {
         }.accessibilityIdentifier("reviewModePicker")
     }
 
+    private func accessibleModePicker(_ review: ReviewPresentation) -> some View {
+        Menu {
+            ForEach(ResponseMode.allCases, id: \.self) { mode in
+                Button {
+                    store.draft(mode: mode)
+                } label: {
+                    if review.responseMode == mode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Text(mode.title)
+                    }
+                }
+                .accessibilityIdentifier("response-mode-\(mode.rawValue)")
+            }
+        } label: {
+            HStack {
+                Text("回答方法")
+                Spacer(minLength: 12)
+                Text(review.responseMode.title).foregroundStyle(.secondary)
+                Image(systemName: "chevron.up.chevron.down").foregroundStyle(.secondary)
+            }
+            .font(.body)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("回答方法")
+        .accessibilityValue(review.responseMode.title)
+        .accessibilityIdentifier("reviewModePicker")
+    }
+
     private func gradeColor(_ grade: ReviewGrade) -> Color {
         switch grade {
-        case .again: return .red
-        case .hard: return .orange
-        case .good: return .blue
-        case .easy: return .green
+        case .again: return Color("GradeAgain")
+        case .hard: return Color("GradeHard")
+        case .good: return Color("GradeGood")
+        case .easy: return Color("GradeEasy")
         }
     }
 

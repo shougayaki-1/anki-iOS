@@ -33,7 +33,7 @@ struct BackupService {
         let storeURL = location.restorationStore(id: id)
         let directory = storeURL.deletingLastPathComponent()
         let root = location.canonicalStore.deletingLastPathComponent().resolvingSymlinksInPath()
-        guard directory.resolvingSymlinksInPath().path.hasPrefix(root.path + "/") else { throw BackupError.invalidData }
+        guard directory.isFileDescendant(of: root) else { throw BackupError.invalidData }
         let mediaPrefix = "restored/\(id.uuidString)"
         var snapshot = backup.data
         do {

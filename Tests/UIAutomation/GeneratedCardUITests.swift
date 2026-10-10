@@ -18,6 +18,22 @@ final class GeneratedCardUITests: XCTestCase {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: up ? 0.75 : 0.3))
             .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: up ? 0.3 : 0.75)))
     }
+    func selectTestPhoto(_ app: XCUIApplication) -> Bool {
+        let photos = app.images.matching(identifier: "PXGGridLayout-Info")
+        guard photos.firstMatch.waitForExistence(timeout: 15) else { return false }
+        // Set only for an explicitly authorized device acceptance run.
+        if ProcessInfo.processInfo.environment["ANKI_UI_ALLOW_ANY_PHOTO"] == "1" {
+            photos.firstMatch.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+            return true
+        }
+        let testImage = photos.matching(NSPredicate(
+            format: "label CONTAINS[cd] %@ OR label CONTAINS[cd] %@ OR label CONTAINS[cd] %@ OR label CONTAINS[cd] %@ OR label CONTAINS[cd] %@ OR label CONTAINS[cd] %@ OR label CONTAINS[cd] %@ OR label CONTAINS[cd] %@",
+            "uitest", "test image", "test-image", "test_photo", "fixture", "sample image", "テスト画像", "サンプル画像"
+        )).firstMatch
+        guard testImage.waitForExistence(timeout: 3) else { return false }
+        testImage.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        return true
+    }
     func testClozePreviewDraftRestartLearnUndoAndEdit() {
         let app = launch()
         app.buttons["addNote"].tap()
@@ -55,14 +71,13 @@ final class GeneratedCardUITests: XCTestCase {
         app.buttons["saveNote"].tap(); app.buttons["復習予定を維持して保存"].tap()
         XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 5))
     }
-    func testPhotoMaskCreatePreviewLearnAndRestart() {
+    func testPhotoMaskCreatePreviewLearnAndRestart() throws {
         let app = launch()
         app.buttons["addNote"].tap()
         app.buttons["noteKindPicker"].tap(); app.buttons["画像マスク"].firstMatch.tap()
+        for _ in 0..<8 where !app.buttons["pickPhoto"].isHittable { scroll(app, up: true) }
         app.buttons["pickPhoto"].tap()
-        let photo = app.images["PXGGridLayout-Info"].firstMatch
-        XCTAssertTrue(photo.waitForExistence(timeout: 15), app.debugDescription)
-        photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        guard selectTestPhoto(app) else { throw XCTSkip("写真ライブラリにテスト用画像がないため、写真を選ばず終了しました。") }
         let mask = app.buttons["addCenterMask"]
         for _ in 0..<5 where !mask.isHittable { scroll(app, up: true) }
         XCTAssertTrue(mask.waitForExistence(timeout: 15)); mask.tap()
@@ -102,20 +117,52 @@ final class GeneratedCardUITests: XCTestCase {
         XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.descendants(matching: .any)["noteDue"].label, due)
     }
-    func testPhotoOCRCorrectionPreviewImportAndLearn() {
+    func testPhotoOCRCorrectionPreviewImportAndLearn() throws {
         let app = launch()
         app.buttons["openOCR"].tap(); app.buttons["pickPhoto"].tap()
-        let photo = app.images["PXGGridLayout-Info"].firstMatch
-        XCTAssertTrue(photo.waitForExistence(timeout: 15), app.debugDescription); photo.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        guard selectTestPhoto(app) else { throw XCTSkip("写真ライブラリにテスト用画像がないため、写真を選ばず終了しました。") }
         let text = app.textViews["ocrText"]
         XCTAssertTrue(text.waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["ocrLanguages"].waitForExistence(timeout: 20))
-        attach(app, "Phase3-OCR-recognized")
-        if app.buttons["clearOCRText"].isEnabled { app.buttons["clearOCRText"].tap() }
-        text.tap()
+        finishOCR(app, text: text)
+    }
+    func testAuthorizedCameraJapaneseOCRCorrectionAndLearn() throws {
+        guard ProcessInfo.processInfo.environment["ANKI_UI_ALLOW_CAMERA"] == "1" else {
+            throw XCTSkip("実機カメラ撮影の準備が指定されていません。")
+        }
+        addUIInterruptionMonitor(withDescription: "Camera permission") { alert in
+            for title in ["許可", "Allow", "OK"] where alert.buttons[title].exists {
+                alert.buttons[title].tap(); return true
+            }
+            return false
+        }
+        let app = launch()
+        app.buttons["openOCR"].tap(); app.buttons["撮影"].tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
+        let shutter = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@ OR label == %@", "PhotoCapture", "写真を撮影", "Take Picture")).firstMatch
+        XCTAssertTrue(shutter.waitForExistence(timeout: 15))
+        shutter.tap()
+        let use = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "写真を使用", "Use Photo")).firstMatch
+        XCTAssertTrue(use.waitForExistence(timeout: 10)); use.tap()
+        let text = app.textViews["ocrText"]
+        XCTAssertTrue(text.waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["ocrLanguages"].waitForExistence(timeout: 30))
+        let recognized = text.value as? String ?? ""
+        XCTAssertNotNil(recognized.range(of: "[ぁ-ヿ一-鿿]", options: .regularExpression), "日本語の認識結果が必要です。")
+        finishOCR(app, text: text)
+    }
+    private func finishOCR(_ app: XCUIApplication, text: XCUIElement) {
+        let clear = app.buttons["clearOCRText"]
+        for _ in 0..<6 where !clear.exists { scroll(app, up: true) }
+        XCTAssertTrue(clear.exists)
+        if clear.isEnabled { clear.tap() }
+        for _ in 0..<8 where text.frame.minY < 100 { scroll(app, up: false) }
+        text.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
         text.typeText("Q: OCR capital\nA: Tokyo corrected")
         app.buttons["完了"].tap()
-        app.buttons["ocrPreview"].tap()
+        let preview = app.buttons["ocrPreview"]
+        for _ in 0..<6 where !preview.isHittable { scroll(app, up: true) }
+        preview.tap()
         app.buttons["previewImport"].tap()
         let confirm = app.buttons["confirmImport"]
         for _ in 0..<8 where !confirm.isHittable { scroll(app, up: true) }

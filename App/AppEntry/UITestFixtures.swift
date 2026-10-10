@@ -37,6 +37,21 @@ enum UITestFixtures {
             }
         }
     }
+    @MainActor static func populateDueNotification(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let base = now.addingTimeInterval(-7200)
+        try repository.createNote(NoteInput(deckID: repository.decks()[0].id, question: "通知の実機確認", answer: "通知からホームへ戻る"), now: base)
+        try repository.start(mode: .new, now: base)
+        try repository.updateDraft(revealed: true, now: base)
+        try repository.grade(.again, now: base)
+        try repository.setSessionActive(false, now: base)
+        var settings = try repository.settings()
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: now.addingTimeInterval(180))
+        settings.notification.hour = parts.hour ?? 20
+        settings.notification.minute = parts.minute ?? 0
+        settings.notification.enabled = false
+        try repository.updateSettings(settings)
+    }
     static func prepare(name: String) throws {
         guard UUID(uuidString: name) != nil else { throw StudyError.invalidContent }
         let documents = URL.documentsDirectory

@@ -116,6 +116,7 @@ struct ImportView: View {
                                 .frame(maxWidth: .infinity, minHeight: 48)
                         }
                         .buttonStyle(.borderedProminent)
+                        .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                         .accessibilityIdentifier("confirmImport")
                         .disabled(!rows.contains(where: \.included))
                     }

@@ -17,14 +17,38 @@ struct StudyStorageLocation: Sendable {
               pieces[2] == "Study.store" else { throw BackupError.invalidData }
         let root = canonicalStore.deletingLastPathComponent().resolvingSymlinksInPath()
         let store = root.appendingPathComponent(value.relativePath).resolvingSymlinksInPath()
-        guard store.path.hasPrefix(root.path + "/"), FileManager.default.fileExists(atPath: store.path) else { throw BackupError.invalidData }
+        guard store.isFileDescendant(of: root), FileManager.default.fileExists(atPath: store.path) else { throw BackupError.invalidData }
         return store
     }
     func restorationStore(id: UUID) -> URL {
-        canonicalStore.deletingLastPathComponent().appendingPathComponent("Restores/\(id.uuidString)/Study.store")
+        canonicalStore.deletingLastPathComponent().resolvingSymlinksInPath().appendingPathComponent("Restores/\(id.uuidString)/Study.store")
     }
     func activate(id: UUID) throws {
         let value = Pointer(schemaVersion: 1, relativePath: "Restores/\(id.uuidString)/Study.store")
         try JSONEncoder().encode(value).write(to: pointer, options: .atomic)
+    }
+}
+
+extension URL {
+    // Directory URL paths can retain a trailing slash on iOS. Compare resolved
+    // components so that slash spelling and /var aliases do not reject children.
+    func isFileDescendant(of root: URL) -> Bool {
+        guard isFileURL, root.isFileURL else { return false }
+        let parent = root.resolvedFileLocation.pathComponents
+        let child = resolvedFileLocation.pathComponents
+        return child.count > parent.count && child.starts(with: parent)
+    }
+    private var resolvedFileLocation: URL {
+        // resolvingSymlinksInPath may leave a nonexistent final path unchanged.
+        // Resolve its nearest existing ancestor before appending missing names.
+        var ancestor = self
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: ancestor.path), ancestor.pathComponents.count > 1 {
+            missing.append(ancestor.lastPathComponent)
+            ancestor.deleteLastPathComponent()
+        }
+        var result = ancestor.resolvingSymlinksInPath()
+        for name in missing.reversed() { result.appendPathComponent(name) }
+        return result
     }
 }
