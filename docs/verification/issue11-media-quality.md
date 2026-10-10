@@ -4,7 +4,7 @@
 
 - Input: supported still-image formats decoded by ImageIO (iOS 17+), **at most 20,000,000 bytes and 40,000,000 pixels**. Reject missing/incomplete pixel data and multi-frame images; do not trust extensions.
 - Uncropped, already-upright JPEG and PNG: **byte-for-byte preserve** source, including PNG alpha, JPEG compression and metadata. No background migration/recompression of existing assets.
-- Crops or orientation fixes: normalize upright through UIKit, crop in pixel coordinates derived from the same normalized image shown by the editor. PNG and alpha-bearing source images remain lossless PNG. Other supported images become JPEG at 0.92 quality.
+- Crops or orientation fixes: normalize upright through UIKit, honoring EXIF axis swaps, then crop in pixel coordinates derived from the normalized bitmap. PNG and alpha-bearing source images remain lossless PNG. Other supported images become JPEG at 0.92 quality.
 - Resizing: **no automatic downscaling**. If the result exceeds the existing cap, surface an actionable error asking for user-initiated resizing. This is a deliberate quality-first decision until resizing consent/UI can be designed.
 - Storage: unique `images/<UUID>.jpg` or `.png` files, atomic write before SwiftData metadata, SHA-256 of actual stored bytes. On SwiftData save failure, remove the new file. Save failures report disk-space guidance.
 - Existing `MediaAsset` fields remain unchanged. `mediaType` now correctly records JPEG or PNG; existing JPEG rows, paths, notes, masks, review logs and editor drafts remain untouched.
@@ -28,7 +28,7 @@ Do **not** interpret byte preservation as a universal storage saving: PNG files 
 
 ## Verification checklist
 
-Added integration tests: exact JPEG/PNG round-trip; transparent PNG crop; normalized mask geometry; input size; truncated/corrupted file; failed atomic write; draft-referenced PNG retained during cleanup; orphan removed; mixed-format ZIP export/restore; old JPEG ZIP path compatibility through existing backup tests.
+Added unit tests for JPEG/PNG ZIP entry naming and the encoding policy's limits. Added integration tests for exact JPEG/PNG round-trip; transparent PNG crop; normalized mask geometry; input size; truncated/corrupted file; failed atomic write; draft-referenced PNG retained during cleanup; orphan removed; mixed-format ZIP export/restore; legacy JPEG filenames; and OCR text equality for a stored screenshot. Tests require macOS/Xcode and have not yet been executed.
 
 ### Executed
 

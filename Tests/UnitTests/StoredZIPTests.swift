@@ -45,4 +45,12 @@ final class StoredZIPTests: XCTestCase {
         let files = Dictionary(uniqueKeysWithValues: (0...10000).map { ("\($0)", Data()) })
         XCTAssertThrowsError(try StoredZIP.write(files))
     }
+    func testBackupMediaPathsRetainLegacyJPEGAndUsePNGExtension() {
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000011")!
+        XCTAssertEqual(BackupArchive.mediaPath(id), "media/00000000-0000-0000-0000-000000000011.jpg")
+        XCTAssertEqual(BackupArchive.mediaPath(id, mediaType: "image/jpeg"), BackupArchive.mediaPath(id))
+        XCTAssertEqual(BackupArchive.mediaPath(id, mediaType: "image/png"), "media/00000000-0000-0000-0000-000000000011.png")
+        XCTAssertEqual(ImageEncodingPolicy.maximumBytes, 20_000_000)
+        XCTAssertEqual(ImageEncodingPolicy.maximumPixels, 40_000_000)
+    }
 }

@@ -36,7 +36,7 @@ enum ImageEncodingPolicy {
         let png = sourceType == "public.png"
         let jpeg = sourceType == "public.jpeg"
         let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
-        guard crop == nil || crop!.isValid else { throw MediaError.invalidImage }
+        if let crop, !crop.isValid { throw MediaError.invalidImage }
 
         // Original, complete PNG/JPEG bytes are preferable to an invisible lossy conversion.
         // Leave their metadata/EXIF untouched; existing masks use relative display coordinates.
@@ -56,8 +56,11 @@ enum ImageEncodingPolicy {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = !usePNG
-        let upright = UIGraphicsImageRenderer(size: original.size, format: format).image { _ in
-            original.draw(in: CGRect(origin: .zero, size: original.size))
+        // EXIF orientations 5...8 rotate pixel axes; avoid stretching rotated photographs.
+        let rotated = (5...8).contains(orientation)
+        let displaySize = CGSize(width: rotated ? height : width, height: rotated ? width : height)
+        let upright = UIGraphicsImageRenderer(size: displaySize, format: format).image { _ in
+            original.draw(in: CGRect(origin: .zero, size: displaySize))
         }
         var result = upright
         if let crop {

@@ -258,4 +258,15 @@ final class MediaRepositoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: try repo.assetURL(id: id).path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: try store.url(for: orphan.relativePath).path))
     }
+    func testStoredTextScreenshotOCRMatchesOriginal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = imageData()
+        let expected = try await OCRService.recognize(image)
+        let result = try MediaStore(root: root).store(image)
+        let bytes = try Data(contentsOf: MediaStore(root: root).url(for: result.relativePath))
+        let recognized = try await OCRService.recognize(bytes)
+        XCTAssertEqual(recognized.text, expected.text)
+        XCTAssertTrue(recognized.text.uppercased().contains("TOKYO"))
+    }
 }
