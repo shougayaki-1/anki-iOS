@@ -10,6 +10,9 @@ final class SpeechReadoutTests: XCTestCase {
         let options = try JSONDecoder().decode(StudyOptions.self, from: Data(#"{"schemaVersion":2,"siblingBuryEnabled":true}"#.utf8))
         XCTAssertNil(options.speech)
         XCTAssertEqual(SpeechPreferences().autoplay(deckID: UUID(), noteOverride: nil), .off)
+        // Old NoteInput drafts must remain decodable without the new optional fields.
+        let legacy = try JSONDecoder().decode(NoteInput.self, from: JSONEncoder().encode(NoteInput(deckID: UUID(), question: "Q", answer: "A")))
+        XCTAssertNil(legacy.speechOverrides)
     }
 
     func testDeckDefaultsAndNoteOverrides() {
@@ -41,6 +44,11 @@ final class SpeechReadoutTests: XCTestCase {
         XCTAssertFalse(shown.question.contains("capital"))
         XCTAssertEqual(SpeechReadout.text(kind: .cloze, displayed: shown, side: .question), "The   is busy.")
         XCTAssertEqual(SpeechReadout.text(kind: .cloze, displayed: shown, side: .answer), "capital")
+    }
+
+    func testClozeUnsafeBracketsFailClosed() {
+        let text = TextContent(question: "The [secret] ] remains.", answer: "secret", explanation: "")
+        XCTAssertNil(SpeechReadout.text(kind: .cloze, displayed: text, side: .question))
     }
 
     func testReverseCardSwapsReadoutTextWithoutLeakingBackside() throws {

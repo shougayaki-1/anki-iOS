@@ -66,6 +66,7 @@ enum SpeechReadout {
             : source
         let normalized = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty, normalized.count <= 3000, !normalized.contains("{{c"),
+              !(kind == .cloze && side == .question && (normalized.contains("[") || normalized.contains("]"))),
               normalized.range(of: #"[A-Za-z]{2,}"#, options: .regularExpression) != nil,
               !normalized.unicodeScalars.contains(where: { scalar in
                   switch scalar.value {
