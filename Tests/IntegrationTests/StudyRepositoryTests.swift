@@ -22,6 +22,91 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testSessionAnswerProgressTracksRemainingAndFinishesAt20RegardlessOfDailyGoal() throws {
+        let repo = try fixture()
+        var settings = try repo.settings()
+        settings.dailyNewLimit = 30
+        settings.dailyGoal = 1 // Already reached after the first answer; not the session limit.
+        try repo.updateSettings(settings)
+        for index in 0..<25 {
+            try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q\(index)", answer: "A\(index)"), now: now)
+        }
+        try repo.start(mode: .new, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.remaining, 20)
+        for index in 1...20 {
+            try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(TimeInterval(index)))
+            let progress = try XCTUnwrap(repo.presentation(now: now)?.sessionProgress)
+            XCTAssertEqual(progress.answered, index)
+            XCTAssertEqual(progress.remaining, 20 - index)
+            XCTAssertEqual(progress.isComplete, index == 20)
+            if index == 1 { XCTAssertEqual(try repo.counts(now: now).learnedToday, 1) }
+        }
+        let finished = try XCTUnwrap(repo.presentation(now: now))
+        XCTAssertNil(finished.card)
+        XCTAssertEqual(finished.emptyState?.reason, .complete)
+        XCTAssertEqual(try repo.logs().count, 20)
+        XCTAssertTrue(finished.canUndo)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.remaining, 1)
+        XCTAssertNotNil(try repo.presentation(now: now)?.card)
+        try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(30))
+        XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.remaining, 0)
+        try repo.completeSession(now: now)
+        XCTAssertNil(try repo.session())
+        XCTAssertNil(try repo.options().activeSessionProgress)
+        XCTAssertEqual(try repo.logs().count, 20)
+        // Today's unique-card goal has been met, but the next set starts at 0 / 20.
+        try repo.start(mode: .new, now: now.addingTimeInterval(31))
+        XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.answered, 0)
+        XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.remaining, 20)
+    }
+
+    func testSessionAnswerProgressUsesConfirmedGradesNotCluesAndSurvivesResume() throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let first = StudyRepository(container: container)
+        try first.initialize(now: now)
+        try create(first)
+        try first.start(mode: .new, now: now)
+        try first.updateDraft(mode: .typing, text: "東京", revealed: true, now: now)
+        XCTAssertEqual(try first.sessionProgress()?.answered, 0)
+        try first.grade(.again, now: now)
+        XCTAssertEqual(try first.sessionProgress()?.answered, 1)
+        XCTAssertEqual(try first.sessionProgress()?.remaining, 19)
+        try first.setSessionActive(false, now: now)
+        let next = StudyRepository(container: container)
+        try next.initialize(now: now)
+        XCTAssertEqual(try next.sessionProgress()?.answered, 1)
+        XCTAssertEqual(try next.presentation(now: now)?.sessionProgress?.remaining, 19)
+        try next.undo(now: now)
+        XCTAssertEqual(try next.sessionProgress()?.answered, 0)
+        XCTAssertEqual(try next.sessionProgress()?.remaining, 20)
+    }
+
+    func testUnlimitedSessionShowsAnsweredOnlyAndDefaultChangesApplyToNextSet() throws {
+        let repo = try fixture()
+        try create(repo); try create(repo)
+        var options = try repo.options()
+        options.sessionAnswerLimit = 0 // unlimited
+        try repo.updateOptions(options)
+        try repo.start(mode: .new, now: now)
+        var progress = try XCTUnwrap(repo.sessionProgress())
+        XCTAssertEqual(progress.limit, 0)
+        XCTAssertNil(progress.remaining)
+        options = try repo.options()
+        options.sessionAnswerLimit = 10
+        try repo.updateOptions(options)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        progress = try XCTUnwrap(repo.sessionProgress())
+        XCTAssertEqual(progress.answered, 1)
+        XCTAssertEqual(progress.limit, 0) // A running session is a snapshot.
+        try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(1))
+        try repo.completeSession(now: now)
+        try create(repo) // New material remains available in the next session.
+        try repo.start(mode: .new, now: now.addingTimeInterval(2))
+        XCTAssertEqual(try repo.sessionProgress()?.limit, 10)
+        XCTAssertEqual(try repo.sessionProgress()?.answered, 0)
+    }
+
     func testNewEasyLongTermDueIsModeExcludedAndOtherModesCanReview() throws {
         for bury in [true, false] {
             let repo = try fixture()

@@ -38,6 +38,7 @@ struct HomeView: View {
     @State private var editingScope = false
     @State private var adding = false
     @State private var showingHelp = false
+    @State private var editingSessionAnswerLimit = false
     @Environment(\.scenePhase) private var scenePhase
 
     private func start(_ mode: StudyMode) {
@@ -52,6 +53,17 @@ struct HomeView: View {
             List {
                 Section {
                     LearningScopeSelector(store: store) { editingScope = true }
+                    Button { editingSessionAnswerLimit = true } label: {
+                        HStack {
+                            Text("今回の回答数")
+                            Spacer()
+                            Text(store.sessionAnswerLimit == 0 ? "すべて" : "\(store.sessionAnswerLimit)問")
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.down").font(.caption)
+                        }
+                    }
+                    .accessibilityIdentifier("openSessionAnswerLimit")
+                    .accessibilityHint("次の学習セッションの回答数を選びます")
                 }
                 if let error = store.homeFailure {
                     Section {
@@ -91,6 +103,33 @@ struct HomeView: View {
                 }
             }
             .sheet(isPresented: $editingScope) { LearningScopeSheet(store: store, initial: store.scope) }
+            .sheet(isPresented: $editingSessionAnswerLimit) {
+                NavigationStack {
+                    List {
+                        ForEach([10, 20, 30, 0], id: \.self) { count in
+                            Button {
+                                store.changeSessionAnswerLimit(count)
+                                if store.failure == nil { editingSessionAnswerLimit = false }
+                            } label: {
+                                HStack {
+                                    Text(count == 0 ? "すべて（上限なし）" : "\(count)問")
+                                    Spacer()
+                                    if store.sessionAnswerLimit == count {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }.foregroundStyle(.primary)
+                            }
+                        }
+                    }
+                    .navigationTitle("今回の回答数")
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("閉じる") { editingSessionAnswerLimit = false }
+                        }
+                    }
+                }
+                .presentationDetents([.medium])
+            }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
             .sheet(isPresented: $showingHelp) {
                 NavigationStack {

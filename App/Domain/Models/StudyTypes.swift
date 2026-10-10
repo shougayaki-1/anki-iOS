@@ -110,7 +110,16 @@ enum NumericSettingsInput {
 
 struct DeckItem: Identifiable {
     let id: UUID
-    let name: String
+    let name: String              // Full path used by pickers and scope selection.
+    let shortName: String         // Local deck name used by the management tree.
+    let parentID: UUID?
+
+    init(id: UUID, name: String, shortName: String? = nil, parentID: UUID? = nil) {
+        self.id = id
+        self.name = name
+        self.shortName = shortName ?? name
+        self.parentID = parentID
+    }
 }
 
 struct NoteItem: Identifiable {
@@ -162,6 +171,16 @@ struct ReviewPresentation {
     var ordering: OrderingDraft? = nil
     var orderingUnavailable: String? = nil
     var emptyState: ReviewEmptyState? = nil
+    var sessionProgress: SessionAnswerProgress? = nil
+}
+
+// Count confirmed answers in this session, not the number of unique cards studied today.
+struct SessionAnswerProgress: Equatable {
+    let answered: Int
+    let limit: Int  // 0 = unlimited
+
+    var remaining: Int? { limit == 0 ? nil : max(0, limit - answered) }
+    var isComplete: Bool { limit > 0 && answered >= limit }
 }
 
 struct ReviewEmptyState: Equatable {
