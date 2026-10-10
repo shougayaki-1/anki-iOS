@@ -93,10 +93,13 @@ struct ReviewView: View {
                 }
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                if let progress = store.review?.sessionProgress {
+                if let review = store.review, let progress = review.sessionProgress {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
-                            Text(progress.remaining.map { "残り\($0)問" } ?? "今回回答済み \(progress.answered)問")
+                            Text(progress.limit == 0 ? "今回回答済み \(progress.answered)問" :
+                                 progress.isComplete ? "今回の\(progress.limit)問を完了" :
+                                 review.card == nil ? "回答済み \(progress.answered)問" :
+                                 "残り\(progress.remaining ?? 0)問")
                                 .font(.headline)
                                 .accessibilityIdentifier("remainingQuestions")
                             Spacer(minLength: 8)

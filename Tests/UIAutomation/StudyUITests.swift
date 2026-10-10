@@ -48,6 +48,7 @@ final class StudyUITests: XCTestCase {
     func testSessionShowsRemainingAnswersInsteadOfDailyGoal() {
         let app = app()
         create(app, question: "Progress test question", answer: "Progress test answer")
+        create(app, question: "Progress test question 2", answer: "Progress test answer 2")
         app.tabBars.buttons["ホーム"].tap()
         XCTAssertTrue(app.buttons["openSessionAnswerLimit"].exists)
         XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))

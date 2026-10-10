@@ -438,7 +438,8 @@ final class StudyRepository {
                                   sessionProgress: try sessionProgress())
     }
     private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date) throws -> ReviewEmptyState {
-        if let progress = try sessionProgress(), progress.isComplete {
+        let sessionCount = try sessionProgress()
+        if let progress = sessionCount, progress.isComplete {
             return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
                                     message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
         }
@@ -516,6 +517,10 @@ final class StudyRepository {
             return ReviewEmptyState(reason: .modeExcluded, title: "このモードの学習対象にカードがありません",
                                     message: mode == .review ? "未学習カードは「新しく覚える」から学習できます。" : "復習カードは「復習する」から学習できます。新規学習で続ける短期復習は、このセッションで学んだカードだけです。",
                                     suggestsScopeChange: true)
+        }
+        if let progress = sessionCount, progress.limit > 0, !progress.isComplete {
+            return ReviewEmptyState(reason: .complete, title: "今回はここまで",
+                                    message: "\(progress.answered) / \(progress.limit)問回答しました。現在、この条件で追加出題できるカードはありません。次回の復習は期限到来後に始められます。")
         }
         return ReviewEmptyState(reason: .complete, title: "今回の学習は完了しました",
                                 message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")
