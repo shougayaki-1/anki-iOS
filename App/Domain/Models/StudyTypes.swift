@@ -104,6 +104,16 @@ struct HomeCounts: Equatable {
     var answerCount = 0
 }
 
+struct HomeSnapshot: Equatable {
+    let scope: LearningScope
+    let counts: HomeCounts
+    let globalCounts: HomeCounts
+    let newSlotsRemaining: Int
+    let nextShortDue: Date?
+    let hasCards: Bool
+    let dayStart: Date
+}
+
 struct ReviewPresentation {
     let card: NoteItem?
     let mode: StudyMode

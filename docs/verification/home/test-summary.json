@@ -1,0 +1,425 @@
+{
+  "date": "2026-10-10",
+  "method": "Latest result per test case, including fixes and targeted reruns; not a single green full-suite run",
+  "counts": {
+    "passed": 88,
+    "skipped": 5
+  },
+  "runs": [
+    {
+      "name": "all",
+      "log": "/private/tmp/anki-issue31-all.log",
+      "reportCompleted": true
+    },
+    {
+      "name": "final-core-notification",
+      "log": "/private/tmp/anki-issue31-final-core-notification.log",
+      "reportCompleted": true
+    },
+    {
+      "name": "small-v2",
+      "log": "/private/tmp/anki-issue31-small-v2.log",
+      "reportCompleted": true
+    },
+    {
+      "name": "final-ui",
+      "log": "/private/tmp/anki-issue31-final-ui.log",
+      "reportCompleted": false
+    },
+    {
+      "name": "final-notification-settings",
+      "log": "/private/tmp/anki-issue31-final-notification-settings.log",
+      "reportCompleted": true
+    },
+    {
+      "name": "final-small-retry",
+      "log": "/private/tmp/anki-issue31-final-small-retry.log",
+      "reportCompleted": true
+    }
+  ],
+  "tests": {
+    "AnkiIOSTests.BackupRepositoryTests.testFailedStagedSavePreservesActivePointerAndOriginalData": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.BackupRepositoryTests.testFullBackupRestoresAllModelsMediaAndUndoAfterReopening": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.BackupRepositoryTests.testHistoricalDeletedCardsAndLegacyOptionsRemainValid": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.BackupRepositoryTests.testRehashedMalformedDataIsRejectedBeforeRestore": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.CardGenerationTests.testClozeStableIDsRepeatedIDsHintsAndUnicode": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.CardGenerationTests.testReverseCardHasStableVariantAndSwapsDisplay": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ClozeRepositoryTests.testPastedClozeGeneratesIndependentCardsAndBuriesSiblings": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ClozeRepositoryTests.testThreeClozeCardsRegenerateWithIDsAndFSRSHistoryIntact": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ImportParserTests.testCSVQuotedCommasNewlinesQuotesAndHeaderMapping": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ImportParserTests.testPasteQAAndPlainTextRemainEditable": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ImportParserTests.testTSVBlankFieldsAndInvalidCSV": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testFailedImportLeavesNoNotesCardsTagsOrBatch": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testHierarchyScopeAndCyclePreventionPreserveCardIDs": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testHomeFilterSaveFailureAndInvalidReferences": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testImportSkipsDuplicatesWithinBatchAndKeepsHistory": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testMigrationFromPhase1DiskStorePreservesEveryExistingRecord": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.LibraryRepositoryTests.testSiblingBuryDoesNotModifyFSRSAndShortLearningIsExempt": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testDeletionRemovesEditDraftAndBrokenReferencesPreventCleanup": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testDirectoryURLsAndSymlinkEscapeAreHandledSafely": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testDraftCommitFailureAndOrphanCleanupProtectReferencedImages": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testFailedAssetSaveCleansFileAndInvalidPathsAreRejected": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testMasksAndImageReferenceSurviveRegenerationAndDiskReopen": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testNormalizedGeometryAndCrop": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testV2ToV3MigrationKeepsTagsScopeAndPreferences": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testVisionOCRRecognizesJapaneseLocalFixture": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.MediaRepositoryTests.testVisionOCRRecognizesLocalFixture": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationPlannerTests.testActualDueTimeAndOverdueAcrossThirtyDayHorizon": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationPlannerTests.testCompletionCancelsUndoReschedulesDeliveredNotRepeatedAndUnrelatedKept": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationPlannerTests.testDSTAndTimeZoneChangeReplaceTriggersUsingLocalCalendar": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationPlannerTests.testNewSuspendedDisabledAndDeniedHaveNoNotifications": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationPlannerTests.testTestNamespacesAreIsolatedAndIdentifiersUseGregorianDates": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationServiceTests.testOffForegroundDoesNotRequestPermissionAndEnableIsExplicit": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationServiceTests.testReconciliationIsIdempotentAndCompletionOffAndDenialCancel": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.NotificationServiceTests.testTurningOffDuringInFlightAddCannotLeaveStaleReservation": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.PersistenceTests.testDiskStoreReopensWithIdenticalIDStateAndHistory": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testAuthorizedNotificationDiagnosticsAndTestCleanup": {
+      "status": "skipped",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testDeletedDeckDraftFallbackAndInterruptedRestoreImageCleanup": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testExtremeBackupDatesCountersAndSessionDurationAreRejected": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testFailedSaveAndFailedDisplayAfterCommitReportDifferentOutcomes": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testIdentityAssetsAndPrimaryButtonContrast": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testTimeZoneChangeAfterDiskRestartOnlyChangesDailyAggregation": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewQueueTests.testFourAMBoundaryAndUniqueGoalCount": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewQueueTests.testMixedRatioAndGoalDoesNotLimitReviews": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewQueueTests.testOverdueAndShortStepsAcrossDays": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewQueueTests.testSharedNewLimitAcrossAllModesAndSuspension": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewQueueTests.testTimeZoneAndDSTCalendarDays": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewSchedulerTests.testAllFourGradesAndShortTermAgain": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewSchedulerTests.testCompleteSnapshotRoundTripAndContinuation": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewSchedulerTests.testFSRS6InitializationAndReviewLifecycle": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ReviewSchedulerTests.testRetrievabilityUsesInjectedTimeAndRetentionBounds": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.ScaleRepositoryTests.testThousandNotesThreeThousandCardsTenThousandLogsAndBackup": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StatisticsTests.testFourAMUniqueCountsStreakRatingsAndRetention": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StatisticsTests.testStreakAcrossDSTAtNonexistentTwoAMBoundary": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StoredZIPTests.testStoredZIPRoundTripAndKnownCRC": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StoredZIPTests.testTraversalDuplicateIntegrityCompressionAndSymlinksRejected": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StoredZIPTests.testTruncationAndRandomInvalidBytesNeverEscapeBounds": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testCRUDMaintainsCardIdentityAndHistoryAndModes": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testDiskRestartRestoresDueHistoryAndUnscoredDraft": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testEmptyStartNeverCreatesOrReplacesSession": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testEveryGradePersistsFSRSAndLogWithExactTime": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testFailedGradeAndUndoRollbackEverything": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testHomeModeAvailabilityWaitingQuotaGoalAndDayBoundary": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testInvalidContentAndFailedCreationLeaveNoPartialRecords": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testNewQuotaPersistsAcrossModesAndDecksAndCountsRepeatedCardOnce": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSTests.StudyRepositoryTests.testUndoRestoresAllStateAndAllowsRegrade": {
+      "status": "passed",
+      "run": "final-core-notification"
+    },
+    "AnkiIOSUITests.GeneratedCardUITests.testAuthorizedCameraJapaneseOCRCorrectionAndLearn": {
+      "status": "skipped",
+      "run": "all"
+    },
+    "AnkiIOSUITests.GeneratedCardUITests.testClozePreviewDraftRestartLearnUndoAndEdit": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.GeneratedCardUITests.testPhotoMaskCreatePreviewLearnAndRestart": {
+      "status": "skipped",
+      "run": "all"
+    },
+    "AnkiIOSUITests.GeneratedCardUITests.testPhotoOCRCorrectionPreviewImportAndLearn": {
+      "status": "skipped",
+      "run": "all"
+    },
+    "AnkiIOSUITests.ImportUITests.testHierarchyCreationAndParentScopeStudy": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.ImportUITests.testLargeCSVCanConfirmWithoutScrollingThroughRows": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.ImportUITests.testPastePreviewConfirmDuplicatesAndErrorsThenLearn": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.OperationsUITests.testActualDueNotificationDeliveryAndTapReturnsHome": {
+      "status": "passed",
+      "run": "final-notification-settings"
+    },
+    "AnkiIOSUITests.OperationsUITests.testNativeBackupExportAndImportPicker": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.OperationsUITests.testNotificationPermissionActualReservationsAndCancellation": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.Phase0UITests.testSaveTerminateAndRelaunch": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.QualityUITests.testAuthorizedDeviceCSVImportAndRestart": {
+      "status": "skipped",
+      "run": "final-ui"
+    },
+    "AnkiIOSUITests.QualityUITests.testDarkLargestDynamicTypeWrittenCardAndAccessibilityAudit": {
+      "status": "passed",
+      "run": "final-ui"
+    },
+    "AnkiIOSUITests.QualityUITests.testNativeCSVFileImportAndCorruptBackupPreservesData": {
+      "status": "passed",
+      "run": "final-ui"
+    },
+    "AnkiIOSUITests.QualityUITests.testNativeIdentityDeckCancellationAndEmptySearch": {
+      "status": "passed",
+      "run": "final-small-retry"
+    },
+    "AnkiIOSUITests.QualityUITests.testScaleHomeReviewUndoAndRestart": {
+      "status": "passed",
+      "run": "final-ui"
+    },
+    "AnkiIOSUITests.StudyUITests.testCreateLearnUndoRestartEditAndDelete": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.StudyUITests.testHomeAccessibilityDarkLargestTextAndAddSave": {
+      "status": "passed",
+      "run": "small-v2"
+    },
+    "AnkiIOSUITests.StudyUITests.testHomeEmptyWaitingAndModeSwitchCancellation": {
+      "status": "passed",
+      "run": "final-small-retry"
+    },
+    "AnkiIOSUITests.StudyUITests.testHomeFilterCancelApplyRestartResetPreservesInterruptedDraft": {
+      "status": "passed",
+      "run": "final-ui"
+    },
+    "AnkiIOSUITests.StudyUITests.testHomeParentDeckAndMultipleTagsApplyResetAndMixedMode": {
+      "status": "passed",
+      "run": "final-small-retry"
+    },
+    "AnkiIOSUITests.StudyUITests.testReviewHeroVisibleWithoutScrollingAndHomeAddCancel": {
+      "status": "passed",
+      "run": "small-v2"
+    },
+    "AnkiIOSUITests.StudyUITests.testTypingDraftSurvivesProcessRestartAndModeChange": {
+      "status": "passed",
+      "run": "all"
+    },
+    "AnkiIOSUITests.StudyUITests.testHomeLightAccessibilityAudit": {
+      "status": "passed",
+      "run": "small-v2"
+    },
+    "AnkiIOSTests.QualityRepositoryTests.testTextPaletteContrastAgainstSystemSurfaces": {
+      "status": "passed",
+      "run": "final-small-retry"
+    }
+  },
+  "limitations": [
+    "Physical device, VoiceOver audio/focus, OS Reduce Motion and airplane mode not verified for this change",
+    "final-ui report aggregation was interrupted after case results; its log retains results"
+  ],
+  "performance": {
+    "notes": 1000,
+    "cards": 3000,
+    "reviewLogs": 10000,
+    "initialStoreSeconds": 0.509,
+    "meanHomeSnapshotSeconds": 0.071
+  }
+}
