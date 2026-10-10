@@ -19,14 +19,16 @@ struct MainTabs: View {
                 .tabItem { Label("設定", systemImage: "gearshape") }.tag(3)
         }
         .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
-        .alert("処理に失敗しました", isPresented: Binding(
-            get: { store.failure != nil }, set: { if !$0 { store.failure = nil } }
-        )) { Button("閉じる", role: .cancel) { store.failure = nil } }
-        message: { Text(store.failure ?? "") }
-        .alert("ショートカット", isPresented: Binding(
-            get: { shortcutNotice != nil }, set: { if !$0 { shortcutNotice = nil } }
-        )) { Button("閉じる", role: .cancel) { shortcutNotice = nil } }
-        message: { Text(shortcutNotice ?? "") }
+        // One alert presenter avoids two .alert modifiers competing on TabView.
+        .alert(Text(store.failure != nil ? "処理に失敗しました" : "ショートカット"),
+               isPresented: Binding(
+                get: { store.failure != nil || shortcutNotice != nil },
+                set: { if !$0 { store.failure = nil; shortcutNotice = nil } }
+               )) {
+            Button("閉じる", role: .cancel) { store.failure = nil; shortcutNotice = nil }
+        } message: {
+            Text(store.failure ?? shortcutNotice ?? "")
+        }
         .onChange(of: shortcutNavigation.pending, initial: true) { _, _ in
             handleShortcut()
         }
