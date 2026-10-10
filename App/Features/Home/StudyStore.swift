@@ -49,7 +49,7 @@ final class StudyStore {
             repository.calendar = .current
             let now = clock()
             let snapshot = try repository.homeSnapshot(now: now)
-            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
+            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id), shortName: $0.name, parentID: $0.parentID) }
             let notes = try repository.noteItems()
             let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
             let settings = try repository.settings()
