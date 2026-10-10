@@ -93,11 +93,31 @@ final class QualityUITests: XCTestCase {
         // Form text fields scroll themselves into view when tapped, including
         // when the keyboard covers part of a large Dynamic Type form.
         if element.exists && [.textField, .textView].contains(element.elementType) { return }
-        for _ in 0..<10 where !element.isHittable {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.75))
-                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.25)))
+        var missingSearches = 0
+        for _ in 0..<35 {
+            var top = (app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? app.frame.minY) + 8
+            let progress = app.progressIndicators["sessionProgressBar"]
+            if progress.exists { top = max(top, progress.frame.maxY + 8) }
+            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer")
+            if fixedControl && element.isHittable { return }
+            var bottom = app.frame.maxY - 16
+            if app.buttons["pauseStudy"].exists {
+                let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+                if footer.exists { bottom = min(bottom, footer.frame.minY - 8) }
+            } else if app.tabBars.firstMatch.exists {
+                bottom = min(bottom, app.tabBars.firstMatch.frame.minY - 8)
+            }
+            if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom { return }
+            let down = element.exists ? element.frame.minY < top : missingSearches < 6
+            if !element.exists { missingSearches += 1 }
+            let low = top + 0.2 * max(40, bottom - top)
+            let high = top + 0.8 * max(40, bottom - top)
+            let start = (down ? low : high) / app.frame.height
+            let end = (down ? high : low) / app.frame.height
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: start))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: end)))
         }
-        XCTAssertTrue(element.exists)
+        XCTAssertTrue(element.exists && element.isHittable, "Required control must be visible")
     }
     func attach(_ app: XCUIApplication, name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name
