@@ -56,33 +56,15 @@ struct HomeView: View {
                         Text(error).font(.footnote)
                         Button("再試行") { store.perform { } }.accessibilityIdentifier("retryHome")
                     }
-                } else if !store.hasCards {
-                    Section {
-                        Text("最初のカードを登録しましょう。")
-                        Button("カードを追加する", systemImage: "plus") { adding = true }
-                            .accessibilityIdentifier("addFirstHomeNote")
-                    }
                 } else {
-                    ReviewHeroSection(count: store.counts.due, enabled: store.canStart(.review),
-                                      elsewhere: store.globalCounts.due > 0) { start(.review) }
-                }
-                if let review = store.review {
-                    Section {
-                        Button { store.resume() } label: {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("続きから再開").fixedSize(horizontal: false, vertical: true)
-                                Text(review.mode.title).font(.subheadline).foregroundStyle(Color("SecondaryText"))
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }.padding(.vertical, 6)
-                        }.accessibilityIdentifier("resumeStudy")
-                    }
-                }
-                if store.homeFailure == nil, let next = store.nextShortDue, store.counts.due == 0 {
-                    Section {
-                        Text("次の短期復習: \(next.formatted(date: .omitted, time: .shortened))")
-                            .accessibilityIdentifier("nextShortReview")
-                        Text("待機中のカードがあります。期限になると復習できます。")
-                            .font(.footnote).foregroundStyle(Color("SecondaryText"))
+                    ReviewHeroSection(store: store) {
+                        switch store.homePrimaryAction {
+                        case .resume: store.resume()
+                        case let .start(mode, _): store.start(mode)
+                        case .addCards: adding = true
+                        case .complete: store.completeSession()
+                        case .waiting, .unavailable: break
+                        }
                     }
                 }
                 if store.homeFailure == nil {
@@ -93,6 +75,9 @@ struct HomeView: View {
                     Section {
                         Text("今はこの条件で学習できるカードがありません。")
                         Button("学習対象を変更") { editingScope = true }
+                        if store.newSlotsRemaining == 0 {
+                            Button("新規学習の設定を変更") { store.selectedTab = 3 }
+                        }
                     }
                 }
             }
@@ -166,28 +151,60 @@ struct LearningScopeSelector: View {
 }
 
 struct ReviewHeroSection: View {
-    let count: Int
-    let enabled: Bool
-    let elsewhere: Bool
-    let start: () -> Void
+    let store: StudyStore
+    let execute: () -> Void
+    private var action: HomePrimaryAction { store.homePrimaryAction }
+    private var executable: Bool {
+        switch action {
+        case .waiting, .unavailable: return false
+        default: return true
+        }
+    }
     var body: some View {
         Section {
             VStack(alignment: .leading, spacing: 12) {
-                Text("いま復習できるカード").font(.headline)
-                Text("\(count)枚").font(.largeTitle.bold()).accessibilityIdentifier("dueCount")
-                    .accessibilityLabel("復習待ち、絞り込み後、\(String(count))枚")
-                Button(action: start) {
-                    Text(StudyMode.review.title).font(.headline)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity).padding(.vertical, 12)
-                }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
-                    .accessibilityIdentifier("start-review").disabled(!enabled)
-                if count == 0 {
-                    Text("今は復習するカードがありません。")
-                    if elsewhere { Text("ほかの学習対象に復習があります。") }
+                switch action {
+                case let .resume(mode):
+                    Text("中断中の学習").font(.headline)
+                    Text(mode.title).font(.subheadline)
+                    Text("開始時の学習対象で続けます。回答下書きと確定済みの履歴は保持されます。")
+                        .font(.footnote).foregroundStyle(Color("SecondaryText"))
+                case let .waiting(next):
+                    Text(action.title).font(.headline)
+                    Text("次の短期復習: \(next.formatted(date: .omitted, time: .shortened))")
+                        .accessibilityIdentifier("nextShortReview")
+                    Text("開始時の学習対象で待機しています。期限になると続きから再開できます。")
+                    Button("今回の学習を完了", action: store.completeSession)
+                        .accessibilityIdentifier("completeStudy")
+                case .complete:
+                    Text("今回の出題は完了しました").font(.headline)
+                    Text("確定済みの学習履歴と次回の予定を保存して、今回の学習を完了します。")
+                case let .start(mode, count):
+                    Text(mode == .review ? "いま復習できるカード" : "いま新しく覚えられるカード").font(.headline)
+                    Text("\(count)枚").font(.largeTitle.bold())
+                        .accessibilityIdentifier(mode == .review ? "dueCount" : "primaryNewCount")
+                        .accessibilityLabel("\(mode.title)、絞り込み後、\(String(count))枚")
+                    Text(mode.explanation).font(.footnote).foregroundStyle(Color("SecondaryText"))
+                case .addCards:
+                    Text("最初のカードを登録しましょう。").font(.headline)
+                case .unavailable:
+                    Text(action.title).font(.headline)
+                    if let next = store.nextShortDue {
+                        Text("次の短期復習: \(next.formatted(date: .omitted, time: .shortened))")
+                            .accessibilityIdentifier("nextShortReview")
+                    }
+                    if store.globalCounts.due > 0 { Text("ほかの学習対象に復習があります。") }
+                    Text(store.newAvailabilityMessage).font(.footnote)
                 }
-                Text(StudyMode.review.explanation).font(.footnote).foregroundStyle(Color("SecondaryText"))
-            }.padding(.vertical, 4)
+                if executable {
+                    Button(action: execute) {
+                        Text(action.title).font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                    }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
+                        .accessibilityIdentifier(action.identifier)
+                }
+            }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 4)
         }
     }
 }
@@ -197,13 +214,20 @@ struct OtherStudyModesSection: View {
     let start: (StudyMode) -> Void
     var body: some View {
         Section {
-            ForEach([StudyMode.new, .mixed]) { mode in
+            ForEach(StudyMode.allCases.filter { mode in
+                if case let .start(primary, _) = store.homePrimaryAction { return mode != primary }
+                return true
+            }) { mode in
                 Button { start(mode) } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Text(mode.title).font(.headline).fixedSize(horizontal: false, vertical: true)
+                            Text(store.review == nil ? mode.title : "新しい学習：\(mode.title)").font(.headline)
+                                .foregroundStyle(Color.primary).fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            if mode == .new { Text("\(store.counts.newRemaining)枚").accessibilityIdentifier("newCount") }
+                            if mode == .new {
+                                Text("\(store.counts.newRemaining)枚").foregroundStyle(Color.primary)
+                                    .accessibilityIdentifier("newCount")
+                            }
                             Image(systemName: "chevron.right").font(.caption)
                         }
                         Text(mode == .new ? mode.explanation : store.mixedAvailabilityMessage)
@@ -213,7 +237,10 @@ struct OtherStudyModesSection: View {
                     .accessibilityHint(mode == .new ? store.newAvailabilityMessage : store.mixedAvailabilityMessage)
                 if mode == .new { Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(Color("SecondaryText")) }
             }
-        } header: { Text("ほかの学習").foregroundStyle(Color("SecondaryText")) }
+            if case .start(.new, _) = store.homePrimaryAction {
+                Text("今日学べる新規カード: \(store.counts.newRemaining)枚").accessibilityIdentifier("newCount")
+            }
+        } header: { Text(store.review == nil ? "ほかの学習" : "別の学習を開始").foregroundStyle(Color("SecondaryText")) }
     }
 }
 

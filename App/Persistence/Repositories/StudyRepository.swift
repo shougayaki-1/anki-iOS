@@ -248,6 +248,15 @@ final class StudyRepository {
             try selectNext(draft: draft, now: now)
         }
     }
+    func completeSession(now: Date) throws {
+        try transaction {
+            guard let draft = try session(), draft.cardID == nil else { throw StudyError.noSession }
+            // Recheck at execution time so a newly available card cannot be discarded.
+            try selectNext(draft: draft, now: now)
+            guard draft.cardID == nil else { throw StudyError.noAvailableCards }
+            context.delete(draft)
+        }
+    }
     func resume(now: Date) throws {
         try transaction {
             guard let draft = try session() else { throw StudyError.noSession }

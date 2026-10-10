@@ -73,7 +73,14 @@ final class StudyStore {
     func refreshHome(reconcileNotifications: Bool = false) {
         do {
             repository.calendar = .current
-            let snapshot = try repository.homeSnapshot(now: clock())
+            let now = clock()
+            // Advance only an empty session, retaining its original scope and Undo.
+            if let draft = try repository.session(), draft.cardID == nil {
+                try repository.resume(now: now)
+                try repository.setSessionActive(false, now: now)
+            }
+            review = try repository.presentation(now: now)
+            let snapshot = try repository.homeSnapshot(now: now)
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due
             applyHomeSnapshot(snapshot)
@@ -111,6 +118,21 @@ final class StudyStore {
         case .new: return counts.newRemaining > 0
         case .mixed: return counts.due > 0 || counts.newRemaining > 0
         }
+    }
+    var homePrimaryAction: HomePrimaryAction {
+        guard homeFailure == nil else { return .unavailable }
+        if let review {
+            if review.card != nil { return .resume(review.mode) }
+            if let next = review.nextShortDue { return .waiting(next) }
+            return .complete
+        }
+        if !hasCards { return .addCards }
+        if counts.due > 0 { return .start(.review, counts.due) }
+        if counts.newRemaining > 0 { return .start(.new, counts.newRemaining) }
+        return .unavailable
+    }
+    func completeSession() {
+        perform { try repository.completeSession(now: clock()) }
     }
     var newAvailabilityMessage: String {
         if counts.newRemaining > 0 { return "今日学べる新規カードは\(counts.newRemaining)枚です。" }
