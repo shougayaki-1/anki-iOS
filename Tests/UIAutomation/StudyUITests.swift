@@ -702,4 +702,80 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(count.waitForExistence(timeout: 5))
         XCTAssertTrue(count.label.contains("1回"))
     }
+
+    func testReviewActionsStayVisibleAfterScrollingLongContentAndUndo() {
+        let app = app()
+        let question = Array(repeating: "Explain why the correct answer follows from the evidence.", count: 4).joined(separator: " ")
+        let answer = Array(repeating: "The explanation includes several distinct steps and supporting examples.", count: 6).joined(separator: " ")
+        create(app, question: question, answer: answer)
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        let reveal = app.buttons["revealAnswer"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 5))
+        XCTAssertTrue(reveal.isHittable)
+        for _ in 0..<3 { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(reveal.isHittable, "Revealing must never require a scroll to the bottom")
+        reveal.tap()
+        let again = app.buttons["grade-1"]
+        let easy = app.buttons["grade-4"]
+        XCTAssertTrue(again.waitForExistence(timeout: 5))
+        XCTAssertTrue(easy.isHittable)
+        XCTAssertGreaterThanOrEqual(easy.frame.height, 44)
+        for _ in 0..<3 { app.scrollViews.firstMatch.swipeUp() }
+        XCTAssertTrue(again.isHittable)
+        XCTAssertTrue(easy.isHittable, "FSRS ratings must stay accessible during content scrolling")
+        XCTAssertTrue(app.staticTexts["modelAnswer"].exists)
+        attach(app, "Issue54-fixed-review-buttons")
+        easy.tap()
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["revealAnswer"].isHittable)
+    }
+
+    func testReviewGradesUseTwoRowsForAccessibilityType() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-accessibility"]
+        app.launch()
+        create(app, question: "Accessibility question", answer: "Accessibility answer")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap()
+
+        let again = app.buttons["grade-1"]
+        let hard = app.buttons["grade-2"]
+        let good = app.buttons["grade-3"]
+        let easy = app.buttons["grade-4"]
+        XCTAssertTrue(easy.waitForExistence(timeout: 5))
+        for button in [again, hard, good, easy] {
+            XCTAssertTrue(button.isHittable)
+            XCTAssertGreaterThanOrEqual(button.frame.height, 44)
+        }
+        XCTAssertLessThan(abs(again.frame.midY - hard.frame.midY), 8)
+        XCTAssertLessThan(abs(good.frame.midY - easy.frame.midY), 8)
+        XCTAssertGreaterThan(good.frame.midY, again.frame.midY + 20)
+        XCTAssertTrue(again.label.contains("もう一度"))
+        XCTAssertTrue(easy.label.contains("簡単だった"))
+        attach(app, "Issue54-accessibility-two-column-ratings")
+    }
+
+    func testReviewRevealIsAccessibleWhileTypingKeyboardIsVisible() {
+        let app = app()
+        create(app, question: "Keyboard review question", answer: "Keyboard review answer")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        app.segmentedControls.buttons["文字入力"].tap()
+        let draft = app.descendants(matching: .any)["typedAnswer"]
+        XCTAssertTrue(draft.waitForExistence(timeout: 5))
+        draft.tap()
+        draft.typeText("My typed response")
+        XCTAssertTrue(app.keyboards.firstMatch.exists)
+        let reveal = app.buttons["revealAnswer"]
+        XCTAssertTrue(reveal.isHittable, "Reveal must remain accessible above the keyboard")
+        reveal.tap()
+        XCTAssertTrue(app.buttons["grade-3"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["grade-3"].isHittable)
+        XCTAssertFalse(app.keyboards.firstMatch.exists, "Keyboard should dismiss when the answer is revealed")
+        app.buttons["grade-3"].tap()
+    }
 }
