@@ -54,32 +54,6 @@ struct ReviewView: View {
                                 if !store.settings.reviewAppearance.answerFirst { answerContent(review, item: item) }
                                 Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
                                     .font(.footnote).foregroundStyle(.secondary)
-                                VStack(spacing: 12) {
-                                    ForEach(ReviewGrade.allCases, id: \.self) { grade in
-                                        Button {
-                                            typingFocused = false
-                                            store.grade(grade)
-                                        } label: {
-                                            Text(gradeTitle(grade)).font(.headline)
-                                                .frame(maxWidth: .infinity, minHeight: 56)
-                                                .contentShape(Rectangle())
-                                        }
-                                        .buttonStyle(.borderedProminent)
-                                        .tint(gradeColor(grade))
-                                        .foregroundStyle(Color.white)
-                                        .accessibilityIdentifier("grade-\(grade.rawValue)")
-                                        .disabled(!imageAvailable(item))
-                                    }
-                                }
-                            } else {
-                                Button { typingFocused = false; store.draft(revealed: true) } label: {
-                                    Text("答えを表示").font(.headline)
-                                        .frame(maxWidth: .infinity, minHeight: 56)
-                                        .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
-                                .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                                .disabled(!imageAvailable(item))
                             }
                             if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
                                 swipePad(review, item: item)
@@ -91,6 +65,7 @@ struct ReviewView: View {
                     }.padding()
                         .frame(minHeight: store.review?.card == nil ? geometry.size.height : 0)
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if let review = store.review, let progress = review.sessionProgress {
@@ -122,7 +97,24 @@ struct ReviewView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if let review = store.review, review.card == nil {
+                if let review = store.review, let item = review.card {
+                    ReviewActionBar(
+                        answerRevealed: review.answerRevealed,
+                        isEnabled: imageAvailable(item),
+                        onReveal: {
+                            typingFocused = false
+                            store.draft(revealed: true)
+                        },
+                        onGrade: { grade in
+                            typingFocused = false
+                            store.grade(grade)
+                        }
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, typingFocused ? 6 : 10)
+                    .background(Color(uiColor: .systemBackground))
+                    .overlay(alignment: .top) { Divider() }
+                } else if let review = store.review, review.card == nil {
                     Button { store.completeSession() } label: {
                         Text(review.emptyState?.reason == .waiting ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
                             .font(.headline).multilineTextAlignment(.center)
@@ -142,7 +134,7 @@ struct ReviewView: View {
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .onChange(of: store.review?.answerRevealed) { _, revealed in
                 swipeGate.invalidate()
-                if revealed == true { readingFocus = .answer }
+                if revealed == true { typingFocused = false; readingFocus = .answer }
             }
             .onChange(of: store.review?.card?.cardID) { _, _ in swipeGate.invalidate(); readingFocus = .question }
             .onDisappear { swipeGate.cancel() }
@@ -307,6 +299,119 @@ struct ReviewView: View {
         .accessibilityIdentifier("reviewModePicker")
     }
 
+    private func imageAvailable(_ item: NoteItem) -> Bool {
+        guard let id = item.sourceContent.imageID else { return true }
+        guard let url = try? store.repository.assetURL(id: id) else { return false }
+        return UIImage(contentsOfFile: url.path) != nil
+    }
+}
+
+
+
+private struct ReviewActionBar: View {
+    let answerRevealed: Bool
+    let isEnabled: Bool
+    let onReveal: () -> Void
+    let onGrade: (ReviewGrade) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Group {
+            if answerRevealed {
+                if typeSize.isAccessibilitySize {
+                    twoColumnGrades
+                } else {
+                    // ViewThatFits uses the buttons' intrinsic text and touch widths.
+                    // Compact labels are never truncated or scaled down to force four columns.
+                    ViewThatFits(in: .horizontal) {
+                        fourColumnGrades
+                        twoColumnGrades
+                    }
+                }
+            } else {
+                Button(action: onReveal) {
+                    Text("答えを表示").font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color("PrimaryAction"))
+                .foregroundStyle(.white)
+                .accessibilityIdentifier("revealAnswer")
+                .disabled(!isEnabled)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var fourColumnGrades: some View {
+        HStack(spacing: 8) {
+            ForEach(ReviewGrade.allCases, id: \.self) { grade in
+                gradeButton(grade, compact: true)
+            }
+        }
+    }
+
+    private var twoColumnGrades: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                gradeButton(.again, compact: false)
+                gradeButton(.hard, compact: false)
+            }
+            HStack(spacing: 8) {
+                gradeButton(.good, compact: false)
+                gradeButton(.easy, compact: false)
+            }
+        }
+    }
+
+    private func gradeButton(_ grade: ReviewGrade, compact: Bool) -> some View {
+        Button { onGrade(grade) } label: {
+            Text(shortTitle(grade))
+                .font(compact ? .subheadline.weight(.semibold) : .headline)
+                .lineLimit(compact ? 1 : 2)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: compact, vertical: true)
+                .frame(maxWidth: .infinity, minHeight: 56)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(gradeColor(grade))
+        .foregroundStyle(.white)
+        .frame(minWidth: compact ? 72 : 0)
+        .accessibilityLabel(gradeTitle(grade))
+        .accessibilityHint(gradeHint(grade))
+        .accessibilityIdentifier("grade-\(grade.rawValue)")
+        .disabled(!isEnabled)
+    }
+
+    private func shortTitle(_ grade: ReviewGrade) -> String {
+        switch grade {
+        case .again: return "Again"
+        case .hard: return "Hard"
+        case .good: return "Good"
+        case .easy: return "Easy"
+        }
+    }
+
+    private func gradeTitle(_ grade: ReviewGrade) -> String {
+        switch grade {
+        case .again: return "Again・もう一度"
+        case .hard: return "Hard・難しかった"
+        case .good: return "Good・思い出せた"
+        case .easy: return "Easy・簡単だった"
+        }
+    }
+
+    private func gradeHint(_ grade: ReviewGrade) -> String {
+        switch grade {
+        case .again: return "思い出せなかったときに選択"
+        case .hard: return "思い出せたが難しかったときに選択"
+        case .good: return "思い出せたときに選択"
+        case .easy: return "簡単に思い出せたときに選択"
+        }
+    }
+
     private func gradeColor(_ grade: ReviewGrade) -> Color {
         switch grade {
         case .again: return Color("GradeAgain")
@@ -315,22 +420,7 @@ struct ReviewView: View {
         case .easy: return Color("GradeEasy")
         }
     }
-
-    private func gradeTitle(_ grade: ReviewGrade) -> String {
-        switch grade {
-        case .again: return "Again · もう一度"
-        case .hard: return "Hard · 難しかった"
-        case .good: return "Good · 思い出せた"
-        case .easy: return "Easy · 簡単だった"
-        }
-    }
-    private func imageAvailable(_ item: NoteItem) -> Bool {
-        guard let id = item.sourceContent.imageID else { return true }
-        guard let url = try? store.repository.assetURL(id: id) else { return false }
-        return UIImage(contentsOfFile: url.path) != nil
-    }
 }
-
 
 private struct ReviewEmptyStateView: View {
     let state: ReviewEmptyState?
