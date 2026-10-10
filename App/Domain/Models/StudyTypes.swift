@@ -113,6 +113,7 @@ struct HomeSnapshot: Equatable {
     let nextShortDue: Date?
     let hasCards: Bool
     let dayStart: Date
+    let nextRefresh: Date
 }
 
 struct ReviewPresentation {
@@ -123,6 +124,33 @@ struct ReviewPresentation {
     let answerRevealed: Bool
     let canUndo: Bool
     let nextShortDue: Date?
+}
+
+// Primary actions preserve the existing session; replacement is a secondary action.
+enum HomePrimaryAction: Equatable {
+    case resume(StudyMode), waiting(Date), complete
+    case start(StudyMode, Int), addCards, unavailable
+
+    var title: String {
+        switch self {
+        case .resume: return "続きから再開"
+        case .waiting: return "短期復習の待機中"
+        case .complete: return "今回の学習を完了"
+        case let .start(mode, count): return "\(mode.title)（\(count)枚）"
+        case .addCards: return "カードを追加する"
+        case .unavailable: return "今は学習できるカードがありません"
+        }
+    }
+    var identifier: String {
+        switch self {
+        case .resume: return "resumeStudy"
+        case .waiting: return "waitingStudy"
+        case .complete: return "completeStudy"
+        case let .start(mode, _): return "start-\(mode.rawValue)"
+        case .addCards: return "addFirstHomeNote"
+        case .unavailable: return "unavailableStudy"
+        }
+    }
 }
 
 enum StudyError: LocalizedError {

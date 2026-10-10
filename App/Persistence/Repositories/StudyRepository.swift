@@ -228,6 +228,16 @@ final class StudyRepository {
         let map = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
         return try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: map[$0.cardID]) }
     }
+    // Queue eligibility and daily quotas only inspect this study day's logs.
+    func todayQueueLogs(cards: [QueueCard], settings: StudySettings, now: Date) throws -> [QueueLog] {
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let start = day.start, end = day.end
+        let noteIDs = Dictionary(uniqueKeysWithValues: cards.compactMap { card in card.noteID.map { (card.id, $0) } })
+        let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+            $0.reviewedAt >= start && $0.reviewedAt < end
+        }))
+        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID]) }
+    }
     func counts(now: Date) throws -> HomeCounts {
         try ReviewQueueBuilder(calendar: calendar).counts(cards: queueCards(), logs: queueLogs(),
                                                         settings: settings(), now: now)
@@ -248,6 +258,15 @@ final class StudyRepository {
             try selectNext(draft: draft, now: now)
         }
     }
+    func completeSession(now: Date) throws {
+        try transaction {
+            guard let draft = try session(), draft.cardID == nil else { throw StudyError.noSession }
+            // Recheck at execution time so a newly available card cannot be discarded.
+            try selectNext(draft: draft, now: now)
+            guard draft.cardID == nil else { throw StudyError.noAvailableCards }
+            context.delete(draft)
+        }
+    }
     func resume(now: Date) throws {
         try transaction {
             guard let draft = try session() else { throw StudyError.noSession }
@@ -255,12 +274,29 @@ final class StudyRepository {
             else { draft.activeSince = now }
         }
     }
-    func selectNext(draft: SessionDraft, now: Date) throws {
-        let ids = try ReviewQueueBuilder(calendar: calendar).queue(
-            cards: scopedQueueCards(scope()), logs: queueLogs(), settings: settings(),
+    // Home refresh is read-only until this session actually has a next card.
+    @discardableResult
+    func advanceWaitingSession(now: Date) throws -> Bool {
+        guard let draft = try session(), draft.cardID == nil,
+              let id = try nextCardIDs(draft: draft, now: now).first else { return false }
+        try transaction {
+            try selectCard(id, draft: draft, now: now)
+            draft.activeSince = nil
+        }
+        return true
+    }
+    private func nextCardIDs(draft: SessionDraft, now: Date) throws -> [UUID] {
+        let cards = try queueCards(), settings = try settings()
+        return try ReviewQueueBuilder(calendar: calendar).queue(
+            cards: scopedQueueCards(scope(), cards: cards), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
             mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
             reviewStreak: draft.reviewStreak, now: now)
-        draft.cardID = ids.first; draft.typedDraft = ""; draft.answerRevealed = false
+    }
+    func selectNext(draft: SessionDraft, now: Date) throws {
+        try selectCard(nextCardIDs(draft: draft, now: now).first, draft: draft, now: now)
+    }
+    private func selectCard(_ id: UUID?, draft: SessionDraft, now: Date) throws {
+        draft.cardID = id; draft.typedDraft = ""; draft.answerRevealed = false
         draft.elapsedMs = 0; draft.updatedAt = now
         draft.activeSince = draft.cardID == nil ? nil : now
         if let id = draft.cardID, let item = try noteItems(cardID: id).first {

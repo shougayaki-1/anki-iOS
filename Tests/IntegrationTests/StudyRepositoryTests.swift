@@ -22,6 +22,199 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testHomePrimaryActionPreservesEveryInterruptedModeAndOriginalScope() throws {
+        for mode in StudyMode.allCases {
+            let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+            let repo = store.repository
+            try create(repo)
+            if mode == .review {
+                try repo.start(mode: .new, now: now)
+                try revealAndGrade(repo, grade: .easy, date: now)
+                let card = try XCTUnwrap(repo.cards().first)
+                // A due review fixture without changing scheduler payload semantics.
+                store.clock = { card.dueDate.addingTimeInterval(1) }
+            }
+            let date = store.clock()
+            try repo.start(mode: mode, now: date)
+            try repo.updateDraft(mode: .typing, text: "preserved", revealed: true, now: date)
+            try repo.setSessionActive(false, now: date)
+            let empty = try repo.createDeck(name: "Other scope", now: date)
+            try repo.applyHomeScope(LearningScope(deckID: empty))
+            try store.reload()
+            XCTAssertEqual(store.homePrimaryAction, .resume(mode))
+            XCTAssertEqual(store.counts.due, 0)
+            let before = try XCTUnwrap(repo.session())
+            let id = before.id, cardID = before.cardID, undo = before.undoLogID
+            let scope = try repo.scope(), logs = try repo.logs().map(\.id)
+            store.resume()
+            XCTAssertTrue(store.showingReview)
+            XCTAssertEqual(try repo.session()?.id, id)
+            XCTAssertEqual(try repo.session()?.cardID, cardID)
+            XCTAssertEqual(try repo.session()?.typedDraft, "preserved")
+            XCTAssertEqual(try repo.session()?.answerRevealed, true)
+            XCTAssertEqual(try repo.session()?.undoLogID, undo)
+            XCTAssertEqual(try repo.scope(), scope)
+            XCTAssertEqual(try repo.logs().map(\.id), logs)
+        }
+    }
+
+    func testHomePrimaryActionWaitingDueAndCompletionKeepHistory() throws {
+        var date = now
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date })
+        let repo = store.repository
+        XCTAssertEqual(store.homePrimaryAction, .addCards)
+        try create(repo); try store.reload()
+        XCTAssertEqual(store.homePrimaryAction, .start(.new, 1))
+        store.start(.new)
+        try revealAndGrade(repo, grade: .again, date: date)
+        store.pause()
+        let next = try XCTUnwrap(store.review?.nextShortDue)
+        XCTAssertEqual(store.homePrimaryAction, .waiting(next))
+        let id = try repo.session()?.id, undo = try repo.session()?.undoLogID
+        date = next
+        store.refreshHome()
+        XCTAssertEqual(store.homePrimaryAction, .resume(.new))
+        XCTAssertEqual(try repo.session()?.id, id)
+        XCTAssertEqual(try repo.session()?.undoLogID, undo)
+        XCTAssertFalse(store.showingReview)
+        XCTAssertThrowsError(try repo.completeSession(now: date))
+        store.resume()
+        try revealAndGrade(repo, grade: .easy, date: date)
+        store.pause()
+        XCTAssertEqual(store.homePrimaryAction, .complete)
+        let logs = try repo.logs().map(\.id), payload = try repo.cards().first?.fsrsPayload
+        store.completeSession()
+        XCTAssertNil(try repo.session())
+        XCTAssertEqual(try repo.logs().map(\.id), logs)
+        XCTAssertEqual(try repo.cards().first?.fsrsPayload, payload)
+        XCTAssertEqual(store.homePrimaryAction, .unavailable)
+        date = try XCTUnwrap(repo.cards().first?.dueDate)
+        store.refreshHome()
+        XCTAssertEqual(store.homePrimaryAction, .start(.review, 1))
+    }
+
+    func testHomePrimaryActionUnavailableForQuotaFilterAndFailure() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        try create(repo)
+        var settings = try repo.settings(); settings.dailyNewLimit = 0
+        try repo.updateSettings(settings); try store.reload()
+        XCTAssertEqual(store.homePrimaryAction, .unavailable)
+        XCTAssertTrue(store.newAvailabilityMessage.contains("上限"))
+        settings.dailyNewLimit = 10; try repo.updateSettings(settings)
+        let empty = try repo.createDeck(name: "Empty", now: now)
+        try repo.applyHomeScope(LearningScope(deckID: empty)); try store.reload()
+        XCTAssertEqual(store.homePrimaryAction, .unavailable)
+        XCTAssertTrue(store.newAvailabilityMessage.contains("ほかの学習対象"))
+        try repo.applyHomeScope(LearningScope()); try store.reload()
+        XCTAssertEqual(store.homePrimaryAction, .start(.new, 1))
+        store.homeFailure = "read failure"
+        XCTAssertEqual(store.homePrimaryAction, .unavailable)
+    }
+
+    func testWaitingHomeRefreshWritesOnlyWhenDueAndRollsBackFailedSave() throws {
+        var date = now
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date })
+        let repo = store.repository
+        try create(repo)
+        store.start(.new)
+        try revealAndGrade(repo, grade: .again, date: date)
+        store.pause()
+        let next = try XCTUnwrap(store.review?.nextShortDue)
+        let id = try repo.session()?.id, undo = try repo.session()?.undoLogID
+        let scope = try repo.scope(), logs = try repo.logs().map(\.id)
+        let before = try BackupData.capture(repo).canonical()
+        var saves = 0
+        repo.save = { context in saves += 1; try context.save() }
+        for offset in 1...3 {
+            date = now.addingTimeInterval(Double(offset) * 15)
+            store.refreshHome()
+        }
+        XCTAssertEqual(saves, 0)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        XCTAssertEqual(store.nextHomeRefresh, next)
+        let empty = try repo.createDeck(name: "Different home scope", now: date)
+        XCTAssertTrue(store.applyScope(LearningScope(deckID: empty)))
+        saves = 0
+        date = next
+        repo.save = { _ in saves += 1; throw Failure.save }
+        store.refreshHome()
+        XCTAssertEqual(saves, 1)
+        XCTAssertNotNil(store.homeFailure)
+        XCTAssertNil(try repo.session()?.cardID)
+        XCTAssertEqual(try repo.session()?.id, id)
+        XCTAssertEqual(try repo.session()?.undoLogID, undo)
+        XCTAssertEqual(try repo.scope(), scope)
+        XCTAssertEqual(try repo.logs().map(\.id), logs)
+        repo.save = { context in saves += 1; try context.save() }
+        store.sceneChanged(active: true)
+        XCTAssertEqual(saves, 2)
+        XCTAssertEqual(store.homePrimaryAction, .resume(.new))
+        XCTAssertEqual(store.counts.due, 0)
+        XCTAssertEqual(try repo.session()?.id, id)
+        XCTAssertEqual(try repo.session()?.undoLogID, undo)
+        XCTAssertNil(try repo.session()?.activeSince)
+        XCTAssertEqual(try repo.scope(), scope)
+        XCTAssertEqual(try repo.logs().map(\.id), logs)
+        store.refreshHome()
+        XCTAssertEqual(saves, 2)
+        store.resume(); store.undo()
+        XCTAssertEqual(try repo.logs().count, 0)
+    }
+
+    func testHomeRefreshKeepsTypedRevealedDraftAndUndoWithoutSaving() throws {
+        var date = now
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date })
+        let repo = store.repository
+        try create(repo); try create(repo)
+        store.start(.new)
+        try revealAndGrade(repo, grade: .easy, date: date)
+        try repo.updateDraft(mode: .typing, text: "keep typing", revealed: true, now: date)
+        store.pause()
+        let before = try BackupData.capture(repo).canonical()
+        let undo = try repo.session()?.undoLogID
+        var saves = 0
+        repo.save = { context in saves += 1; try context.save() }
+        date = date.addingTimeInterval(45)
+        store.refreshHome(); store.sceneChanged(active: true)
+        XCTAssertEqual(saves, 0)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        XCTAssertEqual(store.review?.typedDraft, "keep typing")
+        XCTAssertEqual(store.review?.answerRevealed, true)
+        XCTAssertEqual(try repo.session()?.undoLogID, undo)
+    }
+
+    func testEmptySessionSelectsNewCardAtStudyDayBoundaryWithOneSave() throws {
+        var date = now
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date })
+        let repo = store.repository
+        try create(repo); try create(repo)
+        var settings = try repo.settings(); settings.dailyNewLimit = 1
+        try repo.updateSettings(settings)
+        store.start(.new)
+        try revealAndGrade(repo, grade: .easy, date: date)
+        store.pause()
+        XCTAssertNil(try repo.session()?.cardID)
+        let id = try repo.session()?.id, undo = try repo.session()?.undoLogID
+        let boundary = StudyDay(calendar: repo.calendar, startHour: settings.dayStartHour).interval(containing: date).end
+        XCTAssertEqual(store.nextHomeRefresh, boundary)
+        var saves = 0
+        repo.save = { context in saves += 1; try context.save() }
+        date = boundary.addingTimeInterval(-1)
+        store.refreshHome()
+        XCTAssertEqual(saves, 0)
+        date = boundary
+        store.refreshHome()
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(store.homePrimaryAction, .resume(.new))
+        XCTAssertEqual(try repo.session()?.id, id)
+        XCTAssertEqual(try repo.session()?.undoLogID, undo)
+        XCTAssertEqual(try repo.logs().count, 1)
+        XCTAssertEqual(store.counts.newRemaining, 1)
+        store.refreshHome()
+        XCTAssertEqual(saves, 1)
+    }
+
     func testEmptyStartNeverCreatesOrReplacesSession() throws {
         let repo = try fixture()
         for mode in StudyMode.allCases {

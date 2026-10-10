@@ -83,10 +83,10 @@ final class QualityUITests: XCTestCase {
         XCTAssertTrue(question.waitForExistence(timeout: 10)); let first = question.label
         app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap(); app.buttons["undoReview"].tap()
         XCTAssertEqual(question.label, first)
-        app.buttons["pauseStudy"].tap(); XCTAssertTrue(app.staticTexts["dueCount"].label.contains("3000枚"))
+        app.buttons["pauseStudy"].tap(); XCTAssertTrue(app.buttons["resumeStudy"].exists)
         attach(app, name: "Phase5-scale-home")
         app.terminate(); app.launch()
-        XCTAssertTrue(app.staticTexts["dueCount"].waitForExistence(timeout: 15)); XCTAssertTrue(app.staticTexts["dueCount"].label.contains("3000枚"))
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15)); XCTAssertFalse(app.staticTexts["dueCount"].exists)
         app.buttons["resumeStudy"].tap(); XCTAssertTrue(question.waitForExistence(timeout: 10)); XCTAssertEqual(question.label, first)
     }
     func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
