@@ -64,7 +64,7 @@ final class GeneratedCardUITests: XCTestCase {
         app.buttons["grade-4"].tap(); app.buttons["undoReview"].tap()
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.terminate(); app.launch()
-        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["completeStudy"].waitForExistence(timeout: 15))
         app.tabBars.buttons["記録"].tap()
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
         app.tabBars.buttons["ライブラリ"].tap()

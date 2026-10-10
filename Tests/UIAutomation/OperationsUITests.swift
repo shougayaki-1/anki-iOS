@@ -162,7 +162,7 @@ final class OperationsUITests: XCTestCase {
         }
         XCTAssertTrue(backupFile.waitForExistence(timeout: 15))
         backupFile.tap()
-        let restore = app.buttons["restoreBackup"]; XCTAssertTrue(restore.waitForExistence(timeout: 10)); scrollTo(restore, in: app); restore.tap()
+        let restore = app.buttons["restoreBackup"]; scrollTo(restore, in: app); XCTAssertTrue(restore.exists); restore.tap()
         app.buttons["confirmRestoreBackup"].firstMatch.tap()
         XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("復元しました"))
         attach(app, name: "Phase4-backup-restored")
