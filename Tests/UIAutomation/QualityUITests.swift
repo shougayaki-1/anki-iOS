@@ -301,9 +301,16 @@ final class QualityUITests: XCTestCase {
             }
             print("Review audit: \(issue.auditType), id=\(element.identifier), label=\(element.label), type=\(element.elementType), frame=\(element.frame)")
             if !element.exists || !element.isHittable { return true }
-            let top = app.navigationBars.firstMatch.frame.maxY
-            let viewport = CGRect(x: app.frame.minX, y: top, width: app.frame.width, height: app.frame.maxY - top)
-            // ScrollView keeps nodes scrolled behind the translucent navigation bar.
+            var top = app.navigationBars.firstMatch.frame.maxY
+            let progress = app.progressIndicators["sessionProgressBar"]
+            if progress.exists { top = max(top, progress.frame.maxY) }
+            let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+            let bottom = footer.exists ? footer.frame.minY : app.frame.maxY
+            let isFixedAction = element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer"
+            if isFixedAction { return false }
+            let viewport = CGRect(x: app.frame.minX, y: top, width: app.frame.width, height: max(0, bottom - top))
+            // ScrollView retains nodes hidden beneath the fixed progress and action bars.
+            // Audit fixed actions themselves, but exclude occluded body content.
             return !viewport.contains(element.frame)
         }
         let grade = app.buttons["grade-3"]; scrollTo(grade, app: app); grade.tap()
