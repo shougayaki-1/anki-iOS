@@ -74,8 +74,9 @@ enum ImageEncodingPolicy {
         if let crop, !crop.isValid { throw MediaError.invalidImage }
 
         // Original, complete PNG/JPEG bytes are preferable to an invisible lossy conversion.
-        // Leave their metadata/EXIF untouched; existing masks use relative display coordinates.
-        if crop == nil && orientation == 1 && (png || jpeg) {
+        // UIImage honors EXIF when displayed; only an explicit crop needs normalization.
+        // Keep asset dimensions in encoded pixel axes for backup metadata compatibility.
+        if crop == nil && (png || jpeg) {
             return Result(data: data, mediaType: png ? "image/png" : "image/jpeg",
                           width: width, height: height)
         }

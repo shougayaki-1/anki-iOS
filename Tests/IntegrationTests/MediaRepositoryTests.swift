@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ImageIO
 import SwiftData
 @testable import AnkiIOS
 
@@ -199,6 +200,61 @@ final class MediaRepositoryTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: store.url(for: stored.relativePath)), bytes)
             XCTAssertEqual(stored.sha256, BackupArchive.hash(bytes))
         }
+    }
+
+    func testExifJPEGKeepsBytesAndWorksWithCropOCRAndBackup() async throws {
+        func jpeg(_ image: UIImage, orientation: Int) throws -> Data {
+            let data = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(image.cgImage),
+                                      [kCGImagePropertyOrientation: orientation,
+                                       kCGImageDestinationLossyCompressionQuality: 0.97] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            return data as Data
+        }
+        let original = try XCTUnwrap(UIImage(data: imageData()))
+        for orientation in 1...8 {
+            let bytes = try jpeg(original, orientation: orientation)
+            let prepared = try ImageEncodingPolicy.prepare(bytes)
+            XCTAssertEqual(prepared.data, bytes, "EXIF orientation must not cause JPEG recompression")
+            XCTAssertEqual(prepared.width, 800)
+            XCTAssertEqual(prepared.height, 400)
+        }
+        // Rotate encoded pixels counterclockwise, then attach EXIF right rotation.
+        // The displayed text is upright, just as with a portrait camera JPEG.
+        let sideways = UIImage(cgImage: try XCTUnwrap(original.cgImage), scale: 1, orientation: .left)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let encodedPixels = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 800), format: format).image { _ in
+            sideways.draw(in: CGRect(x: 0, y: 0, width: 400, height: 800))
+        }
+        let bytes = try jpeg(encodedPixels, orientation: 6)
+        XCTAssertEqual(UIImage(data: bytes)?.imageOrientation, .right)
+        let cropped = try ImageEncodingPolicy.prepare(bytes, crop: MaskRect(x: 0, y: 0, width: 0.5, height: 0.5))
+        XCTAssertEqual(cropped.width, 400)
+        XCTAssertEqual(cropped.height, 200)
+        XCTAssertEqual(UIImage(data: cropped.data)?.imageOrientation, .up)
+        let recognized = try await OCRService.recognize(bytes)
+        XCTAssertTrue(recognized.text.contains("TOKYO"), recognized.text)
+        XCTAssertTrue(recognized.text.contains("CAPITAL"), recognized.text)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: media)
+        try repo.initialize(now: now)
+        let assetID = try repo.addImage(bytes, now: now)
+        let mask = ImageMask(rect: MaskRect(x: 0.1, y: 0.1, width: 0.5, height: 0.25))
+        try repo.createNote(NoteInput(deckID: try repo.decks()[0].id, kind: .imageOcclusion,
+                                      question: "Rotated image", answer: "Tokyo", imageID: assetID, masks: [mask]), now: now)
+        let before = try repo.noteItems()
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "audit"))
+        let container = try BackupService.restore(backup, location: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")), mediaStore: media, now: now)
+        let restored = StudyRepository(container: container, mediaStore: media)
+        XCTAssertEqual(try Data(contentsOf: restored.assetURL(id: assetID)), bytes)
+        XCTAssertEqual(try restored.assets()[0].width, 400)
+        XCTAssertEqual(try restored.assets()[0].height, 800)
+        XCTAssertEqual(Set(try restored.noteItems().map(\.cardID)), Set(before.map(\.cardID)))
+        XCTAssertEqual(try restored.noteItems()[0].sourceContent.masks, [mask])
     }
 
     func testTransparentPNGRemainsLosslessAndCroppedPNGIsStillPNG() throws {
