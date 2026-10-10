@@ -162,6 +162,16 @@ struct ReviewPresentation {
     var ordering: OrderingDraft? = nil
     var orderingUnavailable: String? = nil
     var emptyState: ReviewEmptyState? = nil
+    var sessionProgress: SessionAnswerProgress? = nil
+}
+
+// Count confirmed answers in this session, not the number of unique cards studied today.
+struct SessionAnswerProgress: Equatable {
+    let answered: Int
+    let limit: Int  // 0 = unlimited
+
+    var remaining: Int? { limit == 0 ? nil : max(0, limit - answered) }
+    var isComplete: Bool { limit > 0 && answered >= limit }
 }
 
 struct ReviewEmptyState: Equatable {
