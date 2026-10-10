@@ -4,7 +4,7 @@ import XCTest
 final class SpeechReadoutTests: XCTestCase {
     func testOldNotesAndOptionsDefaultToSilence() throws {
         let note = try JSONDecoder().decode(TextContent.self, from: Data(#"{"question":"Hello!","answer":"Hi.","explanation":""}"#.utf8))
-        XCTAssertNil(note.speechAutoplayOverride)
+        XCTAssertNil(note.speechOverrides)
         XCTAssertNil(note.speechQuestion)
         XCTAssertNil(note.speechAnswer)
         let options = try JSONDecoder().decode(StudyOptions.self, from: Data(#"{"schemaVersion":2,"siblingBuryEnabled":true}"#.utf8))
@@ -59,7 +59,7 @@ final class SpeechReadoutTests: XCTestCase {
         options.speech = speech
         XCTAssertEqual(try JSONDecoder().decode(StudyOptions.self, from: JSONEncoder().encode(options)).speech, speech)
         var content = TextContent(question: "Hello", answer: "World", explanation: "")
-        content.speechAutoplayOverride = .both; content.speechAnswer = "Hello, world."
+        content.speechOverrides = ["basic:front": .both]; content.speechAnswer = "Hello, world."
         XCTAssertEqual(try JSONDecoder().decode(TextContent.self, from: JSONEncoder().encode(content)), content)
     }
 }

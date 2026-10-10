@@ -72,7 +72,8 @@ final class StudyRepository {
         return StudySettings(desiredRetention: p.desiredRetention, dailyNewLimit: p.dailyNewLimit,
                              dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour, siblingBuryEnabled: options.siblingBuryEnabled,
                              notification: options.notification ?? NotificationOptions(), hapticsMode: options.hapticsMode ?? .standard,
-                             reviewAppearance: options.reviewAppearance ?? ReviewAppearance())
+                             reviewAppearance: options.reviewAppearance ?? ReviewAppearance(),
+                             speech: options.speech ?? SpeechPreferences())
     }
     func updateSettings(_ value: StudySettings) throws {
         guard (0.8...0.97).contains(value.desiredRetention), StudySettings.newLimitRange.contains(value.dailyNewLimit),
@@ -86,6 +87,7 @@ final class StudyRepository {
             var options = try options(); options.schemaVersion = 2; options.siblingBuryEnabled = value.siblingBuryEnabled
             options.notification = value.notification; options.hapticsMode = value.hapticsMode
             options.reviewAppearance = value.reviewAppearance
+            options.speech = value.speech
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(options)
             } else { context.insert(try ExtraPreferences(options: options)) }
@@ -110,9 +112,13 @@ final class StudyRepository {
         guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
         let content = TextContent(question: input.question, answer: input.answer,
                                   explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
-                                  imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks)
-        _ = try CardGeneration.variants(kind: input.kind, content: content)
-        return try JSONEncoder().encode(content)
+                                  imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks,
+                                  speechOverrides: input.speechOverrides, speechQuestion: input.speechQuestion,
+                                  speechAnswer: input.speechAnswer)
+        let variants = Set(try CardGeneration.variants(kind: input.kind, content: content))
+        var sanitized = content
+        sanitized.speechOverrides = input.speechOverrides.filter { variants.contains($0.key) }
+        return try JSONEncoder().encode(sanitized)
     }
 
     @discardableResult

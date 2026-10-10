@@ -113,6 +113,23 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 } header: { Text("学習画面").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+                Section {
+                    Picker("英語音声", selection: Binding(
+                        get: { store.settings.speech.accent },
+                        set: { accent in update { $0.speech.accent = accent } }
+                    )) {
+                        ForEach(SpeechAccent.allCases) { accent in Text(accent.title).tag(accent) }
+                    }.accessibilityIdentifier("speechAccent")
+                    Picker("読み上げの速さ", selection: Binding(
+                        get: { store.settings.speech.pace },
+                        set: { pace in update { $0.speech.pace = pace } }
+                    )) {
+                        ForEach(SpeechPace.allCases) { pace in Text(pace.title).tag(pace) }
+                    }.accessibilityIdentifier("speechPace")
+                    NavigationLink("デッキ別の自動読み上げ") { DeckSpeechSettingsView(store: store) }
+                    Text("既存デッキはすべてオフです。音声はiOS標準機能を使い、消音スイッチを尊重します。再生速度は倍率ではありません。")
+                        .font(.footnote).foregroundStyle(Color("SecondaryText"))
+                } header: { Text("英文読み上げ") }.headerProminence(.increased)
                 Section { Button("バックアップ・復元") { backup = true }.accessibilityIdentifier("openBackup") } header: { Text("データ").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
                 #if DEBUG
                 Section {
@@ -178,5 +195,32 @@ struct StudySettingsView: View {
                 Text("新規上限は全デッキ・全モード共通です。変更しても今日の学習履歴は保持します。学習目標の達成後も学習できます。")
             }
         }.scrollDismissesKeyboard(.interactively).navigationTitle("学習設定")
+    }
+}
+
+
+/// Kept out of DeckManagerView to avoid coupling speech with folder-tree edits.
+private struct DeckSpeechSettingsView: View {
+    @Bindable var store: StudyStore
+    var body: some View {
+        Form {
+            ForEach(store.decks) { deck in
+                Picker(deck.name, selection: Binding(
+                    get: { store.settings.speech.deckAutoplay[deck.id.uuidString] ?? .off },
+                    set: { value in
+                        _ = store.updateSettings {
+                            if value == .off { $0.speech.deckAutoplay.removeValue(forKey: deck.id.uuidString) }
+                            else { $0.speech.deckAutoplay[deck.id.uuidString] = value }
+                        }
+                    }
+                )) {
+                    ForEach(SpeechAutoplay.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .accessibilityIdentifier("deckSpeech-\(deck.id.uuidString)")
+            }
+            Text("デッキごとに独立して設定します。カードで個別設定した場合はそちらを優先します。子デッキには自動継承されません。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        .navigationTitle("デッキ別読み上げ")
     }
 }

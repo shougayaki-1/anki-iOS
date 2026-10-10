@@ -13,6 +13,7 @@ struct StudyOptions: Codable, Equatable {
     var hapticsMode: HapticsMode? = nil
     var homeScope: LearningScope? = nil
     var reviewAppearance: ReviewAppearance? = nil
+    var speech: SpeechPreferences? = nil
 }
 
 struct TagItem: Identifiable {
