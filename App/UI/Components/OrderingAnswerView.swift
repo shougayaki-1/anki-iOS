@@ -262,7 +262,7 @@ enum OrderingInsertionLocation {
         for entry in entries {
             if let last = rows.indices.last,
                let first = rows[last].entries.first,
-               abs(entry.frame.midY - first.frame.midY) < min(entry.frame.height, first.frame.height) / 2 {
+               abs(entry.frame.minY - first.frame.minY) <= 4 {
                 rows[last].entries.append(entry)
             } else {
                 rows.append(Row(entries: [entry]))
