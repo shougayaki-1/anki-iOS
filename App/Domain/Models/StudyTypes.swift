@@ -24,7 +24,17 @@ enum StudyMode: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .review: return "復習する"
         case .new: return "新しく覚える"
-        case .mixed: return "まとめて学習"
+        case .mixed: return "復習＋新規"
+        }
+    }
+}
+
+extension StudyMode {
+    var explanation: String {
+        switch self {
+        case .review: return "復習のタイミングになったカードを学習します"
+        case .new: return "まだ学んでいないカードを学習します"
+        case .mixed: return "復習と新しいカードを組み合わせて学習します"
         }
     }
 }
