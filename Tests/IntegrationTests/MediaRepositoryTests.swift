@@ -185,4 +185,77 @@ final class MediaRepositoryTests: XCTestCase {
         XCTAssertTrue(try repo.assets().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
+    func testPNGAndJPEGOriginalBytesStayUntouched() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MediaStore(root: dir)
+        let png = imageData()
+        let image = try XCTUnwrap(UIImage(data: png))
+        let jpg = try XCTUnwrap(image.jpegData(compressionQuality: 0.97))
+        for (bytes, kind, ext) in [(png, "image/png", "png"), (jpg, "image/jpeg", "jpg")] {
+            let stored = try store.store(bytes)
+            XCTAssertEqual(stored.mediaType, kind)
+            XCTAssertEqual(URL(fileURLWithPath: stored.relativePath).pathExtension, ext)
+            XCTAssertEqual(try Data(contentsOf: store.url(for: stored.relativePath)), bytes)
+            XCTAssertEqual(stored.sha256, BackupArchive.hash(bytes))
+        }
+    }
+
+    func testTransparentPNGRemainsLosslessAndCroppedPNGIsStillPNG() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100), format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 50, y: 25, width: 100, height: 50))
+        }
+        let bytes = try XCTUnwrap(image.pngData())
+        let result = try ImageEncodingPolicy.prepare(bytes)
+        XCTAssertEqual(result.mediaType, "image/png")
+        XCTAssertEqual(result.data, bytes)
+        let rect = MaskRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        let cropped = try ImageEncodingPolicy.prepare(bytes, crop: rect)
+        XCTAssertEqual(cropped.mediaType, "image/png")
+        XCTAssertEqual(cropped.width, 100)
+        XCTAssertEqual(cropped.height, 50)
+        XCTAssertNotNil(UIImage(data: cropped.data)?.cgImage)
+        // Mask coordinates stay proportional after resampling/cropping.
+        XCTAssertEqual(rect.frame(in: CGSize(width: 400, height: 200)).width,
+                       2 * rect.frame(in: CGSize(width: 200, height: 100)).width)
+    }
+
+    func testLargeCorruptAndUnwritableMediaFailWithoutAssetCreation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = imageData()
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(Data(repeating: 0, count: 20_000_001))) { error in
+            guard case MediaError.tooLarge = error else { return XCTFail("Expected size limit") }
+        }
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(Data(image.prefix(image.count / 2))))
+        let store = MediaStore(root: root)
+        try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("blocked".utf8).write(to: root)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: store)
+        try repo.initialize(now: now)
+        XCTAssertThrowsError(try repo.addImage(image, now: now)) { error in
+            guard case MediaError.saveFailed = error else { return XCTFail("Expected save failure") }
+        }
+        XCTAssertTrue(try repo.assets().isEmpty)
+    }
+
+    func testReferencedPNGSurvivesOrphanCleanup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MediaStore(root: dir)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: store)
+        try repo.initialize(now: now)
+        let id = try repo.addImage(imageData(), now: now)
+        let deck = try XCTUnwrap(repo.decks().first).id
+        try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "Draft", imageID: id), now: now)
+        let orphan = try store.store(imageData())
+        try repo.cleanupUnusedMedia()
+        XCTAssertEqual(try repo.assets().first?.mediaType, "image/png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try repo.assetURL(id: id).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try store.url(for: orphan.relativePath).path))
+    }
 }

@@ -139,11 +139,17 @@ struct BackupValidation {
         }
         for asset in data.media {
             try dates(asset.createdAt)
-            guard StoredZIP.validPath(asset.relativePath), asset.mediaType == "image/jpeg", let bytes = media[asset.id],
-                  bytes.count <= 20_000_000, asset.width > 0, asset.height > 0, asset.width <= 40_000_000 / asset.height,
+            guard StoredZIP.validPath(asset.relativePath),
+                  let imageType = ["image/jpeg": "public.jpeg", "image/png": "public.png"][asset.mediaType],
+                  let bytes = media[asset.id], bytes.count <= ImageEncodingPolicy.maximumBytes,
+                  asset.width > 0, asset.height > 0,
+                  asset.width <= ImageEncodingPolicy.maximumPixels / asset.height,
                   BackupArchive.hash(bytes) == asset.sha256,
                   let source = CGImageSourceCreateWithData(bytes as CFData, nil),
-                  CGImageSourceGetType(source) as String? == "public.jpeg",
+                  CGImageSourceGetCount(source) == 1,
+                  CGImageSourceGetStatusAtIndex(source, 0) == .statusComplete,
+                  CGImageSourceGetType(source) as String? == imageType,
+                  CGImageSourceCreateImageAtIndex(source, 0, nil) != nil,
                   let info = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
                   info[kCGImagePropertyPixelWidth] as? Int == asset.width,
                   info[kCGImagePropertyPixelHeight] as? Int == asset.height else { throw BackupError.invalidData }

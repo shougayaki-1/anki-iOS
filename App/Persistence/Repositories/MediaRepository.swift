@@ -59,10 +59,11 @@ extension StudyRepository {
         let retained = Set(try assets().map(\.relativePath))
         let directory = try mediaStore.url(for: "images")
         if FileManager.default.fileExists(atPath: directory.path) {
-            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
                 let path = "images/" + file.lastPathComponent
                 _ = try mediaStore.url(for: path)
-                if !retained.contains(path), try file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true {
+                let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true {
                     try mediaStore.remove(path)
                 }
             }
@@ -73,7 +74,8 @@ extension StudyRepository {
                 let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard UUID(uuidString: folder.lastPathComponent) != nil, attributes.isDirectory == true, attributes.isSymbolicLink != true else { continue }
                 for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-                    guard file.pathExtension == "jpg", UUID(uuidString: file.deletingPathExtension().lastPathComponent) != nil else { continue }
+                    guard ["jpg", "png"].contains(file.pathExtension.lowercased()),
+                          UUID(uuidString: file.deletingPathExtension().lastPathComponent) != nil else { continue }
                     let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                     let path = "restored/\(folder.lastPathComponent)/\(file.lastPathComponent)"
                     if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true { try mediaStore.remove(path) }
