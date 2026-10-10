@@ -243,6 +243,7 @@ final class OrderingUITests: XCTestCase {
         }
         select(Array(0..<6), app: app)
         tap("checkOrdering", app: app)
+        scrollTo(app.staticTexts["modelAnswer"], app: app)
         XCTAssertTrue(app.staticTexts["modelAnswer"].waitForExistence(timeout: 5))
         scrollTo(app.buttons["grade-3"], app: app)
         attach(app, "Issue49-largest-dark-grades")
