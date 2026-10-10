@@ -18,6 +18,23 @@ extension StudyRepository {
             else { context.insert(try ExtraPreferences(options: value)) }
         }
     }
+    // Home preferences never mutate the active session's SessionScope.
+    func normalizedScope(_ value: LearningScope) throws -> LearningScope {
+        guard value.schemaVersion == 1 else { throw StudyError.unsupportedContent }
+        let deckIDs = Set(try decks().map(\.id)), tagIDs = Set(try tags().map(\.id))
+        var result = value
+        if let id = result.deckID, !deckIDs.contains(id) { result.deckID = nil }
+        result.tagIDs = Array(Set(result.tagIDs).intersection(tagIDs)).sorted { $0.uuidString < $1.uuidString }
+        return result
+    }
+    func homeScope() throws -> LearningScope {
+        try normalizedScope(options().homeScope ?? LearningScope())
+    }
+    func applyHomeScope(_ value: LearningScope) throws {
+        var saved = try options()
+        saved.homeScope = try normalizedScope(value)
+        try updateOptions(saved)
+    }
     func scope() throws -> LearningScope {
         guard let row = try context.fetch(FetchDescriptor<SessionScope>()).first else { return LearningScope() }
         return try JSONDecoder().decode(LearningScope.self, from: row.payload)
@@ -122,7 +139,10 @@ extension StudyRepository {
         return try queueCards().filter { $0.noteID.map { eligible.contains($0) } ?? false }
     }
     func scopedCounts(scope: LearningScope, now: Date) throws -> HomeCounts {
-        try ReviewQueueBuilder(calendar: calendar).counts(cards: scopedQueueCards(scope), logs: queueLogs(), settings: settings(), now: now)
+        var result = try ReviewQueueBuilder(calendar: calendar).counts(cards: scopedQueueCards(scope), logs: queueLogs(), settings: settings(), now: now)
+        let global = try counts(now: now)
+        result.learnedToday = global.learnedToday; result.answerCount = global.answerCount
+        return result
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)

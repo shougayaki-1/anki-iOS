@@ -11,6 +11,7 @@ struct StudyOptions: Codable, Equatable {
     var siblingBuryEnabled = true
     var notification: NotificationOptions? = nil
     var hapticsMode: HapticsMode? = nil
+    var homeScope: LearningScope? = nil
 }
 
 struct TagItem: Identifiable {
