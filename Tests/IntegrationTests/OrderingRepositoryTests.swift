@@ -59,6 +59,29 @@ final class OrderingRepositoryTests: XCTestCase {
         XCTAssertEqual(try reopened.cards().first?.id, card.id); XCTAssertTrue(try reopened.logs().isEmpty)
         XCTAssertEqual(try reopened.notes().first?.defaultResponseMode, "ordering")
     }
+    func testReorderPersistsThroughPauseReopenAndDoesNotWriteReviewHistory() throws {
+        let repo = try fixture()
+        let card = try XCTUnwrap(repo.cards().first)
+        let originalFSRS = card.fsrsPayload
+        let originalDue = card.dueDate
+        for id in [0, 3, 1, 2, 4, 5] { try repo.updateOrdering(.select(id), now: now) }
+        try repo.updateOrdering(.move(1, to: 1), now: now)
+        try repo.updateOrdering(.move(2, to: 2), now: now)
+        XCTAssertEqual(try state(repo).selected, [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(try repo.logs().count, 0)
+        XCTAssertEqual(card.fsrsPayload, originalFSRS)
+        XCTAssertEqual(card.dueDate, originalDue)
+        try repo.setSessionActive(false, now: now)
+        let reopened = StudyRepository(container: repo.context.container)
+        try reopened.initialize(now: now.addingTimeInterval(2))
+        try reopened.resume(now: now.addingTimeInterval(2))
+        XCTAssertEqual(try state(reopened).selected, [0, 1, 2, 3, 4, 5])
+        XCTAssertEqual(try reopened.logs().count, 0)
+        try reopened.updateOrdering(.check, now: now.addingTimeInterval(3))
+        XCTAssertEqual(try state(reopened).result, .correct)
+        XCTAssertEqual(try reopened.logs().count, 0)
+    }
+
     func testSaveFailureRollsBackSelectionAndCorrectRevealWithoutFSRSWrites() throws {
         let repo = try fixture()
         let initial = try state(repo)
@@ -85,8 +108,12 @@ final class OrderingRepositoryTests: XCTestCase {
         try repo.updateOrdering(.check, now: now)
         try repo.updateOrdering(.reset, now: now)
         let first = try state(repo).pool[0]
+        let second = try state(repo).pool[1]
         try repo.updateOrdering(.select(first), now: now)
-        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "49")
+        try repo.updateOrdering(.select(second), now: now)
+        try repo.updateOrdering(.move(second, to: 0), now: now)
+        XCTAssertEqual(try state(repo).selected, [second, first])
+        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "56")
         let backup = try BackupArchive.decode(bytes)
         XCTAssertEqual(backup.data.orderingDrafts?.count, 1)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

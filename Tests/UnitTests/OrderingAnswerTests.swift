@@ -68,6 +68,62 @@ final class OrderingAnswerTests: XCTestCase {
         XCTAssertFalse(reopened.isValid(for: problem, cardID: UUID()))
         state.pool = [999]; XCTAssertFalse(state.isValid(for: problem, cardID: state.cardID))
     }
+    func testInsertionMovesPersistAndDoNotSwapOrChangeTokenIdentity() throws {
+        let problem = try OrderingAnswer(kind: .written, answer: "I walk to school every day.")
+        var draft = OrderingDraft(cardID: UUID(), problem: problem, shuffle: { $0 })
+        for id in [0, 3, 1, 2, 4, 5] { try draft.apply(.select(id), problem: problem) }
+        let originalPool = draft.pool
+        try draft.apply(.move(1, to: 1), problem: problem)
+        XCTAssertEqual(draft.selected, [0, 1, 3, 2, 4, 5])
+        try draft.apply(.move(2, to: 2), problem: problem)
+        XCTAssertEqual(draft.selected, [0, 1, 2, 3, 4, 5])
+        XCTAssertTrue(problem.correct(draft.selected))
+        try draft.apply(.move(0, to: 5), problem: problem)
+        XCTAssertEqual(draft.selected, [1, 2, 3, 4, 5, 0])
+        try draft.apply(.move(0, to: 0), problem: problem)
+        XCTAssertTrue(problem.correct(draft.selected))
+        try draft.apply(.move(3, to: 3), problem: problem) // no-op
+        XCTAssertEqual(draft.pool, originalPool)
+        XCTAssertThrowsError(try draft.apply(.move(99, to: 0), problem: problem))
+        XCTAssertThrowsError(try draft.apply(.move(1, to: 6), problem: problem))
+        XCTAssertTrue(draft.isValid(for: problem, cardID: draft.cardID))
+        XCTAssertEqual(try JSONDecoder().decode(OrderingDraft.self, from: JSONEncoder().encode(draft)), draft)
+    }
+
+    func testDuplicateIdentityAndWrongOrderCorrectionAfterVerdict() throws {
+        let problem = try OrderingAnswer(kind: .basic, answer: "I think I can.")
+        var draft = OrderingDraft(cardID: UUID(), problem: problem, shuffle: { $0 })
+        for id in [0, 2, 1, 3] { try draft.apply(.select(id), problem: problem) }
+        try draft.apply(.check, problem: problem)
+        XCTAssertEqual(draft.result, .incorrect)
+        XCTAssertEqual(draft.firstAttemptCorrect, false)
+        try draft.apply(.move(1, to: 1), problem: problem)
+        XCTAssertEqual(draft.selected, [0, 1, 2, 3])
+        XCTAssertEqual(Set(draft.selected), Set(draft.pool))
+        XCTAssertNil(draft.result)
+        try draft.apply(.check, problem: problem)
+        XCTAssertEqual(draft.result, .correct)
+        XCTAssertEqual(draft.firstAttemptCorrect, false)
+        XCTAssertTrue(draft.isValid(for: problem, cardID: draft.cardID))
+    }
+
+    func testWrappedRowInsertionGeometryChoosesNearestRowAndAllBoundaries() {
+        let ids = [10, 11, 12, 13]
+        let frames: [Int: CGRect] = [
+            10: CGRect(x: 0, y: 0, width: 55, height: 44),
+            11: CGRect(x: 63, y: 0, width: 65, height: 44),
+            12: CGRect(x: 0, y: 52, width: 100, height: 48),
+            13: CGRect(x: 108, y: 52, width: 45, height: 48)
+        ]
+        XCTAssertEqual(OrderingInsertionLocation.resolve(CGPoint(x: 2, y: 20), ids: ids, frames: frames), 0)
+        XCTAssertEqual(OrderingInsertionLocation.resolve(CGPoint(x: 62, y: 20), ids: ids, frames: frames), 1)
+        XCTAssertEqual(OrderingInsertionLocation.resolve(CGPoint(x: 200, y: 20), ids: ids, frames: frames), 2)
+        XCTAssertEqual(OrderingInsertionLocation.resolve(CGPoint(x: 4, y: 70), ids: ids, frames: frames), 2)
+        XCTAssertEqual(OrderingInsertionLocation.resolve(CGPoint(x: 200, y: 90), ids: ids, frames: frames), 4)
+        XCTAssertEqual(OrderingInsertionLocation.resolve(CGPoint(x: 20, y: 110), ids: ids, frames: frames), 2)
+        XCTAssertNil(OrderingInsertionLocation.resolve(CGPoint(x: 0, y: 0), ids: [], frames: [:]))
+    }
+
     func testCSVModeAliasesOptionalHeadersAndLegacyRows() throws {
         let table = try ImportParser.table("question,answer,responseMode\nQ,I walk to school.,ordering\nQ2,I can.,typing\nQ3,A,unknown\nQ4,A,", delimiter: ",")
         XCTAssertEqual(ImportParser.responseModeColumn(in: table), 2)

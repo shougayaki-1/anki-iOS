@@ -300,9 +300,17 @@ final class StudyStore {
     func ordering(_ action: OrderingAction) {
         do {
             let before = review?.answerRevealed == true
+            let previousAttempts = review?.ordering?.attempts ?? 0
             try repository.updateOrdering(action, now: clock())
             review = try repository.presentation(now: clock())
-            if !before && review?.answerRevealed == true { haptics.play(.reveal, mode: settings.hapticsMode) }
+            if case .check = action, let state = review?.ordering,
+               state.attempts > previousAttempts, let result = state.result {
+                // One persisted verdict = one distinct feedback; do not also fire reveal.
+                haptics.play(result == .correct ? .orderingCorrect : .orderingIncorrect,
+                             mode: settings.hapticsMode)
+            } else if !before && review?.answerRevealed == true {
+                haptics.play(.reveal, mode: settings.hapticsMode)
+            }
         } catch { failure = error.localizedDescription }
     }
     func pause() {
