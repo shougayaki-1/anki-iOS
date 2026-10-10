@@ -22,6 +22,12 @@ struct LibraryView: View {
     var body: some View {
         NavigationStack {
             List(selection: $selection) {
+                if !editMode.isEditing {
+                    Section {
+                        NavigationLink("苦手カード・重点練習") { WeakCardListView(store: store) }
+                            .accessibilityIdentifier("openWeakCards")
+                    }
+                }
                 if filtered.isEmpty {
                     ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
                                            description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
@@ -282,5 +288,116 @@ private struct BulkManagementView: View {
             preview = nil
         } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
         store.failure = nil
+    }
+}
+
+
+private struct WeakCardListView: View {
+    @Bindable var store: StudyStore
+    @State private var scope = LearningScope()
+    @State private var days = 30
+    @State private var rows: [WeakCardItem] = []
+    @State private var failure: String?
+    @State private var practice: WeakPracticeSession?
+
+    var body: some View {
+        List {
+            Section("絞り込み") {
+                Picker("デッキ（子孫を含む）", selection: $scope.deckID) {
+                    Text("すべて").tag(UUID?.none)
+                    ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("履歴の期間", selection: $days) {
+                    ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
+                }
+                ForEach(store.tags) { tag in
+                    Toggle(tag.name, isOn: Binding(get: { scope.tagIDs.contains(tag.id) }, set: { value in
+                        if value { scope.tagIDs.append(tag.id) } else { scope.tagIDs.removeAll { $0 == tag.id } }
+                    }))
+                }
+            }
+            Section {
+                Text("直近Again、Again2回以上、3回答以上でAgain割合30%以上・難易度8以上・推定想起確率75%未満を基準に抽出します。停止中・未学習は除外します。タグはすべて含む条件です。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("重点練習では復習予定・FSRS・回答履歴・今日の学習枚数を変更しません。正式な評価はホームの通常学習で行います。")
+                    .font(.footnote)
+                Button("重点練習を始める") {
+                    do {
+                        practice = try store.repository.weakPractice(scope: scope, days: days == 0 ? nil : days, now: store.clock())
+                        failure = nil
+                    } catch { failure = error.localizedDescription }
+                }.disabled(rows.isEmpty).accessibilityIdentifier("startWeakPractice")
+                Text("兄弟カードは通常の同日抑制に加え、練習内でも1ノート1枚に制限します（短期学習は例外）。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let failure { Section { Text(failure).foregroundStyle(.red); Button("再試行") { refresh() } } }
+            if rows.isEmpty && failure == nil { Text("この条件の苦手カードはありません。期間やデッキ・タグを変更してください。") }
+            Section("苦手カード：\(rows.count)枚") {
+                ForEach(rows) { row in
+                    NavigationLink { NoteDetailView(store: store, cardID: row.id) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(row.card.content.question).lineLimit(2)
+                            Text(row.card.deckName).font(.caption).foregroundStyle(.secondary)
+                            ForEach(row.evidence.reasons, id: \.self) { Text($0).font(.footnote) }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("苦手カード")
+        .task { refresh() }
+        .onChange(of: scope) { _, _ in refresh() }
+        .onChange(of: days) { _, _ in refresh() }
+        .sheet(item: $practice, onDismiss: { refresh() }) { session in
+            WeakPracticeView(store: store, initial: session)
+        }
+    }
+    private func refresh() {
+        do { rows = try store.repository.weakCards(scope: scope, days: days == 0 ? nil : days, now: store.clock()); failure = nil }
+        catch { rows = []; failure = error.localizedDescription }
+    }
+}
+
+private struct WeakPracticeView: View {
+    @Bindable var store: StudyStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var session: WeakPracticeSession
+    init(store: StudyStore, initial: WeakPracticeSession) {
+        self.store = store; _session = State(initialValue: initial)
+    }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("練習のみ・復習予定と学習履歴は変更しません")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if let item = session.current {
+                        Text("\(session.index + 1)／\(session.cards.count)枚")
+                        Text(item.content.question).font(.title2).accessibilityIdentifier("weakPracticeQuestion")
+                        if let id = item.sourceContent.imageID {
+                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
+                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? item.sourceContent.masks ?? [] : [],
+                                    targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
+                                    hideAll: item.sourceContent.hideAllMasks ?? true, revealed: session.revealed)
+                            } else { Text("画像を読み込めません。ライブラリで画像を確認してください。") }
+                        }
+                        if session.revealed {
+                            Text(item.content.answer).accessibilityIdentifier("weakPracticeAnswer")
+                            if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
+                            Button("次のカード") { session.next() }.accessibilityIdentifier("nextWeakPractice")
+                        } else {
+                            StudyHintView(hint: item.content.hint).id(item.cardID)
+                            Button("答えを表示") { session.reveal() }.accessibilityIdentifier("revealWeakPractice")
+                        }
+                        if session.index > 0 { Button("前のカード") { session.previous() } }
+                    } else {
+                        Text("重点練習を完了しました")
+                        Button("閉じる") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                    }
+                }.padding()
+            }
+            .navigationTitle("重点練習")
+            .toolbar { Button("終了") { dismiss() } }
+        }
     }
 }

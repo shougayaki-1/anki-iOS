@@ -88,3 +88,49 @@ extension StudyRepository {
                                          calendar: calendar, startHour: try settings().dayStartHour)
     }
 }
+
+extension StudyRepository {
+    func weakCards(scope: LearningScope, days: Int?, now: Date) throws -> [WeakCardItem] {
+        guard days == nil || [7, 30, 90].contains(days!) else { throw StudyError.invalidContent }
+        let normalized = try normalizedScope(scope)
+        let scopedIDs = Set(try scopedQueueCards(normalized).map(\.id))
+        let startHour = try settings().dayStartHour
+        let day = StudyDay(calendar: calendar, startHour: startHour).interval(containing: now)
+        let start = days.flatMap { calendar.date(byAdding: .day, value: 1 - $0, to: day.start) }
+        let rows = try logs()
+        let grouped = Dictionary(grouping: rows.filter { $0.reviewedAt <= now && (start == nil || $0.reviewedAt >= start!) }, by: \.cardID)
+        let states = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0) })
+        let scheduler = try ReviewScheduler()
+        return try noteItems().filter { scopedIDs.contains($0.cardID) && !$0.isSuspended && $0.summary.state != "new" }.compactMap { item in
+            guard let state = states[item.cardID] else { return nil }
+            let history = try (grouped[item.cardID] ?? []).map { row -> StatisticLog in
+                guard let grade = ReviewGrade(rawValue: row.grade) else { throw StudyError.unsupportedContent }
+                return StatisticLog(cardID: row.cardID, date: row.reviewedAt, grade: grade, durationMs: row.durationMs)
+            }
+            let probability = try scheduler.retrievability(snapshot(state), now: now)
+            guard let evidence = WeakCardEvidence.evaluate(logs: history, difficulty: item.summary.difficulty,
+                                                           retrievability: probability, now: now) else { return nil }
+            return WeakCardItem(card: item, evidence: evidence)
+        }.sorted { $0.evidence.score == $1.evidence.score ? $0.id.uuidString < $1.id.uuidString : $0.evidence.score > $1.evidence.score }
+    }
+
+    func weakPractice(scope: LearningScope, days: Int?, now: Date) throws -> WeakPracticeSession {
+        let candidates = try weakCards(scope: scope, days: days, now: now)
+        let settings = try settings()
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let cardNotes = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
+        let today = try logs().filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+        var seen = Set<UUID>()
+        let selected = candidates.filter { item in
+            let card = item.card
+            guard settings.siblingBuryEnabled, !["learning", "relearning"].contains(card.summary.state) else { return true }
+            guard !seen.contains(card.noteID), !today.contains(where: {
+                $0.cardID != card.cardID && cardNotes[$0.cardID] == card.noteID
+            }) else { return false }
+            seen.insert(card.noteID)
+            return true
+        }.map(\.card)
+        guard !selected.isEmpty else { throw StudyError.noAvailableCards }
+        return WeakPracticeSession(cards: selected)
+    }
+}

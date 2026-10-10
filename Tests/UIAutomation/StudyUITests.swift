@@ -16,6 +16,28 @@ final class StudyUITests: XCTestCase {
         app.launch()
         return app
     }
+    func testWeakPracticeRevealFinishLeavesNormalSessionAvailable() {
+        let app = app()
+        create(app, question: "Weak practice question", answer: "Weak practice answer")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        app.buttons["revealAnswer"].tap()
+        app.buttons["grade-1"].tap()
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["openWeakCards"].tap()
+        XCTAssertTrue(app.staticTexts["直近の評価がAgain"].waitForExistence(timeout: 5))
+        app.buttons["startWeakPractice"].tap()
+        XCTAssertTrue(app.staticTexts["weakPracticeQuestion"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["weakPracticeAnswer"].exists)
+        app.buttons["revealWeakPractice"].tap()
+        XCTAssertEqual(app.staticTexts["weakPracticeAnswer"].label, "Weak practice answer")
+        app.buttons["nextWeakPractice"].tap()
+        app.buttons["finishWeakPractice"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.buttons["resumeStudy"].exists || app.staticTexts["nextShortReview"].exists)
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]
