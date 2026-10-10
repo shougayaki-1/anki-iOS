@@ -30,15 +30,38 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", question)).firstMatch.waitForExistence(timeout: 5))
     }
     func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
+        // Form text fields scroll themselves into view when tapped, including
+        // when the keyboard covers part of a large Dynamic Type form.
         if element.exists && [.textField, .textView].contains(element.elementType) { return }
         if app.keyboards.firstMatch.exists {
             if app.buttons["dismissBulkKeyboard"].exists { app.buttons["dismissBulkKeyboard"].tap() }
             else if let done = app.buttons.matching(NSPredicate(format: "label == %@", "完了")).allElementsBoundByIndex.first(where: { $0.isHittable }) { done.tap() }
         }
-        for _ in 0..<12 where !element.exists || !element.isHittable {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75))
-                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.25)))
+        var missingSearches = 0
+        for _ in 0..<35 {
+            var top = (app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? app.frame.minY) + 8
+            let progress = app.progressIndicators["sessionProgressBar"]
+            if progress.exists { top = max(top, progress.frame.maxY + 8) }
+            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer")
+            if fixedControl && element.isHittable { return }
+            var bottom = app.frame.maxY - 16
+            if app.buttons["pauseStudy"].exists {
+                let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+                if footer.exists { bottom = min(bottom, footer.frame.minY - 8) }
+            } else if app.tabBars.firstMatch.exists && app.tabBars.firstMatch.isHittable {
+                bottom = min(bottom, app.tabBars.firstMatch.frame.minY - 8)
+            }
+            if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom { return }
+            let down = element.exists ? element.frame.minY < top : missingSearches < 6
+            if !element.exists { missingSearches += 1 }
+            let low = top + 0.2 * max(40, bottom - top)
+            let high = top + 0.8 * max(40, bottom - top)
+            let start = (down ? low : high) / app.frame.height
+            let end = (down ? high : low) / app.frame.height
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: start))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: end)))
         }
+        XCTAssertTrue(element.exists && element.isHittable, "Required control must be visible")
     }
     func attach(_ app: XCUIApplication, _ name: String) {
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = name
@@ -303,9 +326,9 @@ final class StudyUITests: XCTestCase {
             app.switches["studyTag-\(tag)"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         }
         app.buttons["applyStudyFilter"].tap()
-        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        XCTAssertTrue(app.staticTexts["primaryNewCount"].label.contains("1枚"))
         XCTAssertFalse(app.buttons["start-review"].isEnabled)
-        app.buttons["start-mixed"].tap()
+        scrollTo(app.buttons["start-mixed"], app: app); app.buttons["start-mixed"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Both tags")
         app.buttons["pauseStudy"].tap()
@@ -313,6 +336,7 @@ final class StudyUITests: XCTestCase {
         for _ in 0..<8 where !filter.exists || !filter.isHittable { app.swipeDown() }
         filter.tap(); app.buttons["resetStudyFilter"].tap()
         app.buttons["applyStudyFilter"].tap()
+        scrollTo(app.staticTexts["newCount"], app: app)
         XCTAssertTrue(app.staticTexts["newCount"].label.contains("3枚"))
         app.buttons["resumeStudy"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
@@ -346,7 +370,8 @@ final class StudyUITests: XCTestCase {
     func testHomeEmptyWaitingAndModeSwitchCancellation() {
         let app = app()
         XCTAssertTrue(app.buttons["addFirstHomeNote"].waitForExistence(timeout: 15))
-        XCTAssertFalse(app.buttons["start-new"].isEnabled); XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
+        XCTAssertFalse(app.buttons["start-new"].isEnabled)
+        scrollTo(app.buttons["start-mixed"], app: app); XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
         create(app, question: "State question", answer: "State answer")
         app.tabBars.buttons["ホーム"].tap()
         XCTAssertFalse(app.buttons["start-review"].isEnabled); XCTAssertTrue(app.buttons["start-new"].isEnabled)
@@ -668,7 +693,7 @@ final class StudyUITests: XCTestCase {
         app.buttons["grade-4"].tap()
         app.buttons["pauseStudy"].tap()
         app.terminate(); app.launch()
-        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["completeStudy"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ライブラリ"].tap()
         app.staticTexts["Capital of Japan?"].tap()
         let due = app.descendants(matching: .any)["noteDue"]

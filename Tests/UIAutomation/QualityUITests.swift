@@ -104,7 +104,7 @@ final class QualityUITests: XCTestCase {
             if app.buttons["pauseStudy"].exists {
                 let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
                 if footer.exists { bottom = min(bottom, footer.frame.minY - 8) }
-            } else if app.tabBars.firstMatch.exists {
+            } else if app.tabBars.firstMatch.exists && app.tabBars.firstMatch.isHittable {
                 bottom = min(bottom, app.tabBars.firstMatch.frame.minY - 8)
             }
             if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom { return }
@@ -114,8 +114,8 @@ final class QualityUITests: XCTestCase {
             let high = top + 0.8 * max(40, bottom - top)
             let start = (down ? low : high) / app.frame.height
             let end = (down ? high : low) / app.frame.height
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: start))
-                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: end)))
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: start))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: end)))
         }
         XCTAssertTrue(element.exists && element.isHittable, "Required control must be visible")
     }
@@ -186,7 +186,8 @@ final class QualityUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15)); app.tabBars.buttons["ライブラリ"].tap()
         app.buttons["openImport"].tap(); app.buttons["selectImportFile"].tap()
         selectFile("UITest-\(id)", app: app)
-        XCTAssertTrue(app.buttons["previewImport"].waitForExistence(timeout: 10)); app.buttons["previewImport"].tap()
+        scrollTo(app.buttons["previewImport"], app: app)
+        XCTAssertTrue(app.buttons["previewImport"].exists); app.buttons["previewImport"].tap()
         let confirm = app.buttons["confirmImport"]; scrollTo(confirm, app: app); confirm.tap()
         app.buttons["commitImport"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
@@ -259,6 +260,7 @@ final class QualityUITests: XCTestCase {
         }
         let grade = app.buttons["grade-3"]; scrollTo(grade, app: app); grade.tap()
         app.buttons["pauseStudy"].tap(); app.tabBars.buttons["記録"].tap()
+        scrollTo(app.staticTexts["todayAnswerCount"], app: app)
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
     }
 }
