@@ -186,7 +186,7 @@ final class BackupRepositoryTests: XCTestCase {
         let decoded = try BackupArchive.decode(zip)
         XCTAssertEqual(decoded.media[a], png)
         XCTAssertEqual(decoded.media[b], jpg)
-        XCTAssertEqual(Set(decoded.data.media.map(\\.mediaType)), Set(["image/png", "image/jpeg"]))
+        XCTAssertEqual(Set(decoded.data.media.map(\.mediaType)), Set(["image/png", "image/jpeg"]))
         let destination = try fixture(root.appendingPathComponent("destination"))
         let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
         _ = try BackupService.restore(decoded, location: location, mediaStore: destination.mediaStore, now: now)
