@@ -6,12 +6,13 @@ final class NotificationServiceTests: XCTestCase {
     final class Center: LocalNotificationCenter {
         var status = NotificationPermission.unknown
         var requests = 0
+        var permissionReads = 0
         var scheduled: [PlannedNotification] = []
         var deliveredIDs = Set<String>()
         var added = 0
         var blockNextAdd = false
         var gate: CheckedContinuation<Void, Never>?
-        func permission() async -> NotificationPermission { status }
+        func permission() async -> NotificationPermission { permissionReads += 1; return status }
         func requestPermission() async throws -> Bool { requests += 1; status = .allowed; return true }
         func pending() async -> [PlannedNotification] { scheduled }
         func delivered() async -> Set<String> { deliveredIDs }

@@ -52,6 +52,15 @@ enum UITestFixtures {
         settings.notification.enabled = false
         try repository.updateSettings(settings)
     }
+    @MainActor static func populateHomeFilters(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let root = try repository.decks()[0].id
+        let child = try repository.createDeck(name: "Child", parentID: root, now: now)
+        let other = try repository.createDeck(name: "Other", now: now)
+        try repository.createNote(NoteInput(deckID: child, question: "Both tags", answer: "A", tagNames: ["A", "B"]), now: now)
+        try repository.createNote(NoteInput(deckID: child, question: "Only A", answer: "A", tagNames: ["A"]), now: now)
+        try repository.createNote(NoteInput(deckID: other, question: "Other card", answer: "A", tagNames: ["A", "B"]), now: now)
+    }
     static func prepare(name: String) throws {
         guard UUID(uuidString: name) != nil else { throw StudyError.invalidContent }
         let documents = URL.documentsDirectory

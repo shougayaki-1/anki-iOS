@@ -45,6 +45,79 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testHomeLightAccessibilityAudit() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-review"].waitForExistence(timeout: 15))
+        attach(app, "Issue31-home-light")
+        try app.performAccessibilityAudit(for: [.contrast, .textClipped, .sufficientElementDescription, .hitRegion]) { issue in
+            guard let element = issue.element else {
+                if issue.auditType == .contrast {
+                    let note = XCTAttachment(string: "Unbound system contrast node. Review the attached viewport screenshot; identified app elements are audited separately.")
+                    note.lifetime = .keepAlways; self.add(note)
+                    return true
+                }
+                return false
+            }
+            if !element.exists || !element.isHittable { return true }
+            let top = app.navigationBars.firstMatch.frame.maxY, bottom = app.tabBars.firstMatch.frame.minY
+            let viewport = CGRect(x: app.frame.minX, y: top, width: app.frame.width, height: max(0, bottom - top))
+            return !viewport.contains(element.frame)
+        }
+    }
+
+    func testHomeParentDeckAndMultipleTagsApplyResetAndMixedMode() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-home-filters"]
+        app.launch()
+        XCTAssertTrue(app.buttons["openStudyFilter"].waitForExistence(timeout: 15))
+        app.buttons["openStudyFilter"].tap()
+        app.buttons["studyDeckPicker"].tap(); app.buttons["マイデッキ"].tap()
+        for tag in ["A", "B"] {
+            app.switches["studyTag-\(tag)"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        }
+        app.buttons["applyStudyFilter"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        XCTAssertFalse(app.buttons["start-review"].isEnabled)
+        app.buttons["start-mixed"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Both tags")
+        app.buttons["pauseStudy"].tap()
+        let filter = app.buttons["openStudyFilter"]
+        for _ in 0..<8 where !filter.exists || !filter.isHittable { app.swipeDown() }
+        filter.tap(); app.buttons["resetStudyFilter"].tap()
+        app.buttons["applyStudyFilter"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("3枚"))
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Both tags")
+    }
+    func testHomeAccessibilityDarkLargestTextAndAddSave() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due", "-study-test-accessibility", "-study-test-reduce-motion"]
+        app.launch()
+        XCTAssertTrue(app.buttons["openStudyFilter"].waitForExistence(timeout: 15))
+        let review = app.buttons["start-review"]
+        scrollTo(review, app: app); XCTAssertTrue(review.isHittable)
+        attach(app, "Issue31-home-dark-largest-type")
+        let filter = app.buttons["openStudyFilter"]
+        for _ in 0..<8 where !filter.exists || !filter.isHittable { app.swipeDown() }
+        filter.tap()
+        XCTAssertTrue(app.buttons["applyStudyFilter"].waitForExistence(timeout: 5))
+        attach(app, "Issue31-filter-dark-largest-type")
+        app.buttons["cancelStudyFilter"].tap()
+        app.buttons["addHomeNote"].tap()
+        let q = app.descendants(matching: .any)["questionInput"]
+        scrollTo(q, app: app); q.tap(); q.typeText("Home added")
+        let a = app.descendants(matching: .any)["answerInput"]
+        scrollTo(a, app: app); a.tap(); a.typeText("Home answer")
+        app.buttons["saveNote"].tap()
+        XCTAssertTrue(app.buttons["addHomeNote"].waitForExistence(timeout: 5))
+        app.tabBars.buttons["ライブラリ"].tap()
+        XCTAssertTrue(app.staticTexts["Home added"].waitForExistence(timeout: 5))
+    }
+
     func testHomeEmptyWaitingAndModeSwitchCancellation() {
         let app = app()
         XCTAssertTrue(app.buttons["addFirstHomeNote"].waitForExistence(timeout: 15))
@@ -54,14 +127,18 @@ final class StudyUITests: XCTestCase {
         XCTAssertFalse(app.buttons["start-review"].isEnabled); XCTAssertTrue(app.buttons["start-new"].isEnabled)
         app.buttons["start-new"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
-        app.buttons["pauseStudy"].tap(); app.buttons["start-mixed"].tap()
+        app.buttons["pauseStudy"].tap()
+        scrollTo(app.buttons["start-mixed"], app: app); app.buttons["start-mixed"].tap()
         XCTAssertTrue(app.buttons["復習＋新規へ切り替える"].waitForExistence(timeout: 5))
         let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["キャンセル", "Cancel"])).firstMatch
         if cancel.exists { cancel.tap() }
         else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.1)).tap() }
-        app.buttons["resumeStudy"].tap()
+        let resume = app.buttons["resumeStudy"]
+        for _ in 0..<8 where !resume.exists || !resume.isHittable { app.swipeDown() }
+        resume.tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-1"].tap(); app.buttons["pauseStudy"].tap()
+        for _ in 0..<3 { app.swipeDown() }
         XCTAssertFalse(app.buttons["start-review"].isEnabled)
         let waiting = app.staticTexts["nextShortReview"]
         scrollTo(waiting, app: app); XCTAssertTrue(waiting.exists)

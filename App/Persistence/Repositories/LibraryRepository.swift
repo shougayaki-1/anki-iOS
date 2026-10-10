@@ -131,18 +131,40 @@ extension StudyRepository {
         }
         return ids
     }
-    func scopedQueueCards(_ scope: LearningScope) throws -> [QueueCard] {
+    func scopedQueueCards(_ scope: LearningScope, cards: [QueueCard]? = nil) throws -> [QueueCard] {
         let decks = try scope.deckID.map { try descendants(of: $0) }
         let eligible = Set(try notes().filter { note in
             (decks == nil || decks!.contains(note.deckID)) && Set(scope.tagIDs).isSubset(of: Set(note.tagIDs))
         }.map(\.id))
-        return try queueCards().filter { $0.noteID.map { eligible.contains($0) } ?? false }
+        return try (cards ?? queueCards()).filter { $0.noteID.map { eligible.contains($0) } ?? false }
     }
     func scopedCounts(scope: LearningScope, now: Date) throws -> HomeCounts {
         var result = try ReviewQueueBuilder(calendar: calendar).counts(cards: scopedQueueCards(scope), logs: queueLogs(), settings: settings(), now: now)
         let global = try counts(now: now)
         result.learnedToday = global.learnedToday; result.answerCount = global.answerCount
         return result
+    }
+    // One timestamp, one card snapshot and only today's logs. No displayed content,
+    // full historical statistics, writes, or notification work in the polling path.
+    func homeSnapshot(now: Date) throws -> HomeSnapshot {
+        let selected = try homeScope(), settings = try settings()
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let start = day.start, end = day.end
+        let all = try queueCards(), scoped = try scopedQueueCards(selected, cards: all)
+        let noteIDs = Dictionary(uniqueKeysWithValues: all.compactMap { card in card.noteID.map { (card.id, $0) } })
+        let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+            $0.reviewedAt >= start && $0.reviewedAt < end
+        }))
+        let today = rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID]) }
+        let builder = ReviewQueueBuilder(calendar: calendar)
+        let global = builder.counts(cards: all, logs: today, settings: settings, now: now)
+        var counts = builder.counts(cards: scoped, logs: today, settings: settings, now: now)
+        counts.learnedToday = global.learnedToday; counts.answerCount = global.answerCount
+        let used = Set(today.filter(\.wasNew).map(\.cardID)).count
+        let next = scoped.filter { !$0.suspended && ["learning", "relearning"].contains($0.state) && $0.due > now }.map(\.due).min()
+        return HomeSnapshot(scope: selected, counts: counts, globalCounts: global,
+                            newSlotsRemaining: max(0, settings.dailyNewLimit - used), nextShortDue: next,
+                            hasCards: !all.isEmpty, dayStart: start)
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)

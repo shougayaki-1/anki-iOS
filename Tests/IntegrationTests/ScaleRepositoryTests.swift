@@ -47,6 +47,10 @@ final class ScaleRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.notes().count, 1000)
         XCTAssertEqual(try repo.logs().count, 10000)
         XCTAssertEqual(store.counts.due, 3000)
+        let pollStart = Date()
+        for _ in 0..<5 { store.refreshHome() }
+        let pollTime = Date().timeIntervalSince(pollStart) / 5
+        XCTAssertNil(store.homeFailure); XCTAssertEqual(store.counts.due, 3000)
         let studyStart = Date()
         try repo.start(mode: .review, now: due.addingTimeInterval(1))
         try repo.updateDraft(revealed: true, now: due.addingTimeInterval(1))
@@ -80,7 +84,7 @@ final class ScaleRepositoryTests: XCTestCase {
         XCTAssertEqual(try reopened.cards().count, 3000)
         XCTAssertEqual(try reopened.logs().count, 10000)
         XCTAssertEqual(Set(try reopened.cards().map(\.id)), Set(cards.map(\.id)))
-        let metrics = "scale: notes=1000 cards=3000 logs=10000 creation=\(creationTime)s reload=\(reloadTime)s review-and-undo=\(studyTime)s backup-and-restore=\(Date().timeIntervalSince(backupStart))s bytes=\(bytes.count)"
+        let metrics = "scale: notes=1000 cards=3000 logs=10000 creation=\(creationTime)s reload=\(reloadTime)s home-poll-average=\(pollTime)s review-and-undo=\(studyTime)s backup-and-restore=\(Date().timeIntervalSince(backupStart))s bytes=\(bytes.count)"
         print(metrics)
         let attachment = XCTAttachment(string: metrics); attachment.name = "Phase5-scale-measurement"
         attachment.lifetime = .keepAlways; add(attachment)
