@@ -125,6 +125,17 @@ struct ReviewPresentation {
     let answerRevealed: Bool
     let canUndo: Bool
     let nextShortDue: Date?
+    var emptyState: ReviewEmptyState? = nil
+}
+
+struct ReviewEmptyState: Equatable {
+    enum Reason: Equatable { case complete, waiting, reviewWaiting, modeExcluded, newLimit, noTargets, suspended, siblings, retry }
+    let reason: Reason
+    let title: String
+    let message: String
+    var suggestsSettings = false
+    var suggestsScopeChange = false
+    var canRetry = false
 }
 
 // Primary actions preserve the existing session; replacement is a secondary action.

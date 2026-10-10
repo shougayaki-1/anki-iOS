@@ -255,6 +255,7 @@ final class StudyRepository {
             try selectNext(draft: draft, now: now)
             guard draft.cardID == nil else { throw StudyError.noAvailableCards }
             context.delete(draft)
+            for row in try context.fetch(FetchDescriptor<SessionScope>()) { context.delete(row) }
         }
     }
     func resume(now: Date) throws {
@@ -354,6 +355,87 @@ final class StudyRepository {
         return ReviewPresentation(card: item, mode: mode,
                                   responseMode: ResponseMode(rawValue: draft.answerMode) ?? .mental,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
-                                  canUndo: draft.undoLogID != nil, nextShortDue: short)
+                                  canUndo: draft.undoLogID != nil, nextShortDue: short,
+                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil)
     }
+    private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date) throws -> ReviewEmptyState {
+        let cards = try scopedQueueCards(scope()), logs = try queueLogs(), settings = try settings()
+        let builder = ReviewQueueBuilder(calendar: calendar)
+        let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
+        let queue = builder.queue(cards: cards, logs: logs, settings: settings, mode: mode,
+                                  touched: Set(draft.touchedCardIDs), reviewStreak: draft.reviewStreak, now: now)
+        guard draft.cardID == nil, queue.isEmpty else {
+            return ReviewEmptyState(reason: .retry, title: "出題を確認してください", message: "学習状態を再取得してください。", canRetry: true)
+        }
+        let limit = mode != .review && counts.eligibleNew > 0 && counts.newRemaining == 0
+        let global = builder.counts(cards: try queueCards(), logs: logs, settings: settings, now: now)
+        let remaining = "未学習カードはあと\(global.totalNew)枚（全デッキ・停止中を除く）。現在の学習対象内は\(counts.totalNew)枚です。"
+        if short != nil {
+            return ReviewEmptyState(reason: .waiting, title: "今出題できるカードはありません",
+                                    message: "期限が来ると自動で出題を再確認します。このセッションで続けるか、今回はここまでにできます。" + (limit ? "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。" + remaining : ""),
+                                    suggestsSettings: limit, canRetry: true)
+        }
+        if limit {
+            return ReviewEmptyState(reason: .newLimit, title: "今日の新規学習は上限です",
+                                    message: "上限\(settings.dailyNewLimit)枚。" + remaining + "設定 > 学習で変更できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsSettings: true, canRetry: true)
+        }
+        // Match queue()'s mode membership before asking why eligible cards are blocked.
+        // In .new, touching a card does not make its long-term review state eligible.
+        guard cards.allSatisfy({ ["new", "learning", "relearning", "review"].contains($0.state) }) else {
+            return ReviewEmptyState(reason: .retry, title: "出題を確認してください",
+                                    message: "学習対象の状態を確認できません。出題を再確認してください。", canRetry: true)
+        }
+        let touched = Set(draft.touchedCardIDs)
+        let relevant = cards.filter { card in
+            switch mode {
+            case .review: return card.state != "new"
+            case .new: return card.state == "new" || (["learning", "relearning"].contains(card.state) && touched.contains(card.id))
+            case .mixed: return true
+            }
+        }
+        func available(_ candidates: [QueueCard], with options: StudySettings) -> Bool {
+            !builder.queue(cards: candidates, logs: logs, settings: options, mode: mode,
+                           touched: touched, reviewStreak: draft.reviewStreak, now: now).isEmpty
+        }
+        // Prove suppression is blocking this mode's queue. Due alone is not proof.
+        var unburied = settings; unburied.siblingBuryEnabled = false
+        if settings.siblingBuryEnabled && available(cards, with: unburied) {
+            return ReviewEmptyState(reason: .siblings, title: "兄弟カードの同日抑制で待機中です",
+                                    message: "同じノートのカードは次の学習日に出題できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsScopeChange: true, canRetry: true)
+        }
+        let unsuspended = cards.map {
+            QueueCard(id: $0.id, state: $0.state, due: $0.due, createdAt: $0.createdAt, suspended: false, noteID: $0.noteID)
+        }
+        if (!relevant.isEmpty && relevant.allSatisfy(\.suspended)) || available(unsuspended, with: settings) {
+            return ReviewEmptyState(reason: .suspended, title: "対象のカードは停止中です",
+                                    message: "ライブラリで停止を解除できます。", suggestsScopeChange: true)
+        }
+        // Multiple blocking rules or an unexplained queue mismatch cannot establish
+        // one cause. Keep retry available rather than claiming siblings/completion.
+        if relevant.contains(where: { $0.state == "new" || $0.due <= now }) {
+            return ReviewEmptyState(reason: .retry, title: "今出題できるカードはありません",
+                                    message: "複数の出題条件により対象外になっている可能性があります。設定や学習対象を確認して、出題を再確認してください。",
+                                    suggestsScopeChange: true, canRetry: true)
+        }
+        if mode == .new && cards.contains(where: { !$0.suspended && $0.state == "review" && $0.due <= now }) {
+            return ReviewEmptyState(reason: .modeExcluded, title: "今回の新規学習は完了しました",
+                                    message: "復習期限に達したカードは「復習する」から学習できます。このセッションでは長期の復習カードを出題しません。", suggestsScopeChange: true)
+        }
+        if let next = relevant.filter({ !$0.suspended && !touched.contains($0.id) && $0.due > now }).map(\.due).min() {
+            return ReviewEmptyState(reason: .reviewWaiting, title: "現在復習できるカードはありません",
+                                    message: "次の復習予定: \(next.formatted(date: .abbreviated, time: .shortened))。期限到来後にホームから学習できます。", canRetry: true)
+        }
+        if relevant.isEmpty && !cards.contains(where: { touched.contains($0.id) }) {
+            if cards.isEmpty {
+                return ReviewEmptyState(reason: .noTargets, title: "学習対象にカードがありません",
+                                        message: "ホームでデッキ・タグなどの学習対象を確認できます。", suggestsScopeChange: true)
+            }
+            return ReviewEmptyState(reason: .modeExcluded, title: "このモードの学習対象にカードがありません",
+                                    message: mode == .review ? "未学習カードは「新しく覚える」から学習できます。" : "復習カードは「復習する」から学習できます。新規学習で続ける短期復習は、このセッションで学んだカードだけです。",
+                                    suggestsScopeChange: true)
+        }
+        return ReviewEmptyState(reason: .complete, title: "今回の学習は完了しました",
+                                message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")
+    }
+
 }

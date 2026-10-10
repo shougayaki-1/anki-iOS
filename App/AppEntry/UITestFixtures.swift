@@ -11,6 +11,18 @@ enum UITestFixtures {
             scene.traitOverrides.userInterfaceStyle = .dark
         }
     }
+    @MainActor static func populateNewReviewDue(_ store: StudyStore) throws {
+        let repo = store.repository, now = store.clock()
+        guard try repo.notes().isEmpty else { return }
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Long-term review", answer: "Answer"), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.easy, now: now)
+        guard let due = try repo.cards().first?.dueDate else { throw StudyError.missingRecord }
+        store.clock = { due }
+        try store.reload()
+        store.showingReview = true
+    }
     @MainActor static func populateScale(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let base = now.addingTimeInterval(-300 * 86400), scheduler = try ReviewScheduler()

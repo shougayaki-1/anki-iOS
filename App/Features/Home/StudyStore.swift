@@ -22,6 +22,7 @@ final class StudyStore {
     var settings = StudySettings()
     var review: ReviewPresentation?
     var failure: String?
+    var reviewRefreshFailed = false
     var showingReview = false
     var selectedTab = 0
     var statistics: StudyStatistics?
@@ -56,6 +57,7 @@ final class StudyStore {
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
             self.settings = settings; self.review = review; self.statistics = statistics
+            reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()
         } catch { homeFailure = error.localizedDescription; throw error }
@@ -131,8 +133,12 @@ final class StudyStore {
         if counts.newRemaining > 0 { return .start(.new, counts.newRemaining) }
         return .unavailable
     }
-    func completeSession() {
-        perform { try repository.completeSession(now: clock()) }
+    func completeSession(destination: Int = 0) {
+        do { try repository.completeSession(now: clock()) }
+        catch { failure = error.localizedDescription; return }
+        review = nil; showingReview = false; selectedTab = destination
+        do { try reload() }
+        catch { homeFailure = error.localizedDescription; failure = "学習は終了しましたが、ホームを更新できません。" }
     }
     var isNewLimitReached: Bool {
         homeFailure == nil && counts.eligibleNew > 0 && newSlotsRemaining == 0
@@ -205,7 +211,7 @@ final class StudyStore {
             if let old = review {
                 review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
-                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue)
+                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, emptyState: old.emptyState)
                 if revealed == true && !old.answerRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
             }
         } catch { failure = error.localizedDescription }
@@ -246,10 +252,11 @@ final class StudyStore {
         }
     }
     func refreshQueue() {
-        perform {
+        let succeeded = perform {
             if let draft = try repository.session(), draft.cardID == nil {
                 try repository.resume(now: clock())
             }
         }
+        reviewRefreshFailed = !succeeded
     }
 }

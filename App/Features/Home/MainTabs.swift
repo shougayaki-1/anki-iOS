@@ -171,7 +171,7 @@ struct ReviewHeroSection: View {
                     Text("次の短期復習: \(next.formatted(date: .omitted, time: .shortened))")
                         .accessibilityIdentifier("nextShortReview")
                     Text("開始時の学習対象で待機しています。期限になると続きから再開できます。")
-                    Button("今回の学習を完了", action: store.completeSession)
+                    Button("今回の学習を完了", action: { store.completeSession() })
                         .accessibilityIdentifier("completeStudy")
                 case .complete:
                     Text("今回の出題は完了しました").font(.headline)
