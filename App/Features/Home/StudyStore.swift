@@ -170,6 +170,10 @@ final class StudyStore {
         do { try reload() }
         catch { homeFailure = error.localizedDescription; failure = "学習は終了しましたが、ホームを更新できません。" }
     }
+    func startAnotherSession() {
+        if perform({ try repository.startAnotherSession(now: clock()) }) { showingReview = true }
+    }
+
     var isNewLimitReached: Bool {
         homeFailure == nil && counts.eligibleNew > 0 && newSlotsRemaining == 0
     }

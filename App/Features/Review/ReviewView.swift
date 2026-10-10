@@ -124,7 +124,7 @@ struct ReviewView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let review = store.review, review.card == nil {
                     Button { store.completeSession() } label: {
-                        Text(review.emptyState?.reason == .waiting ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
+                        Text(review.emptyState?.reason == .waiting || review.sessionProgress.map { $0.limit > 0 && !$0.isComplete } == true ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
                             .font(.headline).multilineTextAlignment(.center)
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, minHeight: 56)
@@ -349,6 +349,14 @@ private struct ReviewEmptyStateView: View {
             }
             if canFinish {
                 Text("終了後は、このセッションのUndoは使えません。評価と復習予定は保存されています。中断して保存する場合は上部の「閉じる」を使います。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if canFinish, state?.reason == .complete {
+                let limit = store.review?.sessionProgress?.limit ?? 0
+                Button(limit > 0 ? "同じ設定でもう\(limit)問学習する" : "同じ設定で学習を続ける",
+                       action: store.startAnotherSession)
+                    .accessibilityIdentifier("startAnotherSession")
+                Text("出題候補がない場合は、このセッションと最後のUndoを保持します。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             if state?.suggestsSettings == true {

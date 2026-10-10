@@ -119,6 +119,14 @@ struct BackupValidation {
         for row in data.options {
             let options = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
             guard row.key == "options", (1...2).contains(options.schemaVersion) else { throw BackupError.invalidData }
+            if let limit = options.sessionAnswerLimit, !(0...500).contains(limit) {
+                throw BackupError.invalidData
+            }
+            if let progress = options.activeSessionProgress {
+                guard progress.startSequence >= 0, (0...500).contains(progress.answerLimit),
+                      progress.startSequence <= (data.logs.map(\.sequence).max() ?? 0)
+                else { throw BackupError.invalidData }
+            }
             if let home = options.homeScope {
                 // Stale home references are repaired on load; active session scope remains strict.
                 guard home.schemaVersion == 1 else { throw BackupError.invalidData }

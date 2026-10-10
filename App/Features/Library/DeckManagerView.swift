@@ -77,22 +77,31 @@ struct DeckManagerView: View {
                                 else { expanded.insert(row.id) }
                             } label: {
                                 Image(systemName: expanded.contains(row.id) ? "chevron.down" : "chevron.right")
-                                    .frame(width: 32, height: 44)
+                                    .frame(width: 44, height: 44)
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(row.path)を\(expanded.contains(row.id) ? "折りたたむ" : "展開する")")
                             .accessibilityIdentifier("deckDisclosure-\(row.id.uuidString)")
                         } else {
-                            Color.clear.frame(width: 32, height: 44).accessibilityHidden(true)
+                            Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
                         }
                         NavigationLink {
                             DeckEditorView(store: store, deckID: row.id)
                         } label: {
-                            Label(row.name, systemImage: "folder")
-                                .fixedSize(horizontal: false, vertical: true)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Label(row.name, systemImage: "folder")
+                                    .fixedSize(horizontal: false, vertical: true)
+                                // Keep names readable on narrow screens without hiding
+                                // levels once visual indentation reaches its width budget.
+                                if row.depth >= 6 {
+                                    Text("第\(row.depth + 1)階層")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                         }
                         .accessibilityLabel("\(row.path)を編集")
+                        .accessibilityValue("第\(row.depth + 1)階層")
                         .accessibilityIdentifier("deckEdit-\(row.id.uuidString)")
                     }
                     .padding(.leading, CGFloat(min(row.depth, 6)) * 14)

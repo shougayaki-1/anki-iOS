@@ -2,8 +2,17 @@ import XCTest
 
 final class QualityUITests: XCTestCase {
     func testDeckManagerShowsFolderTreeAndSupportsChildCreation() {
+        deckTreeScenario(accessibility: false)
+    }
+
+    func testDeckManagerTreeLargestDynamicTypeKeepsDisclosureAndEditingSeparate() {
+        deckTreeScenario(accessibility: true)
+    }
+
+    private func deckTreeScenario(accessibility: Bool) {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]
+        if accessibility { app.launchArguments.append("-study-test-accessibility") }
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ライブラリ"].tap()
@@ -30,12 +39,17 @@ final class QualityUITests: XCTestCase {
         let collapse = app.buttons.matching(NSPredicate(format: "label == %@", "英語を折りたたむ")).firstMatch
         XCTAssertTrue(collapse.waitForExistence(timeout: 5))
         XCTAssertTrue(child.waitForExistence(timeout: 5))
+        scrollTo(collapse, app: app)
+        XCTAssertGreaterThanOrEqual(collapse.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(collapse.frame.height, 44)
         collapse.tap()
         XCTAssertFalse(child.exists)
         let expand = app.buttons.matching(NSPredicate(format: "label == %@", "英語を展開する")).firstMatch
         XCTAssertTrue(expand.waitForExistence(timeout: 5))
         expand.tap()
         XCTAssertTrue(child.waitForExistence(timeout: 5))
+        scrollTo(child, app: app)
+        if accessibility { attach(app, name: "Issue40-largest-type-tree") }
         child.tap()
         XCTAssertTrue(app.textFields["deckNameInput"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.textFields["deckNameInput"].value as? String, "Final Draft")
