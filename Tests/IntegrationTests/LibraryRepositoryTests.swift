@@ -384,6 +384,10 @@ final class LibraryRepositoryTests: XCTestCase {
         _ = try repo.createNote(NoteInput(deckID: grandchild, question: "孫の問題", answer: "答え"), now: now)
         try repo.saveEditorDraft(key: "edit:\(first.uuidString)",
                                  input: NoteInput(deckID: root, question: "下書きは残す", answer: "答え"), now: now)
+        try repo.start(mode: .new, scope: LearningScope(deckID: root), now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now.addingTimeInterval(1))
+        let beforeLogs = try repo.logs().map(\.id)
         let before = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate, $0.isSuspended) }
         let originalDecks = try repo.decks().map { ($0.id, $0.parentID) }
         let direct = try repo.previewDeckContents(deckID: root, scope: .direct, action: .move(to: destination))
@@ -406,6 +410,7 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.notes().filter { $0.deckID == child || $0.deckID == grandchild }.count, 2)
         XCTAssertEqual(try repo.editorDraft(key: "edit:\(first.uuidString)")?.deckID, destination)
         XCTAssertEqual(try repo.editorDraft(key: "edit:\(first.uuidString)")?.question, "下書きは残す")
+        XCTAssertEqual(try repo.logs().map(\.id), beforeLogs)
         for (id, payload, due, suspended) in before {
             let actual = try XCTUnwrap(repo.cards().first { $0.id == id })
             XCTAssertEqual(actual.fsrsPayload, payload)

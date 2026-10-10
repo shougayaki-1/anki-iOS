@@ -275,7 +275,7 @@ private struct DeckContentsOperationView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("操作する範囲") {
-                    Text(DeckContentsScope.direct.title)
+                    Text(scope.title)
                     if hasChildren {
                         Toggle("子デッキの中身も含める", isOn: $includeChildren)
                             .accessibilityIdentifier("deckContentsIncludeDescendants")
@@ -398,6 +398,15 @@ private struct DeckContentsOperationView: View {
             // if only post-commit UI/notification refresh fails.
             do { try store.reload() }
             catch { failure = "変更は保存済みですが、画面更新に失敗しました。再表示してください。\n" + error.localizedDescription }
+            if operation == .delete {
+                // Mirror NoteEditorView's post-save media cleanup. Media removal is
+                // deliberately separate from the atomic Note/Card database deletion.
+                do { try store.repository.cleanupUnusedMedia() }
+                catch {
+                    let warning = "カードは削除済みですが、不要な画像の整理に失敗しました。\n" + error.localizedDescription
+                    failure = failure.map { $0 + "\n" + warning } ?? warning
+                }
+            }
         } catch {
             self.preview = nil
             failure = error.localizedDescription + "\n対象が変更されていた場合は、プレビューを作り直してください。"
