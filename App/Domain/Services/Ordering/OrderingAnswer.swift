@@ -63,7 +63,8 @@ struct OrderingAnswer {
     }
 }
 
-enum OrderingAction { case select(Int), remove(Int), reset, check }
+// `to` is the final zero-based position after removal, not a swap index.
+enum OrderingAction { case select(Int), remove(Int), move(Int, to: Int), reset, check }
 enum OrderingResult: String, Codable { case correct, incorrect }
 
 struct OrderingDraft: Codable, Equatable {
@@ -96,6 +97,15 @@ struct OrderingDraft: Codable, Equatable {
         case .remove(let id):
             guard selected.contains(id) else { throw OrderingError.invalidDraft }
             selected.removeAll { $0 == id }; result = nil
+        case .move(let id, to: let destination):
+            guard let source = selected.firstIndex(of: id), selected.indices.contains(destination) else {
+                throw OrderingError.invalidDraft
+            }
+            if source != destination {
+                selected.remove(at: source)
+                selected.insert(id, at: destination)
+                result = nil
+            }
         case .reset: selected = []; result = nil
         case .check:
             guard selected.count == pool.count else { throw OrderingError.incomplete }
