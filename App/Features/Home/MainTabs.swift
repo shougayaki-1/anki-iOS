@@ -16,7 +16,8 @@ struct MainTabs: View {
         }
         .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
         .alert("処理に失敗しました", isPresented: Binding(
-            get: { store.failure != nil }, set: { if !$0 { store.failure = nil } }
+            get: { store.failure != nil && !store.showingReview },
+            set: { if !$0 && !store.showingReview { store.failure = nil } }
         )) { Button("閉じる", role: .cancel) { store.failure = nil } }
         message: { Text(store.failure ?? "") }
         .onReceive(NotificationCenter.default.publisher(for: .studyNotificationOpened)) { _ in
