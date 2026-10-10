@@ -775,7 +775,8 @@ final class StudyUITests: XCTestCase {
         reveal.tap()
         XCTAssertTrue(app.buttons["grade-3"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["grade-3"].isHittable)
-        XCTAssertFalse(app.keyboards.firstMatch.exists, "Keyboard should dismiss when the answer is revealed")
+        let keyboardGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardGone], timeout: 5), .completed, "Keyboard should dismiss when the answer is revealed")
         app.buttons["grade-3"].tap()
     }
 }
