@@ -54,8 +54,8 @@ final class ScaleRepositoryTests: XCTestCase {
         let statisticsReadElapsed = Date().timeIntervalSince(statisticsReadStart)
         XCTAssertEqual(report.ratings[.easy], 10000)
         XCTAssertEqual(report.months.count, 12)
-        print("Issue #9: 10000 persisted logs + 3000 FSRS cards report load: \\(statisticsReadElapsed)s")
-        let reportAttachment = XCTAttachment(string: "statistics 10000 logs / 3000 cards: \\(statisticsReadElapsed)s")
+        print("Issue #9: 10000 persisted logs + 3000 FSRS cards report load: \(statisticsReadElapsed)s")
+        let reportAttachment = XCTAttachment(string: "statistics 10000 logs / 3000 cards: \(statisticsReadElapsed)s")
         reportAttachment.name = "Issue9-statistics-scale-measurement"
         reportAttachment.lifetime = .keepAlways
         add(reportAttachment)
