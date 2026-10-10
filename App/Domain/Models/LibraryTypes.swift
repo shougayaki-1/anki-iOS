@@ -13,6 +13,17 @@ struct StudyOptions: Codable, Equatable {
     var hapticsMode: HapticsMode? = nil
     var homeScope: LearningScope? = nil
     var reviewAppearance: ReviewAppearance? = nil
+    // Optional fields preserve decoding of existing .studybackup preference JSON.
+    // nil = default 20 answers; 0 = unlimited.
+    var sessionAnswerLimit: Int? = nil
+    var activeSessionProgress: StudySessionProgressSnapshot? = nil
+}
+
+// The session boundary is the last persisted ReviewLog sequence when the session starts.
+// This is stored separately from the daily unique-card goal and survives app relaunch.
+struct StudySessionProgressSnapshot: Codable, Equatable {
+    var startSequence: Int
+    var answerLimit: Int
 }
 
 struct TagItem: Identifiable {
@@ -183,4 +194,52 @@ enum BulkEditError: LocalizedError {
         case .invalidTags: return "追加・除去するタグを指定してください。"
         }
     }
+}
+
+
+// A deck-content operation never modifies Deck identity, parentID or the tree.
+enum DeckContentsScope: String, CaseIterable, Identifiable {
+    case direct
+    case includingDescendants
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .direct: return "このデッキ直下のみ"
+        case .includingDescendants: return "子デッキの中身も含める"
+        }
+    }
+}
+
+enum DeckContentsAction: Equatable {
+    case move(to: UUID)
+    case delete
+}
+
+struct DeckContentsPreview {
+    struct DeckState: Equatable {
+        let id: UUID
+        let name: String
+        let parentID: UUID?
+        let sortOrder: Int
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
+    let sourceID: UUID
+    let scope: DeckContentsScope
+    let action: DeckContentsAction
+    let hierarchy: [DeckState]
+    let sourcePath: String
+    let destinationPath: String?
+    let includedChildPaths: [String]
+    let noteIDs: Set<UUID>
+    let cardIDs: Set<UUID>
+    // The actual mutation is delegated to the same snapshot/transaction as library bulk edits.
+    let bulk: BulkEditPreview?
+
+    var noteCount: Int { noteIDs.count }
+    var cardCount: Int { cardIDs.count }
+    var changedNoteCount: Int { bulk?.changedNotes.count ?? 0 }
+    var changedCardCount: Int { bulk?.changedCards.count ?? 0 }
+    var canCommit: Bool { changedNoteCount > 0 }
 }

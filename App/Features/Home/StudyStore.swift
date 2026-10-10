@@ -21,12 +21,19 @@ final class StudyStore {
     @ObservationIgnored private var homeDayStart: Date?
     @ObservationIgnored private var homeTimeZone: String?
     var settings = StudySettings()
+    var sessionAnswerLimit = 20
     var review: ReviewPresentation?
     var failure: String?
     var reviewRefreshFailed = false
     var showingReview = false
     var selectedTab = 0
     var statistics: StudyStatistics?
+    var statisticsLoading = false
+    var statisticsError: String?
+    var statisticsScope = LearningScope()
+    @ObservationIgnored private var statisticsReader: StatisticsReader
+    @ObservationIgnored private var statisticsTask: Task<Void, Never>?
+    @ObservationIgnored private var statisticsGeneration = 0
     var notificationPermission = NotificationPermission.unknown
     var notificationFailure: String?
     let notifications: NotificationService
@@ -36,6 +43,7 @@ final class StudyStore {
 
     init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil) throws {
         repository = StudyRepository(container: container, mediaStore: mediaStore)
+        statisticsReader = StatisticsReader(container: container)
         self.clock = clock
         self.storageLocation = storageLocation
         self.notifications = notifications ?? NotificationService()
@@ -49,15 +57,27 @@ final class StudyStore {
             repository.calendar = .current
             let now = clock()
             let snapshot = try repository.homeSnapshot(now: now)
-            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
+            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id), shortName: $0.name, parentID: $0.parentID) }
             let notes = try repository.noteItems()
             let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
             let settings = try repository.settings()
+            let answerLimit = try repository.options().sessionAnswerLimit ?? 20
             let review = try repository.presentation(now: now)
-            let statistics = try repository.statistics(now: now)
+            // History scans and FSRS predictions belong to the statistics actor,
+            // never to the review/save/home reload path.
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
-            self.settings = settings; self.review = review; self.statistics = statistics
+            self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
+            statisticsTask?.cancel()
+            statisticsGeneration += 1
+            statistics = nil
+            statisticsLoading = false
+            statisticsError = nil
+            // A visible statistics tab must reload after grade/Undo, edits and restore.
+            // Off-screen reports remain lazy so review saves never await the history actor.
+            statisticsScope.deckID = statisticsScope.deckID.flatMap { id in decks.contains { $0.id == id } ? id : nil }
+            statisticsScope.tagIDs.removeAll { id in !tags.contains { $0.id == id } }
+            if selectedTab == 2 { refreshStatistics() }
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()
@@ -91,8 +111,34 @@ final class StudyStore {
         } catch { homeFailure = error.localizedDescription }
     }
     func refreshStatistics() {
-        do { statistics = try repository.statistics(now: clock()) }
-        catch { failure = error.localizedDescription }
+        statisticsTask?.cancel()
+        statisticsGeneration += 1
+        let generation = statisticsGeneration
+        statisticsLoading = true
+        statisticsError = nil
+        let reader = statisticsReader
+        let now = clock()
+        let calendar = repository.calendar
+        let startHour = settings.dayStartHour
+        let scope = statisticsScope
+        statisticsTask = Task { [weak self] in
+            do {
+                let report = try await reader.load(now: now, calendar: calendar,
+                                                   startHour: startHour, scope: scope)
+                guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
+                self?.statistics = report
+                self?.statisticsLoading = false
+            } catch {
+                guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
+                self?.statisticsError = error.localizedDescription
+                self?.statisticsLoading = false
+            }
+        }
+    }
+
+    func updateStatisticsScope(_ scope: LearningScope) {
+        statisticsScope = scope
+        refreshStatistics()
     }
     func sceneChanged(active: Bool) {
         do {
@@ -138,10 +184,20 @@ final class StudyStore {
         case .mixed: return counts.due > 0 || counts.newRemaining > 0
         }
     }
+    func changeSessionAnswerLimit(_ limit: Int) {
+        guard [0, 10, 20, 30].contains(limit) else { failure = "回答数を選択し直してください。"; return }
+        perform {
+            var saved = try repository.options()
+            saved.sessionAnswerLimit = limit
+            try repository.updateOptions(saved)
+        }
+    }
+
     var homePrimaryAction: HomePrimaryAction {
         guard homeFailure == nil else { return .unavailable }
         if let review {
             if review.card != nil { return .resume(review.mode) }
+            if review.sessionProgress?.isComplete == true { return .complete }
             if let next = review.nextShortDue { return .waiting(next) }
             return .complete
         }
@@ -157,6 +213,10 @@ final class StudyStore {
         do { try reload() }
         catch { homeFailure = error.localizedDescription; failure = "学習は終了しましたが、ホームを更新できません。" }
     }
+    func startAnotherSession() {
+        if perform({ try repository.startAnotherSession(now: clock()) }) { showingReview = true }
+    }
+
     var isNewLimitReached: Bool {
         homeFailure == nil && counts.eligibleNew > 0 && newSlotsRemaining == 0
     }
@@ -207,13 +267,13 @@ final class StudyStore {
         if perform({ try repository.resume(now: clock()) }) { showingReview = true }
     }
     func grade(_ grade: ReviewGrade) {
-        let previous = counts.learnedToday
+        let previouslyComplete = review?.sessionProgress?.isComplete == true
         do { try repository.grade(grade, now: clock()) }
         catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
         do { try reload() }
         catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
-        let goalReached = settings.dailyGoal.map { previous < $0 && counts.learnedToday >= $0 } ?? false
-        haptics.play(goalReached ? .goal : .grade, mode: settings.hapticsMode)
+        let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
+        haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
     }
     func undo() {
         do { try repository.undo(now: clock()) }
@@ -231,7 +291,8 @@ final class StudyStore {
             } else if let old = review {
                 review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
-                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState)
+                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable,
+                                           emptyState: old.emptyState, sessionProgress: old.sessionProgress)
             }
             if revealed == true && !wasRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
@@ -251,6 +312,13 @@ final class StudyStore {
         notificationJob?.cancel()
         do {
             let container = try BackupService.restore(backup, location: storageLocation, mediaStore: repository.mediaStore, now: clock())
+            statisticsTask?.cancel()
+            statisticsGeneration += 1
+            statistics = nil
+            statisticsLoading = false
+            statisticsError = nil
+            statisticsScope = LearningScope()
+            statisticsReader = StatisticsReader(container: container)
             repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
             showingReview = false
             do { scope = try repository.homeScope(); try reload() }
@@ -266,16 +334,17 @@ final class StudyStore {
     }
     func scheduleNotifications() {
         notificationJob?.cancel()
-        notificationJob = Task {
+        notificationJob = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(200))
+                guard let self, !Task.isCancelled else { return }
                 let permission = try await notifications.reconcile(cards: repository.queueCards(), options: settings.notification,
                                                                     calendar: repository.calendar, now: clock())
                 guard !Task.isCancelled else { return }
                 notificationPermission = permission; notificationFailure = nil
                 scheduledNotificationCount = notifications.scheduledCount
             } catch {
-                if !Task.isCancelled { notificationFailure = error.localizedDescription }
+                if !Task.isCancelled { self?.notificationFailure = error.localizedDescription }
             }
         }
     }
