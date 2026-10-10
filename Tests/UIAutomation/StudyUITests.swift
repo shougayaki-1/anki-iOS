@@ -388,6 +388,20 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("0回"))
     }
 
+    func testNewLongTermDueShowsModeGuidanceAndKeepsUndo() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-new-review-due"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の新規学習は完了しました")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "復習期限に達したカードは「復習する」")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+        attach(app, "PR46-new-long-term-due")
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Long-term review")
+    }
+
     func testWaitingEmptyStateInDarkLargestTypeCanFinish() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-accessibility"]

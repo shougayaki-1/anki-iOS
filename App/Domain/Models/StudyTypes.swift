@@ -129,7 +129,7 @@ struct ReviewPresentation {
 }
 
 struct ReviewEmptyState: Equatable {
-    enum Reason: Equatable { case complete, waiting, newLimit, noTargets, suspended, siblings, retry }
+    enum Reason: Equatable { case complete, waiting, reviewWaiting, modeExcluded, newLimit, noTargets, suspended, siblings, retry }
     let reason: Reason
     let title: String
     let message: String

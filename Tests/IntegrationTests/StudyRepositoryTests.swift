@@ -22,6 +22,116 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testNewEasyLongTermDueIsModeExcludedAndOtherModesCanReview() throws {
+        for bury in [true, false] {
+            let repo = try fixture()
+            var settings = try repo.settings(); settings.siblingBuryEnabled = bury
+            try repo.updateSettings(settings)
+            try create(repo); try repo.start(mode: .new, now: now)
+            try revealAndGrade(repo, grade: .easy, date: now)
+            let card = try XCTUnwrap(repo.cards().first)
+            XCTAssertEqual(try ReviewScheduler().summary(repo.snapshot(card)).state, "review")
+            let due = card.dueDate
+            let id = try repo.session()?.id, undo = try repo.session()?.undoLogID
+            let scope = try repo.scope()
+            for date in [due, due.addingTimeInterval(86400)] {
+                try repo.resume(now: date)
+                let view = try XCTUnwrap(repo.presentation(now: date))
+                XCTAssertNil(view.card)
+                XCTAssertEqual(view.emptyState?.reason, .modeExcluded)
+                XCTAssertTrue(view.emptyState?.message.contains("「復習する」") == true)
+                XCTAssertTrue(view.canUndo)
+                XCTAssertEqual(try repo.session()?.id, id)
+                XCTAssertEqual(try repo.session()?.undoLogID, undo)
+                XCTAssertEqual(try repo.scope(), scope)
+            }
+            // Reads do not change persisted state; resume only advances draft timing.
+            let afterReads = try BackupData.capture(repo).canonical()
+            _ = try repo.presentation(now: due)
+            XCTAssertEqual(try BackupData.capture(repo).canonical(), afterReads)
+            repo.save = { _ in throw Failure.save }
+            XCTAssertThrowsError(try repo.completeSession(now: due))
+            XCTAssertEqual(try BackupData.capture(repo).canonical(), afterReads)
+            repo.save = { try $0.save() }
+            try repo.undo(now: due)
+            XCTAssertNotNil(try repo.presentation(now: due)?.card)
+            try revealAndGrade(repo, grade: .easy, date: now)
+            try repo.completeSession(now: due)
+            XCTAssertThrowsError(try repo.undo(now: due))
+            for mode in [StudyMode.review, .mixed] {
+                try repo.start(mode: mode, now: due)
+                XCTAssertEqual(try repo.presentation(now: due)?.card?.cardID, card.id)
+            }
+        }
+    }
+
+    func testSiblingCauseRequiresActualQueueBlockAndResetsAtDayBoundary() throws {
+        let repo = try fixture()
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Front", answer: "Back", reverseEnabled: true), now: now)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        let boundary = StudyDay(calendar: repo.calendar, startHour: 4).interval(containing: now).end
+        XCTAssertEqual(try repo.presentation(now: boundary.addingTimeInterval(-1))?.emptyState?.reason, .siblings)
+        var settings = try repo.settings(); settings.siblingBuryEnabled = false
+        try repo.updateSettings(settings)
+        XCTAssertEqual(try repo.presentation(now: now)?.emptyState?.reason, .retry)
+        try repo.resume(now: now)
+        XCTAssertNotNil(try repo.presentation(now: now)?.card)
+        try repo.undo(now: now)
+        try repo.updateSettings(StudySettings())
+        try revealAndGrade(repo, grade: .easy, date: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.emptyState?.reason, .siblings)
+        XCTAssertEqual(try repo.presentation(now: boundary)?.emptyState?.reason, .retry)
+        try repo.resume(now: boundary)
+        XCTAssertNotNil(try repo.presentation(now: boundary)?.card)
+    }
+
+    func testCombinedQuotaAndSiblingRulesAreNotFalselyAttributed() throws {
+        let repo = try fixture()
+        var settings = try repo.settings(); settings.dailyNewLimit = 1
+        try repo.updateSettings(settings)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Front", answer: "Back", reverseEnabled: true), now: now)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.emptyState?.reason, .retry)
+        settings.siblingBuryEnabled = false; try repo.updateSettings(settings)
+        XCTAssertEqual(try repo.presentation(now: now)?.emptyState?.reason, .newLimit)
+        settings.dailyNewLimit = 2; try repo.updateSettings(settings)
+        XCTAssertEqual(try repo.presentation(now: now)?.emptyState?.reason, .retry)
+        try repo.resume(now: now)
+        XCTAssertNotNil(try repo.presentation(now: now)?.card)
+    }
+
+    func testNewSessionExcludesUntouchedShortReviewEvenWhenDue() throws {
+        let repo = try fixture(); try create(repo)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .again, date: now)
+        let shortDue = try XCTUnwrap(repo.presentation(now: now)?.nextShortDue)
+        try repo.completeSession(now: now)
+        try create(repo); try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        let view = try XCTUnwrap(repo.presentation(now: shortDue))
+        XCTAssertNil(view.nextShortDue)
+        XCTAssertEqual(view.emptyState?.reason, .complete)
+        try repo.resume(now: shortDue)
+        XCTAssertNil(try repo.presentation(now: shortDue)?.card)
+        try repo.completeSession(now: shortDue)
+        try repo.start(mode: .review, now: shortDue)
+        XCTAssertNotNil(try repo.presentation(now: shortDue)?.card)
+    }
+
+    func testFutureUntouchedReviewIsWaitingRatherThanCompleted() throws {
+        let repo = try fixture(); try create(repo); try create(repo)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(3600))
+        let firstDue = try XCTUnwrap(repo.cards().map(\.dueDate).min())
+        try repo.start(mode: .review, now: firstDue)
+        try revealAndGrade(repo, grade: .easy, date: firstDue)
+        XCTAssertEqual(try repo.presentation(now: firstDue)?.emptyState?.reason, .reviewWaiting)
+        XCTAssertNil(try repo.presentation(now: firstDue)?.nextShortDue)
+    }
+
     func testReviewEmptyCompletionUndoAndAtomicFailure() throws {
         for mode in StudyMode.allCases {
             var date = now
