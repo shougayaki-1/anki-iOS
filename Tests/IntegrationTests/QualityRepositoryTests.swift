@@ -71,7 +71,13 @@ final class QualityRepositoryTests: XCTestCase {
         XCTAssertEqual(restored.counts.learnedToday, 0)
         XCTAssertEqual(restored.counts.answerCount, 0)
         XCTAssertEqual(restored.globalCounts.due, 1)
-        restored.refreshStatistics(); XCTAssertEqual(restored.statistics?.days.first?.cards, 0)
+        restored.refreshStatistics()
+        for _ in 0..<100 {
+            if !restored.statisticsLoading { break }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertNil(restored.statisticsError)
+        XCTAssertEqual(restored.statistics?.days.first?.cards, 0)
         try await Task.sleep(for: .milliseconds(300))
     }
 
