@@ -4,6 +4,7 @@ struct NoteEditorView: View {
     @Bindable var store: StudyStore
     let item: NoteItem?
     @Environment(\.dismiss) private var dismiss
+    @FocusedValue(\.numericSettingEditing) private var numericSettingEditing
     @State private var input: NoteInput
     @State private var tagText: String
     @State private var historyChoice = false
@@ -108,8 +109,10 @@ struct NoteEditorView: View {
             .navigationTitle(item == nil ? "カード追加" : "カード編集")
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                    if numericSettingEditing != true {
+                        Spacer()
+                        Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                    }
                 }
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.accessibilityIdentifier("closeEditor").accessibilityHint("入力中の下書きを保持します") }
                 ToolbarItem(placement: .confirmationAction) {

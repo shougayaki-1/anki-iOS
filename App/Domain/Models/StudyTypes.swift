@@ -65,6 +65,10 @@ struct NoteInput: Codable, Equatable {
 }
 
 struct StudySettings: Equatable {
+    static let newLimitRange = 0...500
+    static let goalRange = 1...500
+    static let dayStartRange = 0...23
+    static let retentionPercentRange = 80...97
     var desiredRetention = 0.9
     var dailyNewLimit = 10
     var dailyGoal: Int? = 20
@@ -73,6 +77,28 @@ struct StudySettings: Equatable {
     var notification = NotificationOptions()
     var hapticsMode = HapticsMode.standard
     var reviewAppearance = ReviewAppearance()
+}
+
+enum NumericSettingsInput {
+    static func percentageText(_ value: Double) -> String {
+        let text = String(value * 100)
+        return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
+    }
+    static func integer(_ text: String, in range: ClosedRange<Int>) -> Int? {
+        guard !text.isEmpty, text.utf8.allSatisfy({ (48...57).contains($0) }),
+              let value = Int(text), range.contains(value) else { return nil }
+        return value
+    }
+
+    /// Mask coordinates may come from a drag, so preserve fractional percentages.
+    static func percentage(_ text: String, lower: Double, upper: Double) -> Double? {
+        let parts = text.split(separator: ".", omittingEmptySubsequences: false)
+        guard (1...2).contains(parts.count), parts.allSatisfy({
+            !$0.isEmpty && $0.utf8.allSatisfy { (48...57).contains($0) }
+        }), let value = Double(text), value.isFinite,
+              value >= lower, value <= upper else { return nil }
+        return value / 100
+    }
 }
 
 struct DeckItem: Identifiable {

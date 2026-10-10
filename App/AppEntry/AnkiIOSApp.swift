@@ -94,6 +94,10 @@ struct AppRootView: View {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
                     try store.reload()
                 }
+                if studyURL != nil, args.contains("-study-test-numeric-mask"), let store {
+                    try UITestFixtures.populateMask(store.repository, now: store.clock())
+                    try store.reload()
+                }
                 #endif
             }
             container = probe

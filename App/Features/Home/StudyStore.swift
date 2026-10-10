@@ -107,6 +107,22 @@ final class StudyStore {
     }
 
     @discardableResult
+    func updateSettings(_ edit: (inout StudySettings) -> Void) -> Bool {
+        var value = settings
+        edit(&value)
+        do { try repository.updateSettings(value) }
+        catch { failure = error.localizedDescription; return false }
+        // Publish the committed settings even if a later screen refresh fails.
+        settings = value
+        do { try reload() }
+        catch {
+            homeFailure = error.localizedDescription
+            failure = "設定は保存しましたが画面を更新できません。再表示してください。\n" + error.localizedDescription
+        }
+        return true
+    }
+
+    @discardableResult
     func perform(_ work: () throws -> Void) -> Bool {
         do { try work() }
         catch { failure = error.localizedDescription; return false }
