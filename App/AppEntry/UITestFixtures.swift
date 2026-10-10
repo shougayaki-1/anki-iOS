@@ -74,6 +74,19 @@ enum UITestFixtures {
         try repository.createNote(NoteInput(deckID: child, question: "Only A", answer: "A", tagNames: ["A"]), now: now)
         try repository.createNote(NoteInput(deckID: other, question: "Other card", answer: "A", tagNames: ["A", "B"]), now: now)
     }
+    @MainActor static func populateMask(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 80), format: format).image { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 120, height: 80))
+        }
+        let imageID = try repository.addImage(image.pngData()!, now: now)
+        let deckID = try repository.decks()[0].id
+        let input = NoteInput(deckID: deckID, kind: .imageOcclusion,
+                              question: "Numeric mask fixture", imageID: imageID,
+                              masks: [ImageMask(rect: MaskRect(x: 0.25, y: 0.25, width: 0.5, height: 0.25))])
+        try repository.createNote(input, now: now)
+    }
     static func prepare(name: String) throws {
         guard UUID(uuidString: name) != nil else { throw StudyError.invalidContent }
         let documents = URL.documentsDirectory

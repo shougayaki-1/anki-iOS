@@ -75,8 +75,8 @@ final class StudyRepository {
                              reviewAppearance: options.reviewAppearance ?? ReviewAppearance())
     }
     func updateSettings(_ value: StudySettings) throws {
-        guard (0.8...0.97).contains(value.desiredRetention), value.dailyNewLimit >= 0,
-              (0...23).contains(value.dayStartHour), (0...23).contains(value.notification.hour), (0...59).contains(value.notification.minute), value.dailyGoal == nil || value.dailyGoal! > 0 else {
+        guard (0.8...0.97).contains(value.desiredRetention), StudySettings.newLimitRange.contains(value.dailyNewLimit),
+              StudySettings.dayStartRange.contains(value.dayStartHour), (0...23).contains(value.notification.hour), (0...59).contains(value.notification.minute), value.dailyGoal == nil || StudySettings.goalRange.contains(value.dailyGoal!) else {
             throw StudyError.invalidContent
         }
         try transaction {

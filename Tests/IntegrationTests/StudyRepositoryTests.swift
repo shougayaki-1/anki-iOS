@@ -132,6 +132,59 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertNil(try repo.presentation(now: firstDue)?.nextShortDue)
     }
 
+    func testNumericSettingsBoundariesPersistenceAndFailure() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        for _ in 0..<12 { try create(repo) }
+        try store.reload()
+        for limit in [200, 10, 0, 500] {
+            XCTAssertTrue(store.updateSettings { $0.dailyNewLimit = limit })
+            XCTAssertEqual(store.counts.newRemaining, min(limit, 12))
+            XCTAssertEqual(try repo.settings().dailyNewLimit, limit)
+        }
+        for goal in [200, 1, 500] {
+            XCTAssertTrue(store.updateSettings { $0.dailyGoal = goal })
+            XCTAssertEqual(try repo.settings().dailyGoal, goal)
+        }
+        for hour in [0, 23, 4] {
+            XCTAssertTrue(store.updateSettings { $0.dayStartHour = hour })
+            XCTAssertEqual(try repo.settings().dayStartHour, hour)
+        }
+        let before = try BackupData.capture(repo).canonical()
+        for edit: (inout StudySettings) -> Void in [
+            { $0.dailyNewLimit = 501 }, { $0.dailyNewLimit = -1 },
+            { $0.dailyGoal = 0 }, { $0.dailyGoal = 501 },
+            { $0.dayStartHour = 24 }, { $0.desiredRetention = 0.98 }
+        ] {
+            var value = store.settings; edit(&value)
+            XCTAssertThrowsError(try repo.updateSettings(value))
+            XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        }
+        repo.save = { _ in throw Failure.save }
+        XCTAssertFalse(store.updateSettings { $0.dailyNewLimit = 200 })
+        XCTAssertEqual(store.settings.dailyNewLimit, 500)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        XCTAssertNotNil(store.failure)
+    }
+
+    func testRetentionEditsPreserveScheduleAndHistory() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        try create(repo)
+        store.start(.new); store.draft(revealed: true); store.grade(.easy)
+        let cards = try repo.cards().map { ($0.id, $0.dueDate, $0.fsrsPayload) }
+        let logs = try repo.logs().map(\.id)
+        for percent in [80, 90, 97] {
+            XCTAssertTrue(store.updateSettings { $0.desiredRetention = Double(percent) / 100 })
+            XCTAssertEqual(store.settings.desiredRetention, Double(percent) / 100)
+            XCTAssertEqual(try repo.logs().map(\.id), logs)
+            let after = try repo.cards()
+            XCTAssertEqual(after.map(\.id), cards.map { $0.0 })
+            XCTAssertEqual(after.map(\.dueDate), cards.map { $0.1 })
+            XCTAssertEqual(after.map(\.fsrsPayload), cards.map { $0.2 })
+        }
+    }
+
     func testReviewEmptyCompletionUndoAndAtomicFailure() throws {
         for mode in StudyMode.allCases {
             var date = now

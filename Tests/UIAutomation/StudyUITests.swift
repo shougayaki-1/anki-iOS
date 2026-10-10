@@ -45,13 +45,76 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func editNumber(_ app: XCUIApplication, id: String, text: String, done: Bool = true) {
+        let field = app.textFields[id]
+        for _ in 0..<25 where !field.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)))
+        }
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        app.buttons[id + "Clear"].tap()
+        field.typeText(text)
+        if done { app.buttons[id + "Done"].tap() }
+    }
+
+    func testNumericSettingsLargestTypeAndDarkMode() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-accessibility"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["設定"].tap()
+        editNumber(app, id: "dailyNewLimit", text: "200")
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("200") == true)
+        XCTAssertEqual(app.textFields["dailyNewLimit"].label, "1日の新規上限")
+        attach(app, "Issue42-largest-type-dark")
+    }
+
+    func testNumericSettingsDirectInputValidationCancellationAndRelaunch() {
+        let app = app()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["設定"].tap()
+        for value in ["200", "10", "0", "500"] {
+            editNumber(app, id: "dailyNewLimit", text: value)
+            XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains(value) == true)
+        }
+        editNumber(app, id: "dailyNewLimit", text: "501")
+        XCTAssertTrue(app.staticTexts["dailyNewLimitError"].exists)
+        app.buttons["dailyNewLimitCancel"].tap()
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("500") == true)
+        editNumber(app, id: "dailyNewLimit", text: "200", done: false)
+        app.buttons["dailyNewLimitCancel"].tap()
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("500") == true)
+        for value in ["200", "1", "500"] { editNumber(app, id: "dailyGoal", text: value) }
+        let toggle = app.switches["dailyGoalToggle"]
+        for _ in 0..<5 where toggle.frame.minY < 100 { app.swipeDown() }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.textFields["dailyGoal"])
+        waitForExpectations(timeout: 5)
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap(); XCTAssertTrue((app.textFields["dailyGoal"].value as? String)?.contains("500") == true)
+        for value in ["0", "23"] { editNumber(app, id: "dayStartHour", text: value) }
+        for value in ["80", "90", "97"] { editNumber(app, id: "desiredRetention", text: value) }
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["設定"].tap()
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("500") == true)
+        XCTAssertTrue((app.textFields["dailyGoal"].value as? String)?.contains("500") == true)
+        let field = app.textFields["dayStartHour"]
+        for _ in 0..<25 where !field.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)))
+        }
+        XCTAssertTrue((field.value as? String)?.contains("23") == true)
+        attach(app, "Issue42-numeric-settings")
+    }
+
     func testNewLimitNavigationRefreshAndRelaunch() {
         let app = app()
         create(app, question: "Limit question", answer: "Limit answer")
         app.tabBars.buttons["設定"].tap()
-        let limit = app.steppers["dailyNewLimit"]
+        let limit = app.textFields["dailyNewLimit"]
         XCTAssertTrue(limit.waitForExistence(timeout: 5))
-        for _ in 0..<10 { limit.buttons["dailyNewLimit-Decrement"].tap() }
+        editNumber(app, id: "dailyNewLimit", text: "0")
         app.tabBars.buttons["ホーム"].tap()
         let change = app.buttons["changeNewLimit"]
         scrollTo(change, app: app)
@@ -60,7 +123,7 @@ final class StudyUITests: XCTestCase {
         attach(app, "Issue36-limit-reached")
         change.tap()
         XCTAssertTrue(app.navigationBars["学習設定"].waitForExistence(timeout: 5))
-        app.steppers["dailyNewLimit"].buttons["dailyNewLimit-Increment"].tap()
+        editNumber(app, id: "dailyNewLimit", text: "1")
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["start-new"].isEnabled)
