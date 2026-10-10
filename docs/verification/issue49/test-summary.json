@@ -1,0 +1,1346 @@
+{
+  "date": "2026-10-10",
+  "baseCommit": "74fe885",
+  "primary": {
+    "bundle": "/private/tmp/anki-issue49-main-final.xcresult",
+    "summary": {
+      "devicesAndConfigurations": [
+        {
+          "device": {
+            "architecture": "arm64",
+            "deviceId": "622E0166-B007-4976-AF1D-77381FC7C1BF",
+            "deviceName": "iPhone 17 Pro",
+            "modelName": "iPhone 17 Pro",
+            "osBuildNumber": "23F77",
+            "osVersion": "26.5",
+            "platform": "iOS Simulator"
+          },
+          "expectedFailures": 0,
+          "failedTests": 0,
+          "passedTests": 108,
+          "skippedTests": 1,
+          "testPlanConfiguration": {
+            "configurationId": "1",
+            "configurationName": "Test Scheme Action"
+          }
+        }
+      ],
+      "environmentDescription": "AnkiIOS · Built with macOS 27.0.1",
+      "expectedFailures": 0,
+      "failedTests": 0,
+      "finishTime": 1791620820.177,
+      "passedTests": 108,
+      "result": "Passed",
+      "runtimeWarnings": [
+        {
+          "issueType": "Runtime Warning",
+          "message": "Invalid frame dimension (negative or non-finite)."
+        },
+        {
+          "issueType": "Runtime Warning",
+          "message": "Invalid frame dimension (negative or non-finite)."
+        },
+        {
+          "issueType": "Runtime Warning",
+          "message": "Invalid frame dimension (negative or non-finite)."
+        },
+        {
+          "issueType": "Runtime Warning",
+          "message": "Invalid frame dimension (negative or non-finite)."
+        }
+      ],
+      "skippedTests": 1,
+      "startTime": 1791620509.28,
+      "statistics": [],
+      "testFailures": [],
+      "title": "Test - AnkiIOS",
+      "topInsights": [
+        {
+          "category": "Longest Test Runs",
+          "impact": "72% of duration",
+          "text": "1 longest test run with outlier durations exceeding 3.28s (three standard deviations)"
+        }
+      ],
+      "totalTestCount": 109
+    },
+    "tests": {
+      "devices": [
+        {
+          "architecture": "arm64",
+          "deviceId": "622E0166-B007-4976-AF1D-77381FC7C1BF",
+          "deviceName": "iPhone 17 Pro",
+          "modelName": "iPhone 17 Pro",
+          "osBuildNumber": "23F77",
+          "osVersion": "26.5",
+          "platform": "iOS Simulator"
+        }
+      ],
+      "testNodes": [
+        {
+          "children": [
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "duration": "0.17s",
+                      "durationInSeconds": 0.1711040735244751,
+                      "name": "testFailedStagedSavePreservesActivePointerAndOriginalData()",
+                      "nodeIdentifier": "BackupRepositoryTests/testFailedStagedSavePreservesActivePointerAndOriginalData()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/BackupRepositoryTests/testFailedStagedSavePreservesActivePointerAndOriginalData",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.12s",
+                      "durationInSeconds": 0.12028896808624268,
+                      "name": "testFullBackupRestoresAllModelsMediaAndUndoAfterReopening()",
+                      "nodeIdentifier": "BackupRepositoryTests/testFullBackupRestoresAllModelsMediaAndUndoAfterReopening()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/BackupRepositoryTests/testFullBackupRestoresAllModelsMediaAndUndoAfterReopening",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.03s",
+                      "durationInSeconds": 0.030176997184753418,
+                      "name": "testHistoricalDeletedCardsAndLegacyOptionsRemainValid()",
+                      "nodeIdentifier": "BackupRepositoryTests/testHistoricalDeletedCardsAndLegacyOptionsRemainValid()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/BackupRepositoryTests/testHistoricalDeletedCardsAndLegacyOptionsRemainValid",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.11s",
+                      "durationInSeconds": 0.11447799205780029,
+                      "name": "testLegacyBackupWithoutHintKeysRestoresNotesAndEditorDraft()",
+                      "nodeIdentifier": "BackupRepositoryTests/testLegacyBackupWithoutHintKeysRestoresNotesAndEditorDraft()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/BackupRepositoryTests/testLegacyBackupWithoutHintKeysRestoresNotesAndEditorDraft",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.069s",
+                      "durationInSeconds": 0.06869399547576904,
+                      "name": "testRehashedMalformedDataIsRejectedBeforeRestore()",
+                      "nodeIdentifier": "BackupRepositoryTests/testRehashedMalformedDataIsRejectedBeforeRestore()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/BackupRepositoryTests/testRehashedMalformedDataIsRejectedBeforeRestore",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "BackupRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/BackupRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.0011s",
+                      "durationInSeconds": 0.0011169910430908203,
+                      "name": "testClozeStableIDsRepeatedIDsHintsAndUnicode()",
+                      "nodeIdentifier": "CardGenerationTests/testClozeStableIDsRepeatedIDsHintsAndUnicode()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/CardGenerationTests/testClozeStableIDsRepeatedIDsHintsAndUnicode",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00051s",
+                      "durationInSeconds": 0.0005060434341430664,
+                      "name": "testHintCompatibilityAndSharedVariants()",
+                      "nodeIdentifier": "CardGenerationTests/testHintCompatibilityAndSharedVariants()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/CardGenerationTests/testHintCompatibilityAndSharedVariants",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00042s",
+                      "durationInSeconds": 0.0004240274429321289,
+                      "name": "testReverseCardHasStableVariantAndSwapsDisplay()",
+                      "nodeIdentifier": "CardGenerationTests/testReverseCardHasStableVariantAndSwapsDisplay()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/CardGenerationTests/testReverseCardHasStableVariantAndSwapsDisplay",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "CardGenerationTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/CardGenerationTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.026s",
+                      "durationInSeconds": 0.026250004768371582,
+                      "name": "testPastedClozeGeneratesIndependentCardsAndBuriesSiblings()",
+                      "nodeIdentifier": "ClozeRepositoryTests/testPastedClozeGeneratesIndependentCardsAndBuriesSiblings()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ClozeRepositoryTests/testPastedClozeGeneratesIndependentCardsAndBuriesSiblings",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.018s",
+                      "durationInSeconds": 0.017967939376831055,
+                      "name": "testThreeClozeCardsRegenerateWithIDsAndFSRSHistoryIntact()",
+                      "nodeIdentifier": "ClozeRepositoryTests/testThreeClozeCardsRegenerateWithIDsAndFSRSHistoryIntact()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ClozeRepositoryTests/testThreeClozeCardsRegenerateWithIDsAndFSRSHistoryIntact",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "ClozeRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ClozeRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.00057s",
+                      "durationInSeconds": 0.0005700588226318359,
+                      "name": "testCSVQuotedCommasNewlinesQuotesAndHeaderMapping()",
+                      "nodeIdentifier": "ImportParserTests/testCSVQuotedCommasNewlinesQuotesAndHeaderMapping()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ImportParserTests/testCSVQuotedCommasNewlinesQuotesAndHeaderMapping",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00047s",
+                      "durationInSeconds": 0.00047206878662109375,
+                      "name": "testHintHeaderMappingExplicitBlankAndAbsentColumn()",
+                      "nodeIdentifier": "ImportParserTests/testHintHeaderMappingExplicitBlankAndAbsentColumn()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ImportParserTests/testHintHeaderMappingExplicitBlankAndAbsentColumn",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00048s",
+                      "durationInSeconds": 0.0004750490188598633,
+                      "name": "testPasteQAAndPlainTextRemainEditable()",
+                      "nodeIdentifier": "ImportParserTests/testPasteQAAndPlainTextRemainEditable()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ImportParserTests/testPasteQAAndPlainTextRemainEditable",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00098s",
+                      "durationInSeconds": 0.0009840726852416992,
+                      "name": "testTSVBlankFieldsAndInvalidCSV()",
+                      "nodeIdentifier": "ImportParserTests/testTSVBlankFieldsAndInvalidCSV()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ImportParserTests/testTSVBlankFieldsAndInvalidCSV",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "ImportParserTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ImportParserTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.023s",
+                      "durationInSeconds": 0.02285301685333252,
+                      "name": "testBulkDeleteKeepsHistoryAndClearsOnlyAffectedSessionAndEditorReferences()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testBulkDeleteKeepsHistoryAndClearsOnlyAffectedSessionAndEditorReferences()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testBulkDeleteKeepsHistoryAndClearsOnlyAffectedSessionAndEditorReferences",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.014s",
+                      "durationInSeconds": 0.01400601863861084,
+                      "name": "testBulkEmptyMissingStaleContentDraftAndNewSiblingRejectWithoutPartialSuccess()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testBulkEmptyMissingStaleContentDraftAndNewSiblingRejectWithoutPartialSuccess()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testBulkEmptyMissingStaleContentDraftAndNewSiblingRejectWithoutPartialSuccess",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.052s",
+                      "durationInSeconds": 0.05158495903015137,
+                      "name": "testBulkMetadataExpandsSiblingsPreservesFSRSHistoryAndDraftText()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testBulkMetadataExpandsSiblingsPreservesFSRSHistoryAndDraftText()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testBulkMetadataExpandsSiblingsPreservesFSRSHistoryAndDraftText",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.029s",
+                      "durationInSeconds": 0.028890013694763184,
+                      "name": "testBulkSaveFailureRollsBackMoveTagsSuspendAndDelete()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testBulkSaveFailureRollsBackMoveTagsSuspendAndDelete()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testBulkSaveFailureRollsBackMoveTagsSuspendAndDelete",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.013s",
+                      "durationInSeconds": 0.013489961624145508,
+                      "name": "testBulkSuspensionChangesOnlySelectedCardAndNoopDoesNotSave()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testBulkSuspensionChangesOnlySelectedCardAndNoopDoesNotSave()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testBulkSuspensionChangesOnlySelectedCardAndNoopDoesNotSave",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.008s",
+                      "durationInSeconds": 0.007951974868774414,
+                      "name": "testFailedImportLeavesNoNotesCardsTagsOrBatch()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testFailedImportLeavesNoNotesCardsTagsOrBatch()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testFailedImportLeavesNoNotesCardsTagsOrBatch",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.015s",
+                      "durationInSeconds": 0.0148240327835083,
+                      "name": "testHierarchyScopeAndCyclePreventionPreserveCardIDs()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testHierarchyScopeAndCyclePreventionPreserveCardIDs()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testHierarchyScopeAndCyclePreventionPreserveCardIDs",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.029s",
+                      "durationInSeconds": 0.028930068016052246,
+                      "name": "testHintEditsDraftsAndImportsPreserveScheduleAndNewSlots()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testHintEditsDraftsAndImportsPreserveScheduleAndNewSlots()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testHintEditsDraftsAndImportsPreserveScheduleAndNewSlots",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.014s",
+                      "durationInSeconds": 0.013514995574951172,
+                      "name": "testHintOnlyEditOfLegacyContentPreservesActiveSession()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testHintOnlyEditOfLegacyContentPreservesActiveSession()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testHintOnlyEditOfLegacyContentPreservesActiveSession",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.031s",
+                      "durationInSeconds": 0.030507922172546387,
+                      "name": "testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.011s",
+                      "durationInSeconds": 0.011181950569152832,
+                      "name": "testHomeFilterSaveFailureAndInvalidReferences()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testHomeFilterSaveFailureAndInvalidReferences()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testHomeFilterSaveFailureAndInvalidReferences",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.018s",
+                      "durationInSeconds": 0.018476009368896484,
+                      "name": "testImportSkipsDuplicatesWithinBatchAndKeepsHistory()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testImportSkipsDuplicatesWithinBatchAndKeepsHistory()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testImportSkipsDuplicatesWithinBatchAndKeepsHistory",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.25s",
+                      "durationInSeconds": 0.2504580020904541,
+                      "name": "testMigrationFromPhase1DiskStorePreservesEveryExistingRecord()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testMigrationFromPhase1DiskStorePreservesEveryExistingRecord()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testMigrationFromPhase1DiskStorePreservesEveryExistingRecord",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00047s",
+                      "durationInSeconds": 0.00047397613525390625,
+                      "name": "testSiblingBuryDoesNotModifyFSRSAndShortLearningIsExempt()",
+                      "nodeIdentifier": "LibraryRepositoryTests/testSiblingBuryDoesNotModifyFSRSAndShortLearningIsExempt()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests/testSiblingBuryDoesNotModifyFSRSAndShortLearningIsExempt",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "LibraryRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/LibraryRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.018s",
+                      "durationInSeconds": 0.01845097541809082,
+                      "name": "testDeletionRemovesEditDraftAndBrokenReferencesPreventCleanup()",
+                      "nodeIdentifier": "MediaRepositoryTests/testDeletionRemovesEditDraftAndBrokenReferencesPreventCleanup()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testDeletionRemovesEditDraftAndBrokenReferencesPreventCleanup",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0023s",
+                      "durationInSeconds": 0.002333998680114746,
+                      "name": "testDirectoryURLsAndSymlinkEscapeAreHandledSafely()",
+                      "nodeIdentifier": "MediaRepositoryTests/testDirectoryURLsAndSymlinkEscapeAreHandledSafely()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testDirectoryURLsAndSymlinkEscapeAreHandledSafely",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.023s",
+                      "durationInSeconds": 0.02256596088409424,
+                      "name": "testDraftCommitFailureAndOrphanCleanupProtectReferencedImages()",
+                      "nodeIdentifier": "MediaRepositoryTests/testDraftCommitFailureAndOrphanCleanupProtectReferencedImages()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testDraftCommitFailureAndOrphanCleanupProtectReferencedImages",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.012s",
+                      "durationInSeconds": 0.012076973915100098,
+                      "name": "testFailedAssetSaveCleansFileAndInvalidPathsAreRejected()",
+                      "nodeIdentifier": "MediaRepositoryTests/testFailedAssetSaveCleansFileAndInvalidPathsAreRejected()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testFailedAssetSaveCleansFileAndInvalidPathsAreRejected",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.042s",
+                      "durationInSeconds": 0.0420910120010376,
+                      "name": "testMasksAndImageReferenceSurviveRegenerationAndDiskReopen()",
+                      "nodeIdentifier": "MediaRepositoryTests/testMasksAndImageReferenceSurviveRegenerationAndDiskReopen()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testMasksAndImageReferenceSurviveRegenerationAndDiskReopen",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0047s",
+                      "durationInSeconds": 0.004734039306640625,
+                      "name": "testNormalizedGeometryAndCrop()",
+                      "nodeIdentifier": "MediaRepositoryTests/testNormalizedGeometryAndCrop()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testNormalizedGeometryAndCrop",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.052s",
+                      "durationInSeconds": 0.051934003829956055,
+                      "name": "testV2ToV3MigrationKeepsTagsScopeAndPreferences()",
+                      "nodeIdentifier": "MediaRepositoryTests/testV2ToV3MigrationKeepsTagsScopeAndPreferences()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testV2ToV3MigrationKeepsTagsScopeAndPreferences",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.45s",
+                      "durationInSeconds": 0.4489809274673462,
+                      "name": "testVisionOCRRecognizesJapaneseLocalFixture()",
+                      "nodeIdentifier": "MediaRepositoryTests/testVisionOCRRecognizesJapaneseLocalFixture()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testVisionOCRRecognizesJapaneseLocalFixture",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.32s",
+                      "durationInSeconds": 0.3173539638519287,
+                      "name": "testVisionOCRRecognizesLocalFixture()",
+                      "nodeIdentifier": "MediaRepositoryTests/testVisionOCRRecognizesLocalFixture()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests/testVisionOCRRecognizesLocalFixture",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "MediaRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/MediaRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.0016s",
+                      "durationInSeconds": 0.001598954200744629,
+                      "name": "testActualDueTimeAndOverdueAcrossThirtyDayHorizon()",
+                      "nodeIdentifier": "NotificationPlannerTests/testActualDueTimeAndOverdueAcrossThirtyDayHorizon()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationPlannerTests/testActualDueTimeAndOverdueAcrossThirtyDayHorizon",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0013s",
+                      "durationInSeconds": 0.0012619495391845703,
+                      "name": "testCompletionCancelsUndoReschedulesDeliveredNotRepeatedAndUnrelatedKept()",
+                      "nodeIdentifier": "NotificationPlannerTests/testCompletionCancelsUndoReschedulesDeliveredNotRepeatedAndUnrelatedKept()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationPlannerTests/testCompletionCancelsUndoReschedulesDeliveredNotRepeatedAndUnrelatedKept",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0011s",
+                      "durationInSeconds": 0.0011370182037353516,
+                      "name": "testDSTAndTimeZoneChangeReplaceTriggersUsingLocalCalendar()",
+                      "nodeIdentifier": "NotificationPlannerTests/testDSTAndTimeZoneChangeReplaceTriggersUsingLocalCalendar()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationPlannerTests/testDSTAndTimeZoneChangeReplaceTriggersUsingLocalCalendar",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00032s",
+                      "durationInSeconds": 0.00032007694244384766,
+                      "name": "testNewSuspendedDisabledAndDeniedHaveNoNotifications()",
+                      "nodeIdentifier": "NotificationPlannerTests/testNewSuspendedDisabledAndDeniedHaveNoNotifications()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationPlannerTests/testNewSuspendedDisabledAndDeniedHaveNoNotifications",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.001s",
+                      "durationInSeconds": 0.0010499954223632812,
+                      "name": "testTestNamespacesAreIsolatedAndIdentifiersUseGregorianDates()",
+                      "nodeIdentifier": "NotificationPlannerTests/testTestNamespacesAreIsolatedAndIdentifiersUseGregorianDates()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationPlannerTests/testTestNamespacesAreIsolatedAndIdentifiersUseGregorianDates",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "NotificationPlannerTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationPlannerTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.00057s",
+                      "durationInSeconds": 0.0005650520324707031,
+                      "name": "testOffForegroundDoesNotRequestPermissionAndEnableIsExplicit()",
+                      "nodeIdentifier": "NotificationServiceTests/testOffForegroundDoesNotRequestPermissionAndEnableIsExplicit()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationServiceTests/testOffForegroundDoesNotRequestPermissionAndEnableIsExplicit",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0024s",
+                      "durationInSeconds": 0.002398967742919922,
+                      "name": "testReconciliationIsIdempotentAndCompletionOffAndDenialCancel()",
+                      "nodeIdentifier": "NotificationServiceTests/testReconciliationIsIdempotentAndCompletionOffAndDenialCancel()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationServiceTests/testReconciliationIsIdempotentAndCompletionOffAndDenialCancel",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0042s",
+                      "durationInSeconds": 0.004190921783447266,
+                      "name": "testTurningOffDuringInFlightAddCannotLeaveStaleReservation()",
+                      "nodeIdentifier": "NotificationServiceTests/testTurningOffDuringInFlightAddCannotLeaveStaleReservation()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationServiceTests/testTurningOffDuringInFlightAddCannotLeaveStaleReservation",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "NotificationServiceTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/NotificationServiceTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.0005s",
+                      "durationInSeconds": 0.0005019903182983398,
+                      "name": "testCSVModeAliasesOptionalHeadersAndLegacyRows()",
+                      "nodeIdentifier": "OrderingAnswerTests/testCSVModeAliasesOptionalHeadersAndLegacyRows()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests/testCSVModeAliasesOptionalHeadersAndLegacyRows",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00049s",
+                      "durationInSeconds": 0.000492095947265625,
+                      "name": "testDuplicateWordsAreInterchangeableButWrongOrderAndRepeatedIDsFail()",
+                      "nodeIdentifier": "OrderingAnswerTests/testDuplicateWordsAreInterchangeableButWrongOrderAndRepeatedIDsFail()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests/testDuplicateWordsAreInterchangeableButWrongOrderAndRepeatedIDsFail",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0012s",
+                      "durationInSeconds": 0.0011620521545410156,
+                      "name": "testIncorrectRetryAndRemovalKeepFirstAttemptAndShuffleAcrossCodingRoundTrip()",
+                      "nodeIdentifier": "OrderingAnswerTests/testIncorrectRetryAndRemovalKeepFirstAttemptAndShuffleAcrossCodingRoundTrip()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests/testIncorrectRetryAndRemovalKeepFirstAttemptAndShuffleAcrossCodingRoundTrip",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0026s",
+                      "durationInSeconds": 0.002604961395263672,
+                      "name": "testShuffleNeverStartsCorrectEvenWithDuplicateWordsOrBadShuffler()",
+                      "nodeIdentifier": "OrderingAnswerTests/testShuffleNeverStartsCorrectEvenWithDuplicateWordsOrBadShuffler()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests/testShuffleNeverStartsCorrectEvenWithDuplicateWordsOrBadShuffler",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0011s",
+                      "durationInSeconds": 0.0010759830474853516,
+                      "name": "testUnsupportedInputsHaveReasonsAndUnknownModeFallsBack()",
+                      "nodeIdentifier": "OrderingAnswerTests/testUnsupportedInputsHaveReasonsAndUnknownModeFallsBack()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests/testUnsupportedInputsHaveReasonsAndUnknownModeFallsBack",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00044s",
+                      "durationInSeconds": 0.0004420280456542969,
+                      "name": "testWhitespaceContractionsHyphensTitlesAndPunctuationStayInTokens()",
+                      "nodeIdentifier": "OrderingAnswerTests/testWhitespaceContractionsHyphensTitlesAndPunctuationStayInTokens()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests/testWhitespaceContractionsHyphensTitlesAndPunctuationStayInTokens",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "OrderingAnswerTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingAnswerTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.015s",
+                      "durationInSeconds": 0.015290975570678711,
+                      "name": "testImportsKeepExistingModeWithoutColumnAndFallbackForInvalidOrdering()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testImportsKeepExistingModeWithoutColumnAndFallbackForInvalidOrdering()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testImportsKeepExistingModeWithoutColumnAndFallbackForInvalidOrdering",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.045s",
+                      "durationInSeconds": 0.04473006725311279,
+                      "name": "testIncorrectRetryCorrectRequiresOneExplicitGradeAndUndoResetsAnswer()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testIncorrectRetryCorrectRequiresOneExplicitGradeAndUndoResetsAnswer()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testIncorrectRetryCorrectRequiresOneExplicitGradeAndUndoResetsAnswer",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.019s",
+                      "durationInSeconds": 0.018998026847839355,
+                      "name": "testIneligibleSavedDefaultFallsBackAndDeleteClearsOrderingRecord()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testIneligibleSavedDefaultFallsBackAndDeleteClearsOrderingRecord()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testIneligibleSavedDefaultFallsBackAndDeleteClearsOrderingRecord",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.022s",
+                      "durationInSeconds": 0.02195000648498535,
+                      "name": "testModeSwitchTypingPauseReopenAndHintEditKeepOrderingAndHistory()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testModeSwitchTypingPauseReopenAndHintEditKeepOrderingAndHistory()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testModeSwitchTypingPauseReopenAndHintEditKeepOrderingAndHistory",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.32s",
+                      "durationInSeconds": 0.3234339952468872,
+                      "name": "testOrderingImportBackupRestoreAndMissingLegacyField()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testOrderingImportBackupRestoreAndMissingLegacyField()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testOrderingImportBackupRestoreAndMissingLegacyField",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.028s",
+                      "durationInSeconds": 0.027564048767089844,
+                      "name": "testSaveFailureRollsBackSelectionAndCorrectRevealWithoutFSRSWrites()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testSaveFailureRollsBackSelectionAndCorrectRevealWithoutFSRSWrites()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testSaveFailureRollsBackSelectionAndCorrectRevealWithoutFSRSWrites",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.058s",
+                      "durationInSeconds": 0.05754101276397705,
+                      "name": "testV3DiskStoreMigrationPreservesCardsHistoryAndTypedDraft()",
+                      "nodeIdentifier": "OrderingRepositoryTests/testV3DiskStoreMigrationPreservesCardsHistoryAndTypedDraft()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests/testV3DiskStoreMigrationPreservesCardsHistoryAndTypedDraft",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "OrderingRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/OrderingRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.023s",
+                      "durationInSeconds": 0.02309894561767578,
+                      "name": "testDiskStoreReopensWithIdenticalIDStateAndHistory()",
+                      "nodeIdentifier": "PersistenceTests/testDiskStoreReopensWithIdenticalIDStateAndHistory()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/PersistenceTests/testDiskStoreReopensWithIdenticalIDStateAndHistory",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "PersistenceTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/PersistenceTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "name": "Test skipped - 実機のテスト通知診断・後片付けが指定されていません。",
+                          "nodeType": "Skip Message"
+                        }
+                      ],
+                      "duration": "0.0041s",
+                      "durationInSeconds": 0.0040749311447143555,
+                      "name": "testAuthorizedNotificationDiagnosticsAndTestCleanup()",
+                      "nodeIdentifier": "QualityRepositoryTests/testAuthorizedNotificationDiagnosticsAndTestCleanup()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testAuthorizedNotificationDiagnosticsAndTestCleanup",
+                      "nodeType": "Test Case",
+                      "result": "Skipped"
+                    },
+                    {
+                      "duration": "0.015s",
+                      "durationInSeconds": 0.0153350830078125,
+                      "name": "testDeletedDeckDraftFallbackAndInterruptedRestoreImageCleanup()",
+                      "nodeIdentifier": "QualityRepositoryTests/testDeletedDeckDraftFallbackAndInterruptedRestoreImageCleanup()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testDeletedDeckDraftFallbackAndInterruptedRestoreImageCleanup",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.01s",
+                      "durationInSeconds": 0.010218977928161621,
+                      "name": "testExtremeBackupDatesCountersAndSessionDurationAreRejected()",
+                      "nodeIdentifier": "QualityRepositoryTests/testExtremeBackupDatesCountersAndSessionDurationAreRejected()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testExtremeBackupDatesCountersAndSessionDurationAreRejected",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.019s",
+                      "durationInSeconds": 0.019422054290771484,
+                      "name": "testFailedSaveAndFailedDisplayAfterCommitReportDifferentOutcomes()",
+                      "nodeIdentifier": "QualityRepositoryTests/testFailedSaveAndFailedDisplayAfterCommitReportDifferentOutcomes()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testFailedSaveAndFailedDisplayAfterCommitReportDifferentOutcomes",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.64s",
+                      "durationInSeconds": 0.6356450319290161,
+                      "name": "testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications()",
+                      "nodeIdentifier": "QualityRepositoryTests/testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.39s",
+                      "durationInSeconds": 0.39364099502563477,
+                      "name": "testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft()",
+                      "nodeIdentifier": "QualityRepositoryTests/testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0012s",
+                      "durationInSeconds": 0.001237034797668457,
+                      "name": "testIdentityAssetsAndPrimaryButtonContrast()",
+                      "nodeIdentifier": "QualityRepositoryTests/testIdentityAssetsAndPrimaryButtonContrast()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testIdentityAssetsAndPrimaryButtonContrast",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.043s",
+                      "durationInSeconds": 0.04260599613189697,
+                      "name": "testLegacyReviewOptionsAndSettingsDiskRestartPreserveStudyState()",
+                      "nodeIdentifier": "QualityRepositoryTests/testLegacyReviewOptionsAndSettingsDiskRestartPreserveStudyState()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testLegacyReviewOptionsAndSettingsDiskRestartPreserveStudyState",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00089s",
+                      "durationInSeconds": 0.0008890628814697266,
+                      "name": "testTextPaletteContrastAgainstSystemSurfaces()",
+                      "nodeIdentifier": "QualityRepositoryTests/testTextPaletteContrastAgainstSystemSurfaces()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testTextPaletteContrastAgainstSystemSurfaces",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.037s",
+                      "durationInSeconds": 0.03727400302886963,
+                      "name": "testTimeZoneChangeAfterDiskRestartOnlyChangesDailyAggregation()",
+                      "nodeIdentifier": "QualityRepositoryTests/testTimeZoneChangeAfterDiskRestartOnlyChangesDailyAggregation()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests/testTimeZoneChangeAfterDiskRestartOnlyChangesDailyAggregation",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "QualityRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/QualityRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.00078s",
+                      "durationInSeconds": 0.0007779598236083984,
+                      "name": "testFourAMBoundaryAndUniqueGoalCount()",
+                      "nodeIdentifier": "ReviewQueueTests/testFourAMBoundaryAndUniqueGoalCount()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testFourAMBoundaryAndUniqueGoalCount",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00048s",
+                      "durationInSeconds": 0.0004799365997314453,
+                      "name": "testHiddenImagesNeverHideImageOcclusionAndDefaultsStayCompatible()",
+                      "nodeIdentifier": "ReviewQueueTests/testHiddenImagesNeverHideImageOcclusionAndDefaultsStayCompatible()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testHiddenImagesNeverHideImageOcclusionAndDefaultsStayCompatible",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00076s",
+                      "durationInSeconds": 0.000764012336730957,
+                      "name": "testMixedRatioAndGoalDoesNotLimitReviews()",
+                      "nodeIdentifier": "ReviewQueueTests/testMixedRatioAndGoalDoesNotLimitReviews()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testMixedRatioAndGoalDoesNotLimitReviews",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00067s",
+                      "durationInSeconds": 0.0006670951843261719,
+                      "name": "testOverdueAndShortStepsAcrossDays()",
+                      "nodeIdentifier": "ReviewQueueTests/testOverdueAndShortStepsAcrossDays()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testOverdueAndShortStepsAcrossDays",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0007s",
+                      "durationInSeconds": 0.0007020235061645508,
+                      "name": "testSharedNewLimitAcrossAllModesAndSuspension()",
+                      "nodeIdentifier": "ReviewQueueTests/testSharedNewLimitAcrossAllModesAndSuspension()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testSharedNewLimitAcrossAllModesAndSuspension",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0004s",
+                      "durationInSeconds": 0.0003960132598876953,
+                      "name": "testSwipeDirectionsThresholdDiagonalAndRetreat()",
+                      "nodeIdentifier": "ReviewQueueTests/testSwipeDirectionsThresholdDiagonalAndRetreat()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testSwipeDirectionsThresholdDiagonalAndRetreat",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00037s",
+                      "durationInSeconds": 0.00037097930908203125,
+                      "name": "testSwipeGateRejectsChangedCardChangedRevealAndQuickRepeat()",
+                      "nodeIdentifier": "ReviewQueueTests/testSwipeGateRejectsChangedCardChangedRevealAndQuickRepeat()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testSwipeGateRejectsChangedCardChangedRevealAndQuickRepeat",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00085s",
+                      "durationInSeconds": 0.000847935676574707,
+                      "name": "testTimeZoneAndDSTCalendarDays()",
+                      "nodeIdentifier": "ReviewQueueTests/testTimeZoneAndDSTCalendarDays()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests/testTimeZoneAndDSTCalendarDays",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "ReviewQueueTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewQueueTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.00064s",
+                      "durationInSeconds": 0.0006380081176757812,
+                      "name": "testAllFourGradesAndShortTermAgain()",
+                      "nodeIdentifier": "ReviewSchedulerTests/testAllFourGradesAndShortTermAgain()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewSchedulerTests/testAllFourGradesAndShortTermAgain",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00094s",
+                      "durationInSeconds": 0.0009410381317138672,
+                      "name": "testCompleteSnapshotRoundTripAndContinuation()",
+                      "nodeIdentifier": "ReviewSchedulerTests/testCompleteSnapshotRoundTripAndContinuation()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewSchedulerTests/testCompleteSnapshotRoundTripAndContinuation",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00065s",
+                      "durationInSeconds": 0.0006499290466308594,
+                      "name": "testFSRS6InitializationAndReviewLifecycle()",
+                      "nodeIdentifier": "ReviewSchedulerTests/testFSRS6InitializationAndReviewLifecycle()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewSchedulerTests/testFSRS6InitializationAndReviewLifecycle",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0012s",
+                      "durationInSeconds": 0.0012450218200683594,
+                      "name": "testRetrievabilityUsesInjectedTimeAndRetentionBounds()",
+                      "nodeIdentifier": "ReviewSchedulerTests/testRetrievabilityUsesInjectedTimeAndRetentionBounds()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewSchedulerTests/testRetrievabilityUsesInjectedTimeAndRetentionBounds",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "ReviewSchedulerTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ReviewSchedulerTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "10秒",
+                      "durationInSeconds": 10.601351022720337,
+                      "name": "testThousandNotesThreeThousandCardsTenThousandLogsAndBackup()",
+                      "nodeIdentifier": "ScaleRepositoryTests/testThousandNotesThreeThousandCardsTenThousandLogsAndBackup()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ScaleRepositoryTests/testThousandNotesThreeThousandCardsTenThousandLogsAndBackup",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "ScaleRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/ScaleRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.001s",
+                      "durationInSeconds": 0.0010319948196411133,
+                      "name": "testFourAMUniqueCountsStreakRatingsAndRetention()",
+                      "nodeIdentifier": "StatisticsTests/testFourAMUniqueCountsStreakRatingsAndRetention()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StatisticsTests/testFourAMUniqueCountsStreakRatingsAndRetention",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00062s",
+                      "durationInSeconds": 0.000619053840637207,
+                      "name": "testStreakAcrossDSTAtNonexistentTwoAMBoundary()",
+                      "nodeIdentifier": "StatisticsTests/testStreakAcrossDSTAtNonexistentTwoAMBoundary()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StatisticsTests/testStreakAcrossDSTAtNonexistentTwoAMBoundary",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "StatisticsTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StatisticsTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.00046s",
+                      "durationInSeconds": 0.0004620552062988281,
+                      "name": "testStoredZIPRoundTripAndKnownCRC()",
+                      "nodeIdentifier": "StoredZIPTests/testStoredZIPRoundTripAndKnownCRC()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StoredZIPTests/testStoredZIPRoundTripAndKnownCRC",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.00053s",
+                      "durationInSeconds": 0.0005300045013427734,
+                      "name": "testTraversalDuplicateIntegrityCompressionAndSymlinksRejected()",
+                      "nodeIdentifier": "StoredZIPTests/testTraversalDuplicateIntegrityCompressionAndSymlinksRejected()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StoredZIPTests/testTraversalDuplicateIntegrityCompressionAndSymlinksRejected",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.006s",
+                      "durationInSeconds": 0.005982041358947754,
+                      "name": "testTruncationAndRandomInvalidBytesNeverEscapeBounds()",
+                      "nodeIdentifier": "StoredZIPTests/testTruncationAndRandomInvalidBytesNeverEscapeBounds()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StoredZIPTests/testTruncationAndRandomInvalidBytesNeverEscapeBounds",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "StoredZIPTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StoredZIPTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "duration": "0.018s",
+                      "durationInSeconds": 0.017901062965393066,
+                      "name": "testCRUDMaintainsCardIdentityAndHistoryAndModes()",
+                      "nodeIdentifier": "StudyRepositoryTests/testCRUDMaintainsCardIdentityAndHistoryAndModes()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testCRUDMaintainsCardIdentityAndHistoryAndModes",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.041s",
+                      "durationInSeconds": 0.04103994369506836,
+                      "name": "testDiskRestartRestoresDueHistoryAndUnscoredDraft()",
+                      "nodeIdentifier": "StudyRepositoryTests/testDiskRestartRestoresDueHistoryAndUnscoredDraft()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testDiskRestartRestoresDueHistoryAndUnscoredDraft",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.023s",
+                      "durationInSeconds": 0.02305901050567627,
+                      "name": "testEmptySessionSelectsNewCardAtStudyDayBoundaryWithOneSave()",
+                      "nodeIdentifier": "StudyRepositoryTests/testEmptySessionSelectsNewCardAtStudyDayBoundaryWithOneSave()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testEmptySessionSelectsNewCardAtStudyDayBoundaryWithOneSave",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.015s",
+                      "durationInSeconds": 0.015275001525878906,
+                      "name": "testEmptyStartNeverCreatesOrReplacesSession()",
+                      "nodeIdentifier": "StudyRepositoryTests/testEmptyStartNeverCreatesOrReplacesSession()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testEmptyStartNeverCreatesOrReplacesSession",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.049s",
+                      "durationInSeconds": 0.049056053161621094,
+                      "name": "testEveryGradePersistsFSRSAndLogWithExactTime()",
+                      "nodeIdentifier": "StudyRepositoryTests/testEveryGradePersistsFSRSAndLogWithExactTime()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testEveryGradePersistsFSRSAndLogWithExactTime",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.018s",
+                      "durationInSeconds": 0.017604947090148926,
+                      "name": "testFailedGradeAndUndoRollbackEverything()",
+                      "nodeIdentifier": "StudyRepositoryTests/testFailedGradeAndUndoRollbackEverything()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testFailedGradeAndUndoRollbackEverything",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.021s",
+                      "durationInSeconds": 0.020509004592895508,
+                      "name": "testHomeModeAvailabilityWaitingQuotaGoalAndDayBoundary()",
+                      "nodeIdentifier": "StudyRepositoryTests/testHomeModeAvailabilityWaitingQuotaGoalAndDayBoundary()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testHomeModeAvailabilityWaitingQuotaGoalAndDayBoundary",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.056s",
+                      "durationInSeconds": 0.05624401569366455,
+                      "name": "testHomePrimaryActionPreservesEveryInterruptedModeAndOriginalScope()",
+                      "nodeIdentifier": "StudyRepositoryTests/testHomePrimaryActionPreservesEveryInterruptedModeAndOriginalScope()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testHomePrimaryActionPreservesEveryInterruptedModeAndOriginalScope",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.015s",
+                      "durationInSeconds": 0.015465021133422852,
+                      "name": "testHomePrimaryActionUnavailableForQuotaFilterAndFailure()",
+                      "nodeIdentifier": "StudyRepositoryTests/testHomePrimaryActionUnavailableForQuotaFilterAndFailure()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testHomePrimaryActionUnavailableForQuotaFilterAndFailure",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.032s",
+                      "durationInSeconds": 0.03231000900268555,
+                      "name": "testHomePrimaryActionWaitingDueAndCompletionKeepHistory()",
+                      "nodeIdentifier": "StudyRepositoryTests/testHomePrimaryActionWaitingDueAndCompletionKeepHistory()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testHomePrimaryActionWaitingDueAndCompletionKeepHistory",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.021s",
+                      "durationInSeconds": 0.02069699764251709,
+                      "name": "testHomeRefreshKeepsTypedRevealedDraftAndUndoWithoutSaving()",
+                      "nodeIdentifier": "StudyRepositoryTests/testHomeRefreshKeepsTypedRevealedDraftAndUndoWithoutSaving()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testHomeRefreshKeepsTypedRevealedDraftAndUndoWithoutSaving",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.0067s",
+                      "durationInSeconds": 0.006749987602233887,
+                      "name": "testInvalidContentAndFailedCreationLeaveNoPartialRecords()",
+                      "nodeIdentifier": "StudyRepositoryTests/testInvalidContentAndFailedCreationLeaveNoPartialRecords()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testInvalidContentAndFailedCreationLeaveNoPartialRecords",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.028s",
+                      "durationInSeconds": 0.0280989408493042,
+                      "name": "testNewQuotaPersistsAcrossModesAndDecksAndCountsRepeatedCardOnce()",
+                      "nodeIdentifier": "StudyRepositoryTests/testNewQuotaPersistsAcrossModesAndDecksAndCountsRepeatedCardOnce()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testNewQuotaPersistsAcrossModesAndDecksAndCountsRepeatedCardOnce",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.018s",
+                      "durationInSeconds": 0.018314003944396973,
+                      "name": "testUndoRestoresAllStateAndAllowsRegrade()",
+                      "nodeIdentifier": "StudyRepositoryTests/testUndoRestoresAllStateAndAllowsRegrade()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testUndoRestoresAllStateAndAllowsRegrade",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "0.038s",
+                      "durationInSeconds": 0.03795492649078369,
+                      "name": "testWaitingHomeRefreshWritesOnlyWhenDueAndRollsBackFailedSave()",
+                      "nodeIdentifier": "StudyRepositoryTests/testWaitingHomeRefreshWritesOnlyWhenDueAndRollsBackFailedSave()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests/testWaitingHomeRefreshWritesOnlyWhenDueAndRollsBackFailedSave",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "StudyRepositoryTests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests/StudyRepositoryTests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                }
+              ],
+              "name": "AnkiIOSTests",
+              "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSTests",
+              "nodeType": "Unit test bundle",
+              "result": "Passed"
+            },
+            {
+              "children": [
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "name": "Invalid frame dimension (negative or non-finite).",
+                          "nodeType": "Runtime Warning"
+                        }
+                      ],
+                      "duration": "24秒",
+                      "durationInSeconds": 24.908985018730164,
+                      "name": "testPastePreviewConfirmDuplicatesAndErrorsThenLearn()",
+                      "nodeIdentifier": "ImportUITests/testPastePreviewConfirmDuplicatesAndErrorsThenLearn()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/ImportUITests/testPastePreviewConfirmDuplicatesAndErrorsThenLearn",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "ImportUITests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/ImportUITests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "name": "Invalid frame dimension (negative or non-finite).",
+                          "nodeType": "Runtime Warning"
+                        }
+                      ],
+                      "duration": "50秒",
+                      "durationInSeconds": 50.96871209144592,
+                      "name": "testCSVModeEditorPreviewAndLearning()",
+                      "nodeIdentifier": "OrderingUITests/testCSVModeEditorPreviewAndLearning()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/OrderingUITests/testCSVModeEditorPreviewAndLearning",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "25秒",
+                      "durationInSeconds": 25.99697995185852,
+                      "name": "testIncorrectRetryCorrectExplicitGradeAndUndo()",
+                      "nodeIdentifier": "OrderingUITests/testIncorrectRetryCorrectExplicitGradeAndUndo()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/OrderingUITests/testIncorrectRetryCorrectExplicitGradeAndUndo",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "32秒",
+                      "durationInSeconds": 32.27503800392151,
+                      "name": "testLargestDynamicTypeDarkAndReduceMotion()",
+                      "nodeIdentifier": "OrderingUITests/testLargestDynamicTypeDarkAndReduceMotion()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/OrderingUITests/testLargestDynamicTypeDarkAndReduceMotion",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "children": [
+                        {
+                          "name": "Invalid frame dimension (negative or non-finite).",
+                          "nodeType": "Runtime Warning"
+                        }
+                      ],
+                      "duration": "30秒",
+                      "durationInSeconds": 30.524147033691406,
+                      "name": "testModeSwitchPauseProcessRestartAndReveal()",
+                      "nodeIdentifier": "OrderingUITests/testModeSwitchPauseProcessRestartAndReveal()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/OrderingUITests/testModeSwitchPauseProcessRestartAndReveal",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "OrderingUITests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/OrderingUITests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                },
+                {
+                  "children": [
+                    {
+                      "children": [
+                        {
+                          "name": "Invalid frame dimension (negative or non-finite).",
+                          "nodeType": "Runtime Warning"
+                        }
+                      ],
+                      "duration": "1分5秒",
+                      "durationInSeconds": 65.95354700088501,
+                      "name": "testHintEditorPreviewTypingPauseRestartUndoAndCardChange()",
+                      "nodeIdentifier": "StudyUITests/testHintEditorPreviewTypingPauseRestartUndoAndCardChange()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/StudyUITests/testHintEditorPreviewTypingPauseRestartUndoAndCardChange",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    },
+                    {
+                      "duration": "51秒",
+                      "durationInSeconds": 51.53981602191925,
+                      "name": "testSharedHintsAllFormatsReverseExceptionAndCardReset()",
+                      "nodeIdentifier": "StudyUITests/testSharedHintsAllFormatsReverseExceptionAndCardReset()",
+                      "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/StudyUITests/testSharedHintsAllFormatsReverseExceptionAndCardReset",
+                      "nodeType": "Test Case",
+                      "result": "Passed"
+                    }
+                  ],
+                  "name": "StudyUITests",
+                  "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests/StudyUITests",
+                  "nodeType": "Test Suite",
+                  "result": "Passed"
+                }
+              ],
+              "name": "AnkiIOSUITests",
+              "nodeIdentifierURL": "test://com.apple.xcode/AnkiIOS/AnkiIOSUITests",
+              "nodeType": "UI test bundle",
+              "result": "Passed"
+            }
+          ],
+          "name": "AnkiIOS",
+          "nodeType": "Test Plan",
+          "result": "Passed"
+        }
+      ],
+      "testPlanConfigurations": [
+        {
+          "configurationId": "1",
+          "configurationName": "Test Scheme Action"
+        }
+      ]
+    }
+  },
+  "supplementary": [
+    {
+      "device": "iPhone SE (3rd generation), iOS 26.5",
+      "test": "OrderingUITests/testIncorrectRetryCorrectExplicitGradeAndUndo()",
+      "result": "Passed",
+      "bundle": "/private/tmp/anki-issue49-small.xcresult"
+    },
+    {
+      "device": "iPhone SE (3rd generation), iOS 26.5",
+      "test": "OrderingUITests/testLargestDynamicTypeDarkAndReduceMotion()",
+      "result": "Passed",
+      "bundle": "/private/tmp/anki-issue49-small-final.xcresult",
+      "summary": {
+        "devicesAndConfigurations": [
+          {
+            "device": {
+              "architecture": "arm64",
+              "deviceId": "7480F7EC-2A33-4850-BCA9-B3857B056058",
+              "deviceName": "Anki-UI-Small",
+              "modelName": "iPhone SE (3rd generation)",
+              "osBuildNumber": "23F77",
+              "osVersion": "26.5",
+              "platform": "iOS Simulator"
+            },
+            "expectedFailures": 0,
+            "failedTests": 0,
+            "passedTests": 1,
+            "skippedTests": 0,
+            "testPlanConfiguration": {
+              "configurationId": "1",
+              "configurationName": "Test Scheme Action"
+            }
+          }
+        ],
+        "environmentDescription": "AnkiIOS · Built with macOS 27.0.1",
+        "expectedFailures": 0,
+        "failedTests": 0,
+        "finishTime": 1791620600.628,
+        "passedTests": 1,
+        "result": "Passed",
+        "runtimeWarnings": [],
+        "skippedTests": 0,
+        "startTime": 1791620558.975,
+        "statistics": [],
+        "testFailures": [],
+        "title": "Test - AnkiIOS",
+        "topInsights": [],
+        "totalTestCount": 1
+      }
+    }
+  ],
+  "limitations": [
+    "実機のVoiceOver音声・触覚は未検証",
+    "既存の実機通知診断テスト1件はシミュレーターでスキップ",
+    "一時xcresultの永続保管は保証しない"
+  ]
+}

@@ -9,6 +9,7 @@ struct BackupData: Codable, Equatable, Sendable {
     var cards: [BackupStudyCard] = []
     var logs: [BackupStudyReviewLog] = []
     var sessions: [BackupSessionDraft] = []
+    var orderingDrafts: [BackupOrderingDraft]? = nil
     var preferences: [BackupStudyPreferences] = []
     var tags: [BackupTag] = []
     var imports: [BackupImportBatch] = []
@@ -258,6 +259,11 @@ extension BackupEditorDraft {
     }
 }
 
+struct BackupOrderingDraft: Codable, Equatable, Sendable {
+    var key: String
+    var payload: Data
+}
+
 extension BackupData {
     @MainActor static func capture(_ repository: StudyRepository) throws -> Self {
         var result = Self()
@@ -266,6 +272,8 @@ extension BackupData {
         result.cards = try repository.cards().map(BackupStudyCard.init)
         result.logs = try repository.logs().map(BackupStudyReviewLog.init)
         result.sessions = try repository.context.fetch(FetchDescriptor<SessionDraft>()).map(BackupSessionDraft.init)
+        let ordering = try repository.context.fetch(FetchDescriptor<OrderingDraftRecord>())
+        result.orderingDrafts = ordering.isEmpty ? nil : ordering.map { BackupOrderingDraft(key: $0.key, payload: $0.payload) }
         result.preferences = try repository.context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
         result.tags = try repository.tags().map(BackupTag.init)
         result.imports = try repository.context.fetch(FetchDescriptor<ImportBatch>()).map(BackupImportBatch.init)

@@ -39,7 +39,7 @@ struct ImportParser {
         return DelimitedTable(rows: rows, lines: lines)
     }
 
-    static func map(_ table: DelimitedTable, header: Bool, questionColumn: Int, answerColumn: Int, hintColumn: Int? = nil) -> [ImportRow] {
+    static func map(_ table: DelimitedTable, header: Bool, questionColumn: Int, answerColumn: Int, hintColumn: Int? = nil, modeColumn: Int? = nil) -> [ImportRow] {
         table.rows.enumerated().compactMap { index, row in
             if header && index == 0 { return nil }
             let question = row.indices.contains(questionColumn) ? row[questionColumn] : ""
@@ -47,6 +47,14 @@ struct ImportParser {
             var mapped = ImportRow(line: table.lines[index], question: question, answer: answer,
                              error: question.isEmpty || answer.isEmpty ? "問題または解答が未入力です。" : nil)
             if let hintColumn { mapped.hint = row.indices.contains(hintColumn) ? row[hintColumn] : "" }
+            if let modeColumn {
+                let value = row.indices.contains(modeColumn) ? row[modeColumn].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
+                let aliases: [String: ResponseMode] = ["mental": .mental, "頭の中": .mental, "頭の中で回答": .mental,
+                                                     "typing": .typing, "文字入力": .typing,
+                                                     "ordering": .ordering, "並び替え": .ordering]
+                mapped.responseMode = aliases[value] ?? .mental
+                if !value.isEmpty && aliases[value] == nil { mapped.modeWarning = "回答方式が不明なため、頭の中で回答に切り替えます。" }
+            }
             return mapped
         }
     }
@@ -54,6 +62,12 @@ struct ImportParser {
     static func hintColumn(in table: DelimitedTable) -> Int? {
         table.rows.first?.firstIndex {
             ["hint", "ヒント"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+        }
+    }
+
+    static func responseModeColumn(in table: DelimitedTable) -> Int? {
+        table.rows.first?.firstIndex {
+            ["responsemode", "response_mode", "回答方式", "回答方法"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
         }
     }
 

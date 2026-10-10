@@ -72,6 +72,12 @@ extension BackupStudyReviewLog {
     }
 }
 
+extension BackupOrderingDraft {
+    @MainActor func insert(into context: ModelContext) {
+        let record = OrderingDraftRecord(payload: payload); record.key = key; context.insert(record)
+    }
+}
+
 extension BackupSessionDraft {
     @MainActor func insert(into context: ModelContext) throws {
         let model = SessionDraft(mode: StudyMode(rawValue: mode) ?? .review, now: updatedAt)

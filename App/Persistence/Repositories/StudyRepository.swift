@@ -3,7 +3,7 @@ import SwiftData
 
 extension PersistenceController {
     static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: StudySchemaV3.self)
+        let schema = Schema(versionedSchema: StudySchemaV4.self)
         let config: ModelConfiguration
         if let storeURL {
             config = ModelConfiguration("Study", schema: schema, url: try StudyStorageLocation(canonicalStore: storeURL).activeStore(), cloudKitDatabase: .none)
@@ -152,7 +152,7 @@ final class StudyRepository {
             let payload = try JSONEncoder().encode(ReviewScheduler(desiredRetention: settings().desiredRetention).newCard(now: now))
             for card in existing {
                 if !variants.contains(card.variantKey) {
-                    if let draft = try session(), draft.cardID == card.id { draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false }
+                    if let draft = try session(), draft.cardID == card.id { draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false }
                     context.delete(card)
                 } else if resetHistory {
                     card.fsrsPayload = payload; card.dueDate = now; card.updatedAt = now
@@ -165,7 +165,8 @@ final class StudyRepository {
             try removeEditorDraftInTransaction(key: key)
             if changesSession, let draft = try session(), let cardID = draft.cardID,
                try cards().contains(where: { $0.id == cardID && $0.noteID == id }) {
-                draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = now; draft.elapsedMs = 0
+                try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = now; draft.elapsedMs = 0
+                try prepareOrderingDraft(draft)
                 draft.undoLogID = nil
             }
         }
@@ -177,7 +178,7 @@ final class StudyRepository {
             let ids = Set(removed.map(\.id))
             if let draft = try session() {
                 if let cardID = draft.cardID, ids.contains(cardID) {
-                    draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil
+                    draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil
                 }
                 if let logID = draft.undoLogID, try logs().contains(where: { $0.id == logID && ids.contains($0.cardID) }) {
                     draft.undoLogID = nil
@@ -195,7 +196,7 @@ final class StudyRepository {
             guard let card = try cards().first(where: { $0.id == cardID }) else { throw StudyError.missingRecord }
             card.isSuspended = value; card.updatedAt = now
             if let draft = try session(), draft.cardID == cardID, value {
-                draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false
+                draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false
             }
         }
     }
@@ -210,15 +211,14 @@ final class StudyRepository {
         let deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, try deckPath($0.id)) })
         let tagMap = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
         return try cards().filter { cardID == nil || $0.id == cardID }.sorted { $0.createdAt > $1.createdAt }.map { card in
-            guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type),
-                  let mode = ResponseMode(rawValue: note.defaultResponseMode) else { throw StudyError.missingRecord }
+            guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type) else { throw StudyError.missingRecord }
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
             guard (1...2).contains(content.schemaVersion) else { throw StudyError.unsupportedContent }
             return NoteItem(noteID: note.id, cardID: card.id, deckID: note.deckID,
                             deckName: deckMap[note.deckID] ?? "", kind: kind,
                             content: try CardGeneration.displayed(kind: kind, content: content, variant: card.variantKey),
                             sourceContent: content, variantKey: card.variantKey,
-                            responseMode: mode, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
+                            responseMode: ResponseMode(rawValue: note.defaultResponseMode) ?? .mental, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
         }
     }
 
@@ -278,6 +278,7 @@ final class StudyRepository {
             guard let draft = try session() else { throw StudyError.noSession }
             if draft.cardID == nil { try selectNext(draft: draft, now: now) }
             else { draft.activeSince = now }
+            try prepareOrderingDraft(draft)
         }
     }
     // Home refresh is read-only until this session actually has a next card.
@@ -302,11 +303,12 @@ final class StudyRepository {
         try selectCard(nextCardIDs(draft: draft, now: now).first, draft: draft, now: now)
     }
     private func selectCard(_ id: UUID?, draft: SessionDraft, now: Date) throws {
-        draft.cardID = id; draft.typedDraft = ""; draft.answerRevealed = false
+        draft.cardID = id; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false
         draft.elapsedMs = 0; draft.updatedAt = now
         draft.activeSince = draft.cardID == nil ? nil : now
         if let id = draft.cardID, let item = try noteItems(cardID: id).first {
             draft.answerMode = item.responseMode.rawValue
+            try prepareOrderingDraft(draft)
         }
     }
     func updateDraft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil, now: Date) throws {
@@ -314,7 +316,11 @@ final class StudyRepository {
             guard let draft = try session() else { throw StudyError.noSession }
             if let mode { draft.answerMode = mode.rawValue }
             if let text { draft.typedDraft = text }
-            if let revealed { draft.answerRevealed = revealed }
+            try prepareOrderingDraft(draft)
+            if let revealed {
+                draft.answerRevealed = revealed
+                if revealed { try markOrderingAnswerShown() }
+            }
             draft.updatedAt = now
         }
     }
@@ -342,8 +348,11 @@ final class StudyRepository {
             let transition = try scheduler.review(before, grade: grade, now: now)
             let after = try JSONEncoder().encode(transition.after)
             let duration = draft.elapsedMs + (draft.activeSince.map { max(0, Int(now.timeIntervalSince($0) * 1000)) } ?? 0)
+            var responseMode = ResponseMode(rawValue: draft.answerMode) ?? .mental
+            if responseMode == .ordering, let item = try noteItems(cardID: cardID).first,
+               OrderingAnswer.reason(kind: item.kind, answer: item.content.answer) != nil { responseMode = .mental }
             let log = StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
-                                     mode: ResponseMode(rawValue: draft.answerMode) ?? .mental,
+                                     mode: responseMode,
                                      durationMs: duration, wasNew: summary.state == "new",
                                      sequence: (try logs().map(\.sequence).max() ?? 0) + 1)
             context.insert(log)
@@ -368,9 +377,10 @@ final class StudyRepository {
             card.dueDate = try ReviewScheduler().summary(before).dueDate
             card.updatedAt = latest.previousUpdatedAt
             draft.cardID = card.id; draft.answerMode = latest.responseMode
-            draft.typedDraft = ""; draft.answerRevealed = false; draft.undoLogID = nil
+            try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.undoLogID = nil
             draft.elapsedMs = 0; draft.activeSince = now; draft.updatedAt = now
             draft.reviewStreak = 0
+            try prepareOrderingDraft(draft)
             if latest.wasNew { draft.touchedCardIDs.removeAll { $0 == card.id } }
             context.delete(latest)
         }
@@ -384,9 +394,15 @@ final class StudyRepository {
             !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()
+        let requested = ResponseMode(rawValue: draft.answerMode) ?? .mental
+        let ordering = try item.flatMap { try orderingDraft(for: $0) }
+        let reason = requested == .ordering ? item.flatMap {
+            OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) ?? (ordering == nil ? OrderingError.invalidDraft.localizedDescription : nil)
+        } : nil
         return ReviewPresentation(card: item, mode: mode,
-                                  responseMode: ResponseMode(rawValue: draft.answerMode) ?? .mental,
+                                  responseMode: requested == .ordering && reason != nil ? .mental : requested,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
-                                  canUndo: draft.undoLogID != nil, nextShortDue: short)
+                                  canUndo: draft.undoLogID != nil, nextShortDue: short,
+                                  ordering: ordering, orderingUnavailable: reason)
     }
 }

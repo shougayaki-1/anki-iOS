@@ -47,10 +47,11 @@ enum StudySchemaV2: VersionedSchema {
 }
 
 enum StudyMigrationPlan: SchemaMigrationPlan {
-    static var schemas: [any VersionedSchema.Type] { [StudySchema.self, StudySchemaV2.self, StudySchemaV3.self] }
+    static var schemas: [any VersionedSchema.Type] { [StudySchema.self, StudySchemaV2.self, StudySchemaV3.self, StudySchemaV4.self] }
     static var stages: [MigrationStage] {
         [.lightweight(fromVersion: StudySchema.self, toVersion: StudySchemaV2.self),
-         .lightweight(fromVersion: StudySchemaV2.self, toVersion: StudySchemaV3.self)]
+         .lightweight(fromVersion: StudySchemaV2.self, toVersion: StudySchemaV3.self),
+         .lightweight(fromVersion: StudySchemaV3.self, toVersion: StudySchemaV4.self)]
     }
 }
 

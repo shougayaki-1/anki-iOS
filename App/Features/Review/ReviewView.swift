@@ -36,6 +36,10 @@ struct ReviewView: View {
                         if !review.answerRevealed {
                             StudyHintView(hint: item.content.hint).id(item.cardID)
                         }
+                        if let reason = review.orderingUnavailable {
+                            Text("並び替えを利用できないため、頭の中で回答に切り替えました。\n" + reason)
+                                .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("orderingUnavailable")
+                        }
                         if typeSize.isAccessibilitySize { accessibleModePicker(review) }
                         else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
                         if review.responseMode == .typing && !review.answerRevealed {
@@ -43,6 +47,10 @@ struct ReviewView: View {
                                 .lineLimit(3...12).textFieldStyle(.roundedBorder).focused($typingFocused)
                                 .accessibilityIdentifier("typedAnswer")
                                 .disabled(review.answerRevealed)
+                        }
+                        if review.responseMode == .ordering && !review.answerRevealed,
+                           let draft = review.ordering, let problem = try? OrderingAnswer(kind: item.kind, answer: item.content.answer) {
+                            OrderingAnswerView(problem: problem, draft: draft, action: store.ordering)
                         }
                         if review.answerRevealed {
                             Divider()
@@ -149,6 +157,14 @@ struct ReviewView: View {
             Text("自分の回答").font(.headline)
             Text(review.typedDraft.isEmpty ? "（未入力）" : review.typedDraft)
         }
+        if review.responseMode == .ordering, let draft = review.ordering {
+            if let result = draft.result {
+                Label(result == .correct ? "正解" : "不正解", systemImage: result == .correct ? "checkmark.circle" : "xmark.circle")
+                    .foregroundStyle(result == .correct ? Color("GradeGood") : Color("GradeAgain"))
+                    .accessibilityIdentifier("orderingResult")
+            } else { Label("模範解答を確認しました", systemImage: "eye") }
+            Text(draft.evaluationGuidance).font(.footnote).foregroundStyle(.secondary)
+        }
         Text("模範解答").font(.headline)
         Text(item.content.answer).font(answerFont).textSelection(.enabled).accessibilityIdentifier("modelAnswer")
             .accessibilityFocused($readingFocus, equals: .answer)
@@ -200,9 +216,17 @@ struct ReviewView: View {
             })
     }
 
+    private func canUse(_ mode: ResponseMode, review: ReviewPresentation) -> Bool {
+        guard mode == .ordering else { return true }
+        guard let item = review.card else { return false }
+        return OrderingAnswer.reason(kind: item.kind, answer: item.content.answer) == nil
+    }
+
     private func modePicker(_ review: ReviewPresentation) -> some View {
         Picker("回答方法", selection: Binding(get: { review.responseMode }, set: { store.draft(mode: $0) })) {
-            ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
+            ForEach(ResponseMode.allCases, id: \.self) { mode in
+                Text(mode.title).tag(mode).disabled(!canUse(mode, review: review))
+            }
         }.accessibilityIdentifier("reviewModePicker")
     }
 
@@ -219,6 +243,7 @@ struct ReviewView: View {
                     }
                 }
                 .accessibilityIdentifier("response-mode-\(mode.rawValue)")
+                .disabled(!canUse(mode, review: review))
             }
         } label: {
             HStack {
