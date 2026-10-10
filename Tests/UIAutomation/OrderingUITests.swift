@@ -16,9 +16,15 @@ final class OrderingUITests: XCTestCase {
         for _ in 0..<35 {
             let navigationBottom = app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? 0
             let pause = app.buttons["pauseStudy"]
-            let top = max(navigationBottom, pause.exists ? pause.frame.maxY : 0) + 12
+            var top = max(navigationBottom, pause.exists ? pause.frame.maxY : 0) + 12
+            let progress = app.progressIndicators["sessionProgressBar"]
+            if progress.exists { top = max(top, progress.frame.maxY + 8) }
             var bottom = app.frame.maxY - 35
             let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer")
+            if fixedControl && element.isHittable {
+                // A fixed footer is already accessible; scrolling the body cannot move it.
+                return
+            }
             if !fixedControl {
                 let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
                 if footer.exists && footer.isHittable { bottom = min(bottom, footer.frame.minY - 8) }
