@@ -5,21 +5,33 @@ struct MainTabs: View {
     @Bindable var store: StudyStore
     let probeContainer: ModelContainer
     @Environment(\.scenePhase) private var scenePhase
+    @State private var shortcutNavigation = ShortcutNavigation.shared
+    @State private var shortcutDeck: ShortcutDeckDestination?
+    @State private var shortcutNotice: String?
 
     var body: some View {
         TabView(selection: $store.selectedTab) {
             HomeView(store: store).tabItem { Label("ホーム", systemImage: "house") }.tag(0)
-            LibraryView(store: store).tabItem { Label("ライブラリ", systemImage: "books.vertical") }.tag(1)
+            LibraryView(store: store, shortcutDeck: $shortcutDeck)
+                .tabItem { Label("ライブラリ", systemImage: "books.vertical") }.tag(1)
             StatisticsView(store: store).tabItem { Label("記録", systemImage: "chart.bar") }.tag(2)
             SettingsView(store: store, probeContainer: probeContainer)
                 .tabItem { Label("設定", systemImage: "gearshape") }.tag(3)
         }
         .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
-        .alert("処理に失敗しました", isPresented: Binding(
-            get: { store.failure != nil && !store.showingReview },
-            set: { if !$0 && !store.showingReview { store.failure = nil } }
-        )) { Button("閉じる", role: .cancel) { store.failure = nil } }
-        message: { Text(store.failure ?? "") }
+        // One alert presenter avoids two .alert modifiers competing on TabView.
+        .alert(Text(store.failure != nil ? "処理に失敗しました" : "ショートカット"),
+               isPresented: Binding(
+                get: { !store.showingReview && (store.failure != nil || shortcutNotice != nil) },
+                set: { if !$0 && !store.showingReview { store.failure = nil; shortcutNotice = nil } }
+               )) {
+            Button("閉じる", role: .cancel) { store.failure = nil; shortcutNotice = nil }
+        } message: {
+            Text(store.failure ?? shortcutNotice ?? "")
+        }
+        .onChange(of: shortcutNavigation.pending, initial: true) { _, _ in
+            handleShortcut()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .studyNotificationOpened)) { _ in
             store.pause(); store.selectedTab = 0
         }
@@ -29,6 +41,60 @@ struct MainTabs: View {
         }
         .onChange(of: scenePhase) { _, phase in
             store.sceneChanged(active: phase == .active)
+            if phase == .active {
+                shortcutNavigation.syncFromDisk()
+                handleShortcut()
+            }
+        }
+    }
+
+    private func handleShortcut() {
+        guard let request = shortcutNavigation.take() else { return }
+
+        // Follow the app's normal pause path when navigating away from study.
+        if store.showingReview {
+            if case .study = request {} else {
+                store.pause()
+                // Keep the study screen when pausing could not be saved/refreshed.
+                guard !store.showingReview else { return }
+            }
+        }
+
+        switch request {
+        case let .study(mode):
+            store.selectedTab = 0
+            store.refreshHome()
+            let decision = ShortcutStudyDecision.resolve(
+                mode: mode, sessionExists: store.review != nil,
+                canResume: store.review?.card != nil, canStart: store.canStart(mode))
+            switch decision {
+            case let .start(mode):
+                store.start(mode)
+            case .resume:
+                if !store.showingReview { store.resume() }
+            case .showExistingSession:
+                shortcutNotice = "中断中の学習セッションがあります。ホームから再開・完了するか、明示的に切り替えてください。"
+            case .unavailable:
+                shortcutNotice = mode == .new ? store.newAvailabilityMessage :
+                    (store.homeFailure ?? "今は復習できるカードがありません。学習対象を確認してください。")
+            }
+        case .progress:
+            store.selectedTab = 2
+            store.refreshHome()
+            store.refreshStatistics()
+        case let .deck(id):
+            store.selectedTab = 1
+            do { try store.reload() }
+            catch {
+                shortcutNotice = "デッキの読み込みに失敗しました。再度お試しください。"
+                return
+            }
+            guard store.decks.contains(where: { $0.id == id }) else {
+                shortcutDeck = nil
+                shortcutNotice = "指定したデッキが見つかりません。削除または復元されている可能性があります。"
+                return
+            }
+            shortcutDeck = ShortcutDeckDestination(id: id)
         }
     }
 }
