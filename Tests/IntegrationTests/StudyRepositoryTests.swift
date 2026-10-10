@@ -22,6 +22,41 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testTextLayoutsDraftEditingCSVAndBackupKeepIDsAndSchedule() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        var input = NoteInput(deckID: deck, question: "｜東京《とうきょう》", answer: "Capital", reverseEnabled: true, questionLayout: .vertical, answerLayout: .horizontal)
+        let id = try repo.createNote(input, now: now)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        let states = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate) }
+        input.questionLayout = .horizontal; input.answerLayout = .vertical
+        input.question = "｜東京《トウキョウ》"
+        try repo.updateNote(id: id, input: input, now: now)
+        for (id, payload, due) in states {
+            let card = try XCTUnwrap(repo.cards().first { $0.id == id })
+            XCTAssertEqual(card.fsrsPayload, payload); XCTAssertEqual(card.dueDate, due)
+        }
+        try repo.saveEditorDraft(key: "new", input: input, now: now)
+        XCTAssertEqual(try repo.editorDraft(key: "new")?.answerLayout, .vertical)
+        let archive = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let container = try BackupService.restore(archive, location: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")), mediaStore: media, now: now)
+        let restored = StudyRepository(container: container, mediaStore: media)
+        try restored.initialize(now: now)
+        let content = try JSONDecoder().decode(TextContent.self, from: restored.notes().first!.contentPayload)
+        XCTAssertEqual(content.questionLayout, .horizontal); XCTAssertEqual(content.answerLayout, .vertical)
+        XCTAssertEqual(try restored.editorDraft(key: "new")?.answerLayout, .vertical)
+        XCTAssertEqual(Set(try restored.cards().map(\.id)), Set(states.map { $0.0 }))
+        let table = try ImportParser.table("question,answer,question_layout,answer_layout\n｜東京《トウキョウ》,Capital,vertical,horizontal", delimiter: ",")
+        let rows = ImportParser.map(table, header: true, questionColumn: 0, answerColumn: 1)
+        _ = try restored.importRows(rows, deckID: deck, kind: .basic, tagNames: [], action: .update, source: "CSV", now: now)
+        let updated = try JSONDecoder().decode(TextContent.self, from: restored.notes().first!.contentPayload)
+        XCTAssertEqual(updated.questionLayout, .vertical); XCTAssertEqual(updated.answerLayout, .horizontal)
+        XCTAssertEqual(Set(try restored.cards().map(\.id)), Set(states.map { $0.0 }))
+        XCTAssertEqual(try restored.logs().count, 1)
+    }
     func testAnotherSetUsesOriginalScopeAndLimitAndEmptyOrFailedStartKeepsUndo() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let other = try repo.createDeck(name: "Other", now: now)

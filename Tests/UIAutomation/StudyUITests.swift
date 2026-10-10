@@ -16,6 +16,33 @@ final class StudyUITests: XCTestCase {
         app.launch()
         return app
     }
+    func testVerticalRubyPreviewLearningUndoAndRelaunch() {
+        let app = app()
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
+        let layout = app.buttons["questionLayout"]
+        scrollTo(layout, app: app); layout.tap(); app.buttons["縦書き"].tap()
+        let question = app.descendants(matching: .any)["questionInput"]
+        scrollTo(question, app: app); question.tap(); question.typeText("｜春暁《しゅんぎょう》12年。\n｜東京《とうきょう》")
+        let answer = app.descendants(matching: .any)["answerInput"]
+        scrollTo(answer, app: app); answer.tap(); answer.typeText("Answer remains hidden")
+        let preview = app.buttons["previewNote"]
+        scrollTo(preview, app: app); preview.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["previewQuestion"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["previewAnswer"].exists)
+        attach(app, "Issue51-vertical-ruby-preview")
+        app.buttons["previewReveal"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["previewAnswer"].exists)
+        app.buttons["closePreview"].tap(); app.buttons["saveNote"].tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].waitForExistence(timeout: 10))
+        attach(app, "Issue51-vertical-ruby-review")
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap()
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].exists)
+        app.terminate(); app.launch()
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].waitForExistence(timeout: 10))
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]

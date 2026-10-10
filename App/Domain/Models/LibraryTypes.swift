@@ -46,6 +46,8 @@ struct ImportRow: Identifiable, Equatable {
     var hint: String? = nil
     var responseMode: ResponseMode? = nil
     var modeWarning: String? = nil
+    var questionLayout: TextLayout? = nil
+    var answerLayout: TextLayout? = nil
     var error: String?
     var included = true
     init(line: Int, question: String, answer: String, error: String? = nil) {

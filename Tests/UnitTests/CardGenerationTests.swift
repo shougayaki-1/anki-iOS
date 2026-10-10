@@ -2,6 +2,35 @@ import XCTest
 @testable import AnkiIOS
 
 final class CardGenerationTests: XCTestCase {
+    func testRubyParsingSafeHTMLFallbackAndVerticalDigits() throws {
+        let document = RubyDocument.parse("｜春暁《しゅんぎょう》 12年。\n｜東京《とうきょう》<script>alert(1)</script>")
+        XCTAssertNil(document.warning); XCTAssertTrue(document.hasRuby)
+        XCTAssertTrue(document.spoken.contains("春暁（しゅんぎょう）"))
+        let html = document.html(layout: .vertical, fontSize: 24)
+        XCTAssertTrue(html.contains("writing-mode:vertical-rl"))
+        XCTAssertTrue(html.contains("<ruby>春暁<rt>しゅんぎょう</rt></ruby>"))
+        XCTAssertTrue(html.contains("<span class=\"tcy\">12</span>"))
+        XCTAssertTrue(html.contains("&lt;script&gt;")); XCTAssertFalse(html.contains("<script>"))
+        XCTAssertFalse(html.contains("https://")); XCTAssertTrue(html.contains("default-src 'none'"))
+        for source in ["｜漢字《", "｜《から》", "｜漢字《》", "漢字《かんじ》", "｜漢字《読\nみ》"] {
+            let parsed = RubyDocument.parse(source)
+            XCTAssertNotNil(parsed.warning); XCTAssertEqual(parsed.plain, source)
+        }
+        XCTAssertEqual(RubyDocument.parse("普通の本文").plain, "普通の本文")
+    }
+    func testRubyClozeNeverLeaksReadingAndReverseSwapsLayouts() throws {
+        var content = TextContent(question: "｜{{c1::東京}}《とうきょう》と{{c2::｜大阪《おおさか》}}", answer: "A", explanation: "", questionLayout: .vertical, answerLayout: .horizontal)
+        let first = try CardGeneration.displayed(kind: .cloze, content: content, variant: "cloze:1")
+        XCTAssertFalse(first.question.contains("とうきょう"))
+        XCTAssertTrue(first.question.contains("｜大阪《おおさか》"))
+        let second = try CardGeneration.displayed(kind: .cloze, content: content, variant: "cloze:2")
+        XCTAssertFalse(second.question.contains("おおさか")); XCTAssertTrue(second.answer.contains("おおさか"))
+        content.reverseEnabled = true
+        let reverse = try CardGeneration.displayed(kind: .basic, content: content, variant: "basic:reverse")
+        XCTAssertEqual(reverse.questionLayout, .horizontal); XCTAssertEqual(reverse.answerLayout, .vertical)
+        let legacy = try JSONDecoder().decode(TextContent.self, from: Data(#"{"schemaVersion":1,"question":"Q","answer":"A","explanation":""}"#.utf8))
+        XCTAssertNil(legacy.questionLayout); XCTAssertNil(legacy.answerLayout)
+    }
     func testHintCompatibilityAndSharedVariants() throws {
         let old = Data(#"{"schemaVersion":1,"question":"Q","answer":"A","explanation":"E"}"#.utf8)
         XCTAssertNil(try JSONDecoder().decode(TextContent.self, from: old).hint)

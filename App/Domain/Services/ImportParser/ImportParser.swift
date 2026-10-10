@@ -55,6 +55,18 @@ struct ImportParser {
                 mapped.responseMode = aliases[value] ?? .mental
                 if !value.isEmpty && aliases[value] == nil { mapped.modeWarning = "回答方式が不明なため、頭の中で回答に切り替えます。" }
             }
+            if header, let headers = table.rows.first {
+                for (names, questionSide) in [(["question_layout", "問題表示"], true), (["answer_layout", "解答表示"], false)] {
+                    if let column = headers.firstIndex(where: { names.contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }) {
+                        let value = row.indices.contains(column) ? row[column].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
+                        let aliases: [String: TextLayout] = ["horizontal": .horizontal, "横書き": .horizontal, "vertical": .vertical, "縦書き": .vertical]
+                        if value.isEmpty { continue }
+                        if let layout = aliases[value] {
+                            if questionSide { mapped.questionLayout = layout } else { mapped.answerLayout = layout }
+                        } else { mapped.error = "表示方向は horizontal／vertical（横書き／縦書き）で指定してください。"; mapped.included = false }
+                    }
+                }
+            }
             return mapped
         }
     }

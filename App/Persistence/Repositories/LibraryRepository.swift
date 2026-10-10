@@ -183,7 +183,7 @@ extension StudyRepository {
             let requestedMode = row.responseMode ?? .mental
             let effectiveMode: ResponseMode = requestedMode == .ordering && OrderingAnswer.reason(kind: kind, answer: row.answer) != nil ? .mental : requestedMode
             let input = NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer,
-                                  explanation: row.explanation, hint: row.hint, responseMode: effectiveMode, tagNames: tagNames)
+                                  explanation: row.explanation, hint: row.hint, responseMode: effectiveMode, tagNames: tagNames, questionLayout: row.questionLayout, answerLayout: row.answerLayout)
             do { valid.append((row, input, try validate(input))) }
             catch { errors.append("\(row.line)行: \(error.localizedDescription)") }
         }
@@ -199,6 +199,8 @@ extension StudyRepository {
                         merged.question = input.question; merged.answer = input.answer
                         merged.explanation = input.explanation
                         if let hint = input.hint { merged.hint = hint }
+                        if let value = input.questionLayout { merged.questionLayout = value }
+                        if let value = input.answerLayout { merged.answerLayout = value }
                         existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
                         if row.responseMode != nil { existing.defaultResponseMode = input.responseMode.rawValue }
                         existing.tagIDs = try tagIDs(for: tagNames)
