@@ -121,7 +121,11 @@ final class ImportUITests: XCTestCase {
         XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText("Biology")
         app.buttons["deckParentPicker"].tap(); app.buttons["Science"].firstMatch.tap()
         app.buttons["保存"].tap()
-        XCTAssertTrue(app.buttons["Science / Biology"].waitForExistence(timeout: 5))
+        let expand = app.buttons.matching(NSPredicate(format: "label == %@", "Scienceを展開する")).firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        let child = app.buttons.matching(NSPredicate(format: "label == %@", "Science / Biologyを編集")).firstMatch
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
         app.buttons["閉じる"].tap()
         app.buttons["addNote"].tap()
         app.buttons["noteDeckPicker"].tap(); app.buttons["Science / Biology"].firstMatch.tap()
