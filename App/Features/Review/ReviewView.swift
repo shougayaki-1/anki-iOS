@@ -19,68 +19,87 @@ struct ReviewView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    if let review = store.review, let item = review.card {
-                        if let goal = store.settings.dailyGoal {
-                            Text(store.counts.learnedToday >= goal ? "今日の目標を達成しました。学習を続けられます。" : "今日の学習 \(store.counts.learnedToday) / \(goal)枚")
-                                .font(.footnote).accessibilityIdentifier("reviewGoalProgress")
-                        }
-                        Text(item.deckName).font(.caption).foregroundStyle(.secondary)
-                        if review.answerRevealed && store.settings.reviewAppearance.answerFirst {
-                            answerContent(review, item: item)
-                            Divider()
-                        }
-                        questionContent(item)
-                        reviewImage(review, item: item)
-                        if typeSize.isAccessibilitySize { accessibleModePicker(review) }
-                        else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
-                        if review.responseMode == .typing && !review.answerRevealed {
-                            TextField("自分の回答", text: Binding(get: { store.review?.typedDraft ?? "" }, set: { store.draft(text: $0) }), axis: .vertical)
-                                .lineLimit(3...12).textFieldStyle(.roundedBorder).focused($typingFocused)
-                                .accessibilityIdentifier("typedAnswer")
-                                .disabled(review.answerRevealed)
-                        }
-                        if review.answerRevealed {
-                            Divider()
-                            if !store.settings.reviewAppearance.answerFirst { answerContent(review, item: item) }
-                            Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            VStack(spacing: 12) {
-                                ForEach(ReviewGrade.allCases, id: \.self) { grade in
-                                    Button {
-                                        typingFocused = false
-                                        store.grade(grade)
-                                    } label: {
-                                        Text(gradeTitle(grade)).font(.headline)
-                                            .frame(maxWidth: .infinity, minHeight: 56)
-                                            .contentShape(Rectangle())
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        if let review = store.review, let item = review.card {
+                            if let goal = store.settings.dailyGoal {
+                                Text(store.counts.learnedToday >= goal ? "今日の目標を達成しました。学習を続けられます。" : "今日の学習 \(store.counts.learnedToday) / \(goal)枚")
+                                    .font(.footnote).accessibilityIdentifier("reviewGoalProgress")
+                            }
+                            Text(item.deckName).font(.caption).foregroundStyle(.secondary)
+                            if review.answerRevealed && store.settings.reviewAppearance.answerFirst {
+                                answerContent(review, item: item)
+                                Divider()
+                            }
+                            questionContent(item)
+                            reviewImage(review, item: item)
+                            if typeSize.isAccessibilitySize { accessibleModePicker(review) }
+                            else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
+                            if review.responseMode == .typing && !review.answerRevealed {
+                                TextField("自分の回答", text: Binding(get: { store.review?.typedDraft ?? "" }, set: { store.draft(text: $0) }), axis: .vertical)
+                                    .lineLimit(3...12).textFieldStyle(.roundedBorder).focused($typingFocused)
+                                    .accessibilityIdentifier("typedAnswer")
+                                    .disabled(review.answerRevealed)
+                            }
+                            if review.answerRevealed {
+                                Divider()
+                                if !store.settings.reviewAppearance.answerFirst { answerContent(review, item: item) }
+                                Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                                VStack(spacing: 12) {
+                                    ForEach(ReviewGrade.allCases, id: \.self) { grade in
+                                        Button {
+                                            typingFocused = false
+                                            store.grade(grade)
+                                        } label: {
+                                            Text(gradeTitle(grade)).font(.headline)
+                                                .frame(maxWidth: .infinity, minHeight: 56)
+                                                .contentShape(Rectangle())
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .tint(gradeColor(grade))
+                                        .foregroundStyle(Color.white)
+                                        .accessibilityIdentifier("grade-\(grade.rawValue)")
+                                        .disabled(!imageAvailable(item))
                                     }
-                                    .buttonStyle(.borderedProminent)
-                                    .tint(gradeColor(grade))
-                                    .foregroundStyle(Color.white)
-                                    .accessibilityIdentifier("grade-\(grade.rawValue)")
-                                    .disabled(!imageAvailable(item))
                                 }
+                            } else {
+                                Button { typingFocused = false; store.draft(revealed: true) } label: {
+                                    Text("答えを表示").font(.headline)
+                                        .frame(maxWidth: .infinity, minHeight: 56)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
+                                .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
+                                .disabled(!imageAvailable(item))
+                            }
+                            if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
+                                swipePad(review, item: item)
                             }
                         } else {
-                            Button { typingFocused = false; store.draft(revealed: true) } label: {
-                                Text("答えを表示").font(.headline)
-                                    .frame(maxWidth: .infinity, minHeight: 56)
-                                    .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.borderedProminent).accessibilityIdentifier("revealAnswer")
-                            .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                            .disabled(!imageAvailable(item))
+                            ReviewEmptyStateView(state: store.reviewRefreshFailed ? nil : store.review?.emptyState, nextShortDue: store.review?.nextShortDue,
+                                                 canFinish: store.review != nil, store: store)
                         }
-                        if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
-                            swipePad(review, item: item)
-                        }
-                    } else {
-                        ReviewEmptyStateView(state: store.reviewRefreshFailed ? nil : store.review?.emptyState, nextShortDue: store.review?.nextShortDue,
-                                             canFinish: store.review != nil, store: store)
+                    }.padding()
+                        .frame(minHeight: store.review?.card == nil ? geometry.size.height : 0)
+                }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let review = store.review, review.card == nil {
+                    Button { store.completeSession() } label: {
+                        Text(review.emptyState?.reason == .waiting ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
+                            .font(.headline).multilineTextAlignment(.center)
+                            .padding(.vertical, 8)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .contentShape(Rectangle())
                     }
-                }.padding()
+                    .buttonStyle(.borderedProminent).buttonBorderShape(.roundedRectangle)
+                    .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
+                    .accessibilityIdentifier("finishReview")
+                    .padding(.horizontal, 24).padding(.vertical, 16)
+                    .background(Color(uiColor: .systemBackground))
+                }
             }
             .scrollDisabled(swiping)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
@@ -267,7 +286,7 @@ private struct ReviewEmptyStateView: View {
     var store: StudyStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(spacing: 20) {
             Text(state?.title ?? "学習状態を確認できません").font(.title2.bold())
                 .accessibilityAddTraits(.isHeader).accessibilityIdentifier("reviewEmptyTitle")
             Text(state?.message ?? "出題を再確認してください。")
@@ -276,9 +295,6 @@ private struct ReviewEmptyStateView: View {
                     .accessibilityIdentifier("reviewNextShortDue")
             }
             if canFinish {
-                Button(state?.reason == .waiting ? "今回はここまで・ホームへ戻る" : "完了してホームへ") { store.completeSession() }
-                    .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                    .accessibilityIdentifier("finishReview")
                 Text("終了後は、このセッションのUndoは使えません。評価と復習予定は保存されています。中断して保存する場合は上部の「閉じる」を使います。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -291,6 +307,7 @@ private struct ReviewEmptyStateView: View {
             if state?.canRetry == true || state == nil {
                 Button("出題を再確認", action: store.refreshQueue).accessibilityIdentifier("refreshReviewQueue")
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
+        }.frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
     }
 }
