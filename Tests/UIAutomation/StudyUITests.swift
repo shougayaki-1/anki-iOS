@@ -136,6 +136,32 @@ final class StudyUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["studyHint"].exists)
     }
 
+    func testInterruptedReviewPrimaryResumesRevealedDraftWithoutConfirmation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
+        app.launch()
+        let start = app.buttons["start-review"]
+        XCTAssertTrue(start.waitForExistence(timeout: 15)); start.tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        let question = app.staticTexts["reviewQuestion"].label
+        app.segmentedControls.buttons["文字入力"].tap()
+        let input = app.descendants(matching: .any)["typedAnswer"]
+        input.tap(); input.typeText("Review draft")
+        if app.keyboards.firstMatch.exists { app.buttons["完了"].firstMatch.tap() }
+        app.buttons["revealAnswer"].tap()
+        app.buttons["pauseStudy"].tap()
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(identifier: "resumeStudy").count, 1)
+        XCTAssertFalse(app.staticTexts["dueCount"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        app.buttons["resumeStudy"].tap()
+        XCTAssertFalse(app.buttons["復習するへ切り替える"].exists)
+        XCTAssertTrue(app.buttons["grade-3"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, question)
+        XCTAssertTrue(app.staticTexts["Review draft"].exists)
+    }
+
     func testHomeLightAccessibilityAudit() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
@@ -226,16 +252,26 @@ final class StudyUITests: XCTestCase {
         else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.1)).tap() }
         let resume = app.buttons["resumeStudy"]
         for _ in 0..<8 where !resume.exists || !resume.isHittable { app.swipeDown() }
+        XCTAssertEqual(app.buttons.matching(identifier: "resumeStudy").count, 1)
         resume.tap()
+        XCTAssertFalse(app.buttons["新しく覚えるへ切り替える"].exists)
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-1"].tap(); app.buttons["pauseStudy"].tap()
         for _ in 0..<3 { app.swipeDown() }
-        XCTAssertFalse(app.buttons["start-review"].isEnabled)
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
+        XCTAssertTrue(app.buttons["completeStudy"].exists)
         let waiting = app.staticTexts["nextShortReview"]
         scrollTo(waiting, app: app); XCTAssertTrue(waiting.exists)
         XCTAssertFalse(app.buttons["start-new"].isEnabled)
         XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
         attach(app, "Issue30-short-review-waiting")
+        // Remain on Home without polling-triggering gestures or tab changes.
+        let dueResume = app.buttons["resumeStudy"]
+        XCTAssertTrue(dueResume.waitForExistence(timeout: 75))
+        dueResume.tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "State question")
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
     }
 
     func testReviewHeroVisibleWithoutScrollingAndHomeAddCancel() {
@@ -281,6 +317,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
         XCTAssertTrue(app.staticTexts["newCount"].label.contains("0枚"))
         app.buttons["resumeStudy"].tap()
+        XCTAssertFalse(app.buttons["新しく覚えるへ切り替える"].exists)
         XCTAssertTrue(input.waitForExistence(timeout: 5)); XCTAssertEqual(input.value as? String, "Preserved draft")
         app.buttons["pauseStudy"].tap(); app.buttons["openStudyFilter"].tap()
         app.buttons["resetStudyFilter"].tap(); app.buttons["applyStudyFilter"].tap()

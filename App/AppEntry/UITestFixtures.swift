@@ -45,6 +45,7 @@ enum UITestFixtures {
         try repository.updateDraft(revealed: true, now: base)
         try repository.grade(.again, now: base)
         try repository.setSessionActive(false, now: base)
+        try repository.completeSession(now: base)
         var settings = try repository.settings()
         let parts = Calendar.current.dateComponents([.hour, .minute], from: now.addingTimeInterval(180))
         settings.notification.hour = parts.hour ?? 20
