@@ -10,7 +10,7 @@ enum HapticsMode: String, Codable, CaseIterable {
 
 @MainActor
 final class HapticsService {
-    enum Event { case reveal, grade, undo, goal }
+    enum Event { case reveal, grade, undo, goal, orderingCorrect, orderingIncorrect }
     private var engine: CHHapticEngine?
     func play(_ event: Event, mode: HapticsMode) {
         guard mode != .off, UIApplication.shared.applicationState == .active else { return }
@@ -33,6 +33,8 @@ final class HapticsService {
         case .grade: UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .undo: UISelectionFeedbackGenerator().selectionChanged()
         case .goal: UINotificationFeedbackGenerator().notificationOccurred(.success)
+        case .orderingCorrect: UINotificationFeedbackGenerator().notificationOccurred(.success)
+        case .orderingIncorrect: UINotificationFeedbackGenerator().notificationOccurred(.error)
         }
     }
 }
