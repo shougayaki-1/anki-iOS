@@ -35,7 +35,7 @@ final class BackupRepositoryTests: XCTestCase {
         }
         try repo.updateDraft(mode: .typing, text: "未確定の回答", now: now)
         try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "下書き", hint: "下書きヒント", imageID: image), now: now)
-        var options = try repo.settings(); options.notification.enabled = true; options.hapticsMode = .rich
+        var options = try repo.settings(); options.dailyNewLimit = 500; options.dailyGoal = 1; options.dayStartHour = 23; options.desiredRetention = 0.97; options.notification.enabled = true; options.hapticsMode = .rich
         options.reviewAppearance = ReviewAppearance(gesturesEnabled: true, textSize: .extraLarge, imageDisplay: .hidden, answerFirst: true, animationsEnabled: false)
         let homeScope = LearningScope(deckID: deck, tagIDs: try repo.tags().map(\.id))
         try repo.applyHomeScope(homeScope)

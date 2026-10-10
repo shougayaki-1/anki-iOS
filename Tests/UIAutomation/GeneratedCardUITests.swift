@@ -71,6 +71,68 @@ final class GeneratedCardUITests: XCTestCase {
         app.buttons["saveNote"].tap(); app.buttons["復習予定を維持して保存"].tap()
         XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 5))
     }
+    func testMaskDirectPercentageValidationAndPersistence() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-numeric-mask"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.staticTexts["Numeric mask fixture"].tap()
+        XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 5))
+        app.buttons["editNote"].tap()
+        func openCoordinates() {
+            let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "マスク1を選択")).firstMatch
+            for _ in 0..<25 where !disclosure.isHittable {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)))
+            }
+            XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+            // Expand using the standard disclosure chevron, beside the selection button.
+            let cell = app.cells.containing(.button, identifier: "マスク1を選択").firstMatch
+            cell.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        }
+        func field(_ prefix: String) -> XCUIElement {
+            app.textFields.matching(NSPredicate(format: "identifier BEGINSWITH %@", prefix)).firstMatch
+        }
+        func edit(_ prefix: String, text: String) {
+            let input = field(prefix)
+            for _ in 0..<20 {
+                if input.exists && input.isHittable && input.frame.minY > app.navigationBars.firstMatch.frame.maxY { break }
+                let up = prefix != "maskX-"
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: up ? 0.7 : 0.4))
+                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: up ? 0.5 : 0.6)))
+            }
+            XCTAssertTrue(input.waitForExistence(timeout: 5))
+            input.tap()
+            app.buttons[input.identifier + "Clear"].tap()
+            input.typeText(text)
+            app.buttons[input.identifier + "Done"].tap()
+        }
+        openCoordinates()
+        edit("maskWidth-", text: "20")
+        XCTAssertEqual(field("maskWidth-").value as? String, "20%")
+        attach(app, "Issue42-mask-width-confirmed")
+        edit("maskX-", text: "80")
+        XCTAssertEqual(field("maskX-").value as? String, "80%")
+        edit("maskX-", text: "90")
+        XCTAssertTrue(app.staticTexts[field("maskX-").identifier + "Error"].exists)
+        app.buttons[field("maskX-").identifier + "Cancel"].tap()
+        XCTAssertEqual(field("maskX-").value as? String, "80%")
+        app.buttons["saveNote"].tap()
+        XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 5))
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap(); app.staticTexts["Numeric mask fixture"].tap()
+        app.buttons["editNote"].tap(); openCoordinates()
+        XCTAssertEqual(field("maskX-").value as? String, "80%")
+        for _ in 0..<15 where !field("maskWidth-").isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)))
+        }
+        XCTAssertEqual(field("maskWidth-").value as? String, "20%")
+        attach(app, "Issue42-mask-input")
+    }
+
     func testPhotoMaskCreatePreviewLearnAndRestart() throws {
         let app = launch()
         app.buttons["addNote"].tap()

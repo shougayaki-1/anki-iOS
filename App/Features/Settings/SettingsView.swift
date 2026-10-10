@@ -26,22 +26,7 @@ struct SettingsView: View {
                     Text("カードと学習履歴は端末内に保存します。機種変更の前にバックアップを書き出してください。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
-                Section {
-                    Stepper("1日の新規上限: \(store.settings.dailyNewLimit)枚", value: Binding(
-                        get: { store.settings.dailyNewLimit }, set: { value in update { $0.dailyNewLimit = value } }
-                    ), in: 0...500)
-                    Toggle("学習目標を有効にする", isOn: Binding(
-                        get: { store.settings.dailyGoal != nil }, set: { value in update { $0.dailyGoal = value ? 20 : nil } }
-                    ))
-                    if let goal = store.settings.dailyGoal {
-                        Stepper("目標: \(goal)枚", value: Binding(get: { store.settings.dailyGoal ?? 20 }, set: { value in
-                            update { $0.dailyGoal = value }
-                        }), in: 1...500)
-                    }
-                    Stepper("学習日切替: \(store.settings.dayStartHour)時", value: Binding(
-                        get: { store.settings.dayStartHour }, set: { value in update { $0.dayStartHour = value } }
-                    ), in: 0...23)
-                } header: { Text("学習").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+                StudySettingsSection(store: store)
                 Section {
                     Toggle("同じノートの兄弟カードを同日抑制", isOn: Binding(
                         get: { store.settings.siblingBuryEnabled }, set: { value in update { $0.siblingBuryEnabled = value } }
@@ -55,7 +40,13 @@ struct SettingsView: View {
                     }), in: 0.8...0.97, step: 0.01) {
                         Text("目標保持率")
                     }
-                    Text("目標保持率: \(Int((store.settings.desiredRetention * 100).rounded()))%")
+                    NumericSettingRow(title: "目標保持率", value: String(Int((store.settings.desiredRetention * 100).rounded())),
+                                      unit: "%", identifier: "desiredRetention") { text in
+                        guard let percent = NumericSettingsInput.integer(text, in: StudySettings.retentionPercentRange) else {
+                            return .invalid("80〜97の整数を入力してください。")
+                        }
+                        return store.updateSettings { $0.desiredRetention = Double(percent) / 100 } ? nil : .saveFailed
+                    }
                     Text("変更は次の回答から適用されます。既存の復習予定は変わりません。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 } header: { Text("FSRS-6").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
@@ -128,12 +119,64 @@ struct SettingsView: View {
                     NavigationLink("Phase 0検証") { Phase0View().modelContainer(probeContainer) }
                 } header: { Text("開発検証").foregroundStyle(Color("SecondaryText")).accessibilityIdentifier("settingsDevelopmentHeader") }.headerProminence(.increased)
                 #endif
-            }.navigationTitle("設定")
+            }.scrollDismissesKeyboard(.interactively).navigationTitle("設定")
                 .sheet(isPresented: $backup) { BackupView(store: store) }
         }
     }
     private func update(_ edit: (inout StudySettings) -> Void) {
-        var settings = store.settings; edit(&settings)
-        store.perform { try store.repository.updateSettings(settings) }
+        store.updateSettings(edit)
+    }
+}
+
+struct StudySettingsSection: View {
+    @Bindable var store: StudyStore
+    @State private var lastGoal = 20
+    var body: some View {
+        Section {
+            NumericSettingRow(title: "1日の新規上限", value: String(store.settings.dailyNewLimit), unit: "枚", identifier: "dailyNewLimit") { text in
+                save(text, range: StudySettings.newLimitRange) { $0.dailyNewLimit = $1 }
+            }
+            Text("0〜500枚。0枚では新規カードを学習しません。")
+                .font(.footnote).foregroundStyle(Color("SecondaryText"))
+            Toggle("学習目標を有効にする", isOn: Binding(
+                get: { store.settings.dailyGoal != nil }, set: { enabled in
+                    if let goal = store.settings.dailyGoal { lastGoal = goal }
+                    store.updateSettings { $0.dailyGoal = enabled ? lastGoal : nil }
+                }
+            )).accessibilityIdentifier("dailyGoalToggle")
+            if let goal = store.settings.dailyGoal {
+                NumericSettingRow(title: "学習目標", value: String(goal), unit: "枚", identifier: "dailyGoal") { text in
+                    save(text, range: StudySettings.goalRange) { $0.dailyGoal = $1 }
+                }
+            }
+            Text("目標は1〜500枚。オフにすると未確定の入力を取り消し、この画面では直前の保存値でオンに戻します。再訪時は20枚です。目標達成後も学習できます。")
+                .font(.footnote).foregroundStyle(Color("SecondaryText"))
+            NumericSettingRow(title: "学習日切替", value: String(store.settings.dayStartHour), unit: "時", identifier: "dayStartHour") { text in
+                save(text, range: StudySettings.dayStartRange) { $0.dayStartHour = $1 }
+            }
+            Text("0〜23時（0＝午前0時、23＝午後11時）。学習日の境界で、通知時刻とは別です。")
+                .font(.footnote).foregroundStyle(Color("SecondaryText"))
+            Text("数値は「完了」で保存します。キャンセル・別の欄への移動・画面離脱では未確定の入力を取り消します。")
+                .font(.footnote).foregroundStyle(Color("SecondaryText"))
+        } header: { Text("学習").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+            .onAppear { lastGoal = store.settings.dailyGoal ?? 20 }
+    }
+    private func save(_ text: String, range: ClosedRange<Int>, edit: (inout StudySettings, Int) -> Void) -> NumericSettingError? {
+        guard let value = NumericSettingsInput.integer(text, in: range) else {
+            return .invalid("\(range.lowerBound)〜\(range.upperBound)の整数を入力してください。")
+        }
+        return store.updateSettings { edit(&$0, value) } ? nil : .saveFailed
+    }
+}
+
+struct StudySettingsView: View {
+    @Bindable var store: StudyStore
+    var body: some View {
+        Form {
+            StudySettingsSection(store: store)
+            Section {
+                Text("新規上限は全デッキ・全モード共通です。変更しても今日の学習履歴は保持します。学習目標の達成後も学習できます。")
+            }
+        }.scrollDismissesKeyboard(.interactively).navigationTitle("学習設定")
     }
 }
