@@ -81,13 +81,22 @@ enum ShortcutDeckDirectory {
     }
 }
 
-struct ShortcutDeckQuery: EntityQuery {
+struct ShortcutDeckQuery: EntityStringQuery {
     func entities(for identifiers: [ShortcutDeckEntity.ID]) async throws -> [ShortcutDeckEntity] {
         try await MainActor.run { ShortcutDeckDirectory.matching(identifiers, in: try ShortcutDeckDirectory.readLocal()) }
     }
 
     func suggestedEntities() async throws -> [ShortcutDeckEntity] {
         try await MainActor.run { try ShortcutDeckDirectory.readLocal() }
+    }
+
+    // Spoken deck names can be resolved without relying on the visual #40 tree.
+    // A hierarchical full path disambiguates identical leaf names.
+    func entities(matching string: String) async throws -> [ShortcutDeckEntity] {
+        try await MainActor.run {
+            let decks = try ShortcutDeckDirectory.readLocal()
+            return decks.filter { $0.path.localizedStandardContains(string) }
+        }
     }
 }
 

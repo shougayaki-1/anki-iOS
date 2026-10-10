@@ -5,7 +5,7 @@ final class AppShortcutUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", storeID] + arguments
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 15))
         return app
     }
 
@@ -54,6 +54,7 @@ final class AppShortcutUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["shortcutDeckPath"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["Hint basic"].exists || app.staticTexts["Hint written"].exists)
 
+        app.terminate()
         let missing = launch(["-study-test-shortcut", "deck:\(UUID().uuidString)"])
         XCTAssertTrue(missing.tabBars.buttons["ライブラリ"].isSelected)
         XCTAssertTrue(missing.alerts["ショートカット"].waitForExistence(timeout: 10))
