@@ -13,6 +13,17 @@ struct StudyOptions: Codable, Equatable {
     var hapticsMode: HapticsMode? = nil
     var homeScope: LearningScope? = nil
     var reviewAppearance: ReviewAppearance? = nil
+    // Optional fields preserve decoding of existing .studybackup preference JSON.
+    // nil = default 20 answers; 0 = unlimited.
+    var sessionAnswerLimit: Int? = nil
+    var activeSessionProgress: StudySessionProgressSnapshot? = nil
+}
+
+// The session boundary is the last persisted ReviewLog sequence when the session starts.
+// This is stored separately from the daily unique-card goal and survives app relaunch.
+struct StudySessionProgressSnapshot: Codable, Equatable {
+    var startSequence: Int
+    var answerLimit: Int
 }
 
 struct TagItem: Identifiable {

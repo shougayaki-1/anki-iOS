@@ -126,6 +126,26 @@ final class StudyUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Bulk deck two"].exists)
     }
 
+    func testSessionShowsRemainingAnswersInsteadOfDailyGoal() {
+        let app = app()
+        create(app, question: "Progress test question", answer: "Progress test answer")
+        create(app, question: "Progress test question 2", answer: "Progress test answer 2")
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.buttons["openSessionAnswerLimit"].exists)
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))
+        app.buttons["start-new"].tap()
+        let remaining = app.staticTexts["remainingQuestions"]
+        XCTAssertTrue(remaining.waitForExistence(timeout: 10))
+        XCTAssertEqual(remaining.label, "残り20問")
+        XCTAssertTrue(app.progressIndicators["sessionProgressBar"].exists)
+        XCTAssertFalse(app.staticTexts["reviewGoalProgress"].exists)
+        app.buttons["revealAnswer"].tap()
+        app.buttons["grade-4"].tap()
+        XCTAssertEqual(remaining.label, "残り19問")
+        app.buttons["undoReview"].tap()
+        XCTAssertEqual(remaining.label, "残り20問")
+    }
+
     func testSharedHintsAllFormatsReverseExceptionAndCardReset() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-hints"]
