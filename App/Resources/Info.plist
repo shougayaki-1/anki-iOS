@@ -9,6 +9,16 @@
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>dev.shoug.anki-ios.ordering-token</string>
+			<key>UTTypeDescription</key>
+			<string>Ordering Answer Token</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+		</dict>
+		<dict>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.zip-archive</string>

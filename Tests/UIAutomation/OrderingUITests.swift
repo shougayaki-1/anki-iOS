@@ -12,14 +12,27 @@ final class OrderingUITests: XCTestCase {
         return app
     }
     func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
-        for _ in 0..<25 {
-            let top = app.navigationBars.firstMatch.frame.maxY + 4
-            if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY < app.frame.maxY - 35 { return }
-            let down = element.exists && element.frame.minY < top
+        var missingSearches = 0
+        for _ in 0..<35 {
+            let navigationBottom = app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? 0
+            let pause = app.buttons["pauseStudy"]
+            let top = max(navigationBottom, pause.exists ? pause.frame.maxY : 0) + 12
+            var bottom = app.frame.maxY - 35
+            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer")
+            if !fixedControl {
+                let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+                if footer.exists && footer.isHittable { bottom = min(bottom, footer.frame.minY - 8) }
+            }
+            if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY < bottom { return }
+            // At accessibility sizes XCTest omits distant off-screen chips.
+            // Search toward the top first, then downward, rather than assuming
+            // a missing chip is always below the current scroll position.
+            let down = element.exists ? element.frame.minY < top : missingSearches < 6
+            if !element.exists { missingSearches += 1 }
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: down ? 0.4 : 0.72))
                 .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: down ? 0.72 : 0.4)))
         }
-        XCTAssertTrue(element.isHittable, "Missing visible element: \(element.identifier)")
+        XCTAssertTrue(element.exists && element.isHittable, "Required element could not be made visible")
     }
     func tap(_ id: String, app: XCUIApplication) {
         let element = app.buttons[id]; scrollTo(element, app: app); element.tap()
@@ -162,10 +175,52 @@ final class OrderingUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["orderingProgress"].label, "選択 4 / 6語句")
     }
 
+    func testCrossRowInsertionAndCancelledDragPreserveTokenIdentity() {
+        let app = launch()
+        select(Array(0..<6), app: app)
+        let sentence = app.staticTexts["orderingSentence"]
+        let original = sentence.value as? String
+        let first = app.buttons["ordering-selected-0"]
+        scrollTo(first, app: app)
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.8, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.025)))
+        XCTAssertEqual(sentence.value as? String, original)
+        XCTAssertEqual(app.staticTexts["orderingProgress"].label, "選択 6 / 6語句")
+
+        let last = app.buttons["ordering-selected-5"]
+        scrollTo(last, app: app); scrollTo(first, app: app)
+        last.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.8, thenDragTo: first.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.5)))
+        XCTAssertEqual(sentence.value as? String, "day. I walk to school every")
+        let end = app.buttons["ordering-selected-4"]
+        scrollTo(first, app: app); scrollTo(end, app: app)
+        first.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 0.8, thenDragTo: end.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)))
+        XCTAssertEqual(sentence.value as? String, "day. walk to school every I")
+        XCTAssertEqual(app.staticTexts["orderingProgress"].label, "選択 6 / 6語句")
+        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+    }
+
+    func testSingleSelectedChipCanBeCancelledAtLargestType() {
+        let app = launch(accessibility: true)
+        tap("ordering-token-0", app: app)
+        let selected = app.buttons["ordering-selected-0"]
+        scrollTo(selected, app: app)
+        print("Single selected chip: \(selected.debugDescription)")
+        attach(app, "Issue56-single-selected-before-cancel")
+        selected.tap()
+        attach(app, "Issue56-single-selected-after-cancel")
+        XCTAssertFalse(selected.exists)
+        scrollTo(app.buttons["ordering-token-0"], app: app)
+        XCTAssertTrue(app.buttons["ordering-token-0"].exists)
+        XCTAssertEqual(app.staticTexts["orderingProgress"].label, "選択 0 / 6語句")
+    }
+
     func testLargestDynamicTypeDarkAndReduceMotion() throws {
         let app = launch(accessibility: true)
         tap("ordering-token-0", app: app)
         tap("ordering-selected-0", app: app)
+        XCTAssertFalse(app.buttons["ordering-selected-0"].exists, "Tapping a selected chip must return it to the bank")
         XCTAssertFalse(app.buttons["checkOrdering"].isEnabled)
         scrollTo(app.buttons["ordering-token-1"], app: app)
         attach(app, "Issue49-largest-dark-candidates")

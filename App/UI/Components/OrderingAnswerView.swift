@@ -18,7 +18,7 @@ struct OrderingAnswerView: View {
     @State private var lastPositionFeedback = Date.distantPast
 
     // A private type prevents accepting unrelated text dragged from another app.
-    private static let dragType = UTType(exportedAs: "dev.shoug.anki-ios.ordering-token")
+    private static let dragType = UTType(exportedAs: "dev.shoug.anki-ios.ordering-token", conformingTo: .data)
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -140,6 +140,9 @@ struct OrderingAnswerView: View {
         }
         .buttonStyle(.bordered).tint(Color("PrimaryAction"))
         .frame(maxWidth: .infinity, alignment: .leading)
+        // Keep a single chip's accessibility frame separate from the full-width
+        // drop target, just as when several chips are present.
+        .accessibilityElement(children: .contain)
         .coordinateSpace(name: "ordering-selected-flow")
         .contentShape(Rectangle())
         .onPreferenceChange(OrderingChipFramesKey.self) { tokenFrames = $0 }
@@ -161,7 +164,6 @@ struct OrderingAnswerView: View {
             }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: draft.selected)
-        .accessibilityIdentifier("orderingSelectedFlow")
     }
 
     // Return an insertion slot between tokens, including row beginnings/ends.
