@@ -68,7 +68,7 @@ struct NumericSettingRow: View {
 
     private var input: some View {
         HStack(spacing: 6) {
-            TextField(title, text: $draft)
+            TextField("", text: $draft)
                 .keyboardType(allowsDecimal ? .decimalPad : .numberPad)
                 .textFieldStyle(.roundedBorder)
                 .multilineTextAlignment(.trailing)

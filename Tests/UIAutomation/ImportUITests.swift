@@ -89,14 +89,31 @@ final class ImportUITests: XCTestCase {
         let previewImage = XCTAttachment(screenshot: app.screenshot())
         previewImage.name = "Large-CSV-pinned-confirm"; previewImage.lifetime = .keepAlways; add(previewImage)
         let summary = app.staticTexts["importPageSummary"]
-        for _ in 0..<4 where !summary.isHittable { app.swipeUp() }
+        func reachPageControls() {
+            for _ in 0..<40 {
+                let next = app.buttons["nextImportPage"]
+                let top = app.navigationBars.firstMatch.frame.maxY + 8
+                let bottom = confirm.frame.minY - 8
+                if next.exists && next.isHittable && next.frame.minY >= top && next.frame.maxY <= bottom { return }
+                let above = next.exists && next.frame.minY < top
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: above ? 0.35 : 0.65))
+                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: above ? 0.6 : 0.4)))
+            }
+            XCTFail("Page controls must be inside the unobscured preview")
+        }
+        reachPageControls()
         XCTAssertTrue(summary.label.contains("1〜20 / 41行"))
         app.buttons["nextImportPage"].tap()
-        XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "21〜40 / 41行"), evaluatedWith: summary)
+        waitForExpectations(timeout: 5)
+        reachPageControls()
         app.buttons["nextImportPage"].tap()
-        XCTAssertTrue(summary.label.contains("41〜41 / 41行"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "41〜41 / 41行"), evaluatedWith: summary)
+        waitForExpectations(timeout: 5)
+        reachPageControls()
         app.buttons["previousImportPage"].tap()
-        XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "21〜40 / 41行"), evaluatedWith: summary)
+        waitForExpectations(timeout: 5)
         XCTAssertTrue(confirm.isHittable); confirm.tap()
         app.buttons["確定して保存"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
@@ -121,7 +138,11 @@ final class ImportUITests: XCTestCase {
         XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText("Biology")
         app.buttons["deckParentPicker"].tap(); app.buttons["Science"].firstMatch.tap()
         app.buttons["保存"].tap()
-        XCTAssertTrue(app.buttons["Science / Biology"].waitForExistence(timeout: 5))
+        let expand = app.buttons.matching(NSPredicate(format: "label == %@", "Scienceを展開する")).firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        let child = app.buttons.matching(NSPredicate(format: "label == %@", "Science / Biologyを編集")).firstMatch
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
         app.buttons["閉じる"].tap()
         app.buttons["addNote"].tap()
         app.buttons["noteDeckPicker"].tap(); app.buttons["Science / Biology"].firstMatch.tap()
