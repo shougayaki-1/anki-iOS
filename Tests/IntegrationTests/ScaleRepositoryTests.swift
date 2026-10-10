@@ -46,6 +46,19 @@ final class ScaleRepositoryTests: XCTestCase {
         XCTAssertEqual(store.notes.count, 3000)
         XCTAssertEqual(try repo.notes().count, 1000)
         XCTAssertEqual(try repo.logs().count, 10000)
+        let statisticsReadStart = Date()
+        let report = try await StatisticsReader(container: container).load(
+            now: due.addingTimeInterval(1), calendar: .current,
+            startHour: 4, scope: LearningScope()
+        )
+        let statisticsReadElapsed = Date().timeIntervalSince(statisticsReadStart)
+        XCTAssertEqual(report.ratings[.easy], 10000)
+        XCTAssertEqual(report.months.count, 12)
+        print("Issue #9: 10000 persisted logs + 3000 FSRS cards report load: \(statisticsReadElapsed)s")
+        let reportAttachment = XCTAttachment(string: "statistics 10000 logs / 3000 cards: \(statisticsReadElapsed)s")
+        reportAttachment.name = "Issue9-statistics-scale-measurement"
+        reportAttachment.lifetime = .keepAlways
+        add(reportAttachment)
         XCTAssertEqual(store.counts.due, 3000)
         let pollStart = Date()
         for _ in 0..<5 { store.refreshHome() }

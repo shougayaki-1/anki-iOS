@@ -879,4 +879,37 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertTrue(try repo.notes().isEmpty)
         XCTAssertTrue(try repo.cards().isEmpty)
     }
+    func testBackgroundStatisticsReaderKeepsDeletedHistoryAndRespectsDeckScope() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try XCTUnwrap(repo.decks().first).id
+        let child = try repo.createDeck(name: "Child", parentID: root, now: now)
+        let other = try repo.createDeck(name: "Other", now: now)
+        let noteID = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A"), now: now)
+        try repo.start(mode: .new, scope: LearningScope(deckID: child), now: now)
+        try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(3))
+
+        let reader = StatisticsReader(container: container)
+        let calendar = Calendar.current
+        let all = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                        startHour: 4, scope: LearningScope())
+        let descendant = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                               startHour: 4, scope: LearningScope(deckID: root))
+        let excluded = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                             startHour: 4, scope: LearningScope(deckID: other))
+        XCTAssertEqual(all.days[0].answers, 1)
+        XCTAssertEqual(descendant.days[0].answers, 1)
+        XCTAssertEqual(excluded.days[0].answers, 0)
+
+        try repo.deleteNote(id: noteID)
+        let orphan = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                           startHour: 4, scope: LearningScope())
+        let orphanScoped = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                                 startHour: 4, scope: LearningScope(deckID: root))
+        XCTAssertEqual(orphan.days[0].answers, 1)
+        XCTAssertEqual(orphan.unattributedAnswers, 1)
+        XCTAssertEqual(orphanScoped.days[0].answers, 0)
+    }
+
 }
