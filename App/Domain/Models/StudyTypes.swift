@@ -44,6 +44,7 @@ struct TextContent: Codable, Equatable {
     var question: String
     var answer: String
     var explanation: String
+    var hint: String? = nil
     var reverseEnabled: Bool? = nil
     var imageID: UUID? = nil
     var masks: [ImageMask]? = nil
@@ -56,6 +57,7 @@ struct NoteInput: Codable, Equatable {
     var question = ""
     var answer = ""
     var explanation = ""
+    var hint: String? = nil
     var responseMode: ResponseMode = .mental
     var tagNames: [String] = []
     var reverseEnabled = false

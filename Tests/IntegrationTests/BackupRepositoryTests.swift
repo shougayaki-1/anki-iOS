@@ -21,7 +21,7 @@ final class BackupRepositoryTests: XCTestCase {
         }.pngData()!
         let image = try repo.addImage(bytes, now: now)
         for kind in NoteKind.allCases {
-            var input = NoteInput(deckID: deck, kind: kind, question: kind == .cloze ? "{{c1::東京}}と{{c2::京都}}" : "問題", answer: "答え", responseMode: .typing, tagNames: ["日本"], reverseEnabled: kind == .basic)
+            var input = NoteInput(deckID: deck, kind: kind, question: kind == .cloze ? "{{c1::東京}}と{{c2::京都}}" : "問題", answer: "答え", hint: "共通の手がかり\n二行目", responseMode: .typing, tagNames: ["日本"], reverseEnabled: kind == .basic)
             if kind == .imageOcclusion {
                 input.imageID = image
                 input.masks = [ImageMask(rect: MaskRect(x: 0.1, y: 0.1, width: 0.3, height: 0.2), answer: "赤")]
@@ -34,7 +34,7 @@ final class BackupRepositoryTests: XCTestCase {
             try repo.grade(grade, now: now.addingTimeInterval(2))
         }
         try repo.updateDraft(mode: .typing, text: "未確定の回答", now: now)
-        try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "下書き", imageID: image), now: now)
+        try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "下書き", hint: "下書きヒント", imageID: image), now: now)
         var options = try repo.settings(); options.notification.enabled = true; options.hapticsMode = .rich
         options.reviewAppearance = ReviewAppearance(gesturesEnabled: true, textSize: .extraLarge, imageDisplay: .hidden, answerFirst: true, animationsEnabled: false)
         let homeScope = LearningScope(deckID: deck, tagIDs: try repo.tags().map(\.id))
@@ -74,12 +74,37 @@ final class BackupRepositoryTests: XCTestCase {
         XCTAssertEqual(try reopened.settings().hapticsMode, .rich)
         XCTAssertEqual(try reopened.settings().reviewAppearance, try source.settings().reviewAppearance)
         XCTAssertEqual(try reopened.session()?.typedDraft, "未確定の回答")
+        XCTAssertTrue(try reopened.noteItems().allSatisfy { $0.sourceContent.hint == "共通の手がかり\n二行目" })
+        XCTAssertEqual(try reopened.editorDraft(key: "new")?.hint, "下書きヒント")
         let previous = try XCTUnwrap(reopened.logs().last)
         let cardID = previous.cardID, before = previous.fsrsBefore
         try reopened.undo(now: now.addingTimeInterval(10))
         XCTAssertEqual(try reopened.logs().count, 3)
         XCTAssertEqual(try reopened.cards().first(where: { $0.id == cardID })?.fsrsPayload, before)
         XCTAssertEqual(try original.notes().count, 1) // Original store remains intact.
+    }
+    func testLegacyBackupWithoutHintKeysRestoresNotesAndEditorDraft() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let current = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        var legacy = current.data
+        func withoutHint(_ data: Data) throws -> Data {
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            json.removeValue(forKey: "hint")
+            return try JSONSerialization.data(withJSONObject: json)
+        }
+        for index in legacy.notes.indices { legacy.notes[index].contentPayload = try withoutHint(legacy.notes[index].contentPayload) }
+        for index in legacy.editorDrafts.indices { legacy.editorDrafts[index].payload = try withoutHint(legacy.editorDrafts[index].payload) }
+        let backup = try BackupArchive.decode(BackupArchive.create(data: legacy, media: current.media, now: now, appVersion: "legacy"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertTrue(try reopened.noteItems().allSatisfy { $0.sourceContent.hint == nil })
+        XCTAssertNil(try reopened.editorDraft(key: "new")?.hint)
+        XCTAssertEqual(Set(try reopened.cards().map(\.id)), Set(try source.cards().map(\.id)))
+        XCTAssertEqual(try reopened.logs().map(\.id), try source.logs().map(\.id))
     }
     func testFailedStagedSavePreservesActivePointerAndOriginalData() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

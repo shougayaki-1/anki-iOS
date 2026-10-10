@@ -197,10 +197,26 @@ final class QualityUITests: XCTestCase {
         scrollTo(question, app: app); question.tap(); question.typeText("Write the capital")
         let answer = app.descendants(matching: .any)["answerInput"]
         scrollTo(answer, app: app); answer.tap(); answer.typeText("Tokyo")
+        if app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        let hint = app.descendants(matching: .any)["hintInput"]
+        for _ in 0..<20 {
+            let top = app.navigationBars.firstMatch.frame.maxY
+            if hint.exists && hint.isHittable && hint.frame.minY >= top && hint.frame.maxY <= app.frame.maxY - 60 { break }
+            let above = hint.exists && hint.frame.minY < top
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: above ? 0.45 : 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: above ? 0.7 : 0.45)))
+        }
+        hint.tap(); hint.typeText("Think of a Japanese city")
         app.buttons["saveNote"].tap()
         XCTAssertTrue(app.staticTexts["Write the capital"].waitForExistence(timeout: 5))
         app.tabBars.buttons["ホーム"].tap()
         let start = app.buttons["start-new"]; scrollTo(start, app: app); start.tap()
+        let hintToggle = app.buttons["toggleHint"]
+        scrollTo(hintToggle, app: app); hintToggle.tap()
+        XCTAssertEqual(app.staticTexts["studyHint"].label, "Think of a Japanese city")
+        attach(app, name: "Issue47-dark-largest-type-hint")
+        try app.performAccessibilityAudit(for: [.elementDetection, .sufficientElementDescription])
+        hintToggle.tap()
         let mode = app.descendants(matching: .any)["reviewModePicker"]
         scrollTo(mode, app: app); mode.tap()
         let typingMode = app.buttons["response-mode-typing"]

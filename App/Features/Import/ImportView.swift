@@ -11,6 +11,7 @@ struct ImportView: View {
     @State private var format = "Q/A"
     @State private var hasHeader = true
     @State private var questionColumn = 0
+    @State private var hintColumn = -2 // -2: header detection, -1: no hint column
     @State private var answerColumn = 1
     @State private var columnCount = 2
     @State private var rows: [ImportRow] = []
@@ -60,6 +61,13 @@ struct ImportView: View {
                             Picker("解答の列", selection: $answerColumn) {
                                 ForEach(0..<columnCount, id: \.self) { Text("列\($0 + 1)").tag($0) }
                             }
+                            Picker("ヒントの列", selection: $hintColumn) {
+                                Text("ヘッダーから自動判定").tag(-2)
+                                Text("指定しない（既存ヒントを保持）").tag(-1)
+                                ForEach(0..<columnCount, id: \.self) { Text("列\($0 + 1)").tag($0) }
+                            }.accessibilityIdentifier("importHintColumn")
+                            Text("hint / ヒントのヘッダーを認識します。指定したヒント列が空欄の場合、重複更新で既存ヒントを消去します。列を指定しない場合は保持します。")
+                                .font(.footnote).foregroundStyle(.secondary)
                         }
                         Button("プレビューを作成", action: preview).accessibilityIdentifier("previewImport")
                             .disabled(text.isEmpty)
@@ -98,6 +106,15 @@ struct ImportView: View {
                             Toggle("取り込む", isOn: $rows[index].included)
                             TextField("問題", text: $rows[index].question, axis: .vertical)
                             TextField("解答", text: $rows[index].answer, axis: .vertical)
+                            TextField("ヒント（任意）", text: Binding(get: { rows[index].hint ?? "" }, set: { rows[index].hint = $0 }), axis: .vertical)
+                                .accessibilityIdentifier("importHint-\(row.line)")
+                            Text(row.hint == nil ? "重複更新時：既存ヒントを保持" :
+                                 (ImportParser.normalized(row.hint ?? "").isEmpty ? "重複更新時：既存ヒントを消去" : "重複更新時：ヒントを置き換え"))
+                                .font(.footnote).foregroundStyle(.secondary)
+                            if row.hint != nil {
+                                Button("ヒントの変更を取り消し、既存を保持") { rows[index].hint = nil }
+                                    .font(.footnote)
+                            }
                             if incomplete(row) { Text("問題または解答を入力してください。確定時はエラーとして除外します。")
                                     .font(.footnote).foregroundStyle(.red) }
                             if isDuplicate(row) { Label("同じデッキに重複候補があります", systemImage: "doc.on.doc")
@@ -125,6 +142,8 @@ struct ImportView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .onChange(of: text) { _, _ in refreshColumnCount() }
+            .onChange(of: format) { _, _ in refreshColumnCount() }
             .navigationTitle("一括登録")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeImport") }
@@ -179,9 +198,19 @@ struct ImportView: View {
             else {
                 let table = try ImportParser.table(text, delimiter: format == "CSV" ? "," : "\t")
                 columnCount = max(2, table.rows.map(\.count).max() ?? 2)
-                rows = ImportParser.map(table, header: hasHeader, questionColumn: questionColumn, answerColumn: answerColumn)
+                let selectedHint = hintColumn >= 0 ? hintColumn :
+                    (hintColumn == -2 && hasHeader ? ImportParser.hintColumn(in: table) : nil)
+                rows = ImportParser.map(table, header: hasHeader, questionColumn: questionColumn,
+                                        answerColumn: answerColumn, hintColumn: selectedHint)
             }
         } catch { failure = error.localizedDescription }
+    }
+    private func refreshColumnCount() {
+        guard format != "Q/A", let table = try? ImportParser.table(text, delimiter: format == "CSV" ? "," : "\t") else { return }
+        columnCount = max(2, table.rows.map(\.count).max() ?? 2)
+        questionColumn = min(questionColumn, columnCount - 1)
+        answerColumn = min(answerColumn, columnCount - 1)
+        if hintColumn >= columnCount { hintColumn = -2 }
     }
     private func commit() {
         do {

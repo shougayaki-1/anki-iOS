@@ -45,6 +45,97 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testSharedHintsAllFormatsReverseExceptionAndCardReset() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-hints"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15)); app.buttons["start-new"].tap()
+        var reverse = 0, hinted = 0, images = 0, clozes = 0
+        for _ in 0..<7 {
+            let question = app.staticTexts["reviewQuestion"]
+            XCTAssertTrue(question.waitForExistence(timeout: 5))
+            let toggle = app.buttons["toggleHint"]
+            XCTAssertFalse(app.staticTexts["studyHint"].exists)
+            if question.label == "Reverse question" {
+                reverse += 1; XCTAssertFalse(toggle.exists)
+            } else {
+                hinted += 1; XCTAssertTrue(toggle.exists); scrollTo(toggle, app: app); toggle.tap()
+                XCTAssertTrue(app.staticTexts["studyHint"].exists)
+                XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+                if question.label == "Hint imageOcclusion" {
+                    images += 1; XCTAssertTrue(app.descendants(matching: .any)["reviewImage"].exists)
+                    attach(app, "Issue47-image-mask-hint")
+                }
+                if question.label.contains("[") { clozes += 1 }
+            }
+            scrollTo(app.buttons["revealAnswer"], app: app); app.buttons["revealAnswer"].tap()
+            XCTAssertFalse(toggle.exists)
+            scrollTo(app.buttons["grade-4"], app: app); app.buttons["grade-4"].tap()
+        }
+        XCTAssertEqual(reverse, 1); XCTAssertEqual(hinted, 6)
+        XCTAssertEqual(images, 2); XCTAssertEqual(clozes, 2)
+    }
+
+    func testHintEditorPreviewTypingPauseRestartUndoAndCardChange() {
+        let app = app()
+        create(app, question: "Hint question", answer: "Secret answer")
+        app.staticTexts["Hint question"].firstMatch.tap()
+        app.buttons["editNote"].tap()
+        let hint = app.descendants(matching: .any)["hintInput"]
+        for _ in 0..<8 where !hint.exists || !hint.isHittable || hint.frame.minY < app.navigationBars.firstMatch.frame.maxY || hint.frame.maxY > app.frame.maxY - 60 { app.swipeUp() }
+        hint.tap(); hint.typeText("Recall the first letter")
+        if app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        let preview = app.buttons["previewNote"]
+        scrollTo(preview, app: app); preview.tap()
+        let toggle = app.buttons["toggleHint"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        toggle.tap(); XCTAssertEqual(app.staticTexts["studyHint"].label, "Recall the first letter")
+        XCTAssertFalse(app.staticTexts["previewAnswer"].exists)
+        toggle.tap(); XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        app.buttons["closePreview"].tap()
+        app.buttons["closeEditor"].tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.staticTexts["Hint question"].firstMatch.tap(); app.buttons["editNote"].tap()
+        scrollTo(hint, app: app)
+        XCTAssertEqual(hint.value as? String, "Recall the first letter")
+        app.buttons["saveNote"].tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        app.segmentedControls["reviewModePicker"].buttons["文字入力"].tap()
+        let draft = app.descendants(matching: .any)["typedAnswer"]
+        draft.tap(); draft.typeText("My draft")
+        toggle.tap(); XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+        XCTAssertEqual(draft.value as? String, "My draft")
+        toggle.tap(); toggle.tap()
+        app.buttons["pauseStudy"].tap()
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        XCTAssertEqual(draft.value as? String, "My draft")
+        toggle.tap()
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15)); app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5)); XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        XCTAssertEqual(draft.value as? String, "My draft")
+        if app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        toggle.tap()
+        attach(app, "Issue47-hint-expanded")
+        app.buttons["revealAnswer"].tap()
+        XCTAssertFalse(toggle.exists); XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        XCTAssertEqual(app.staticTexts["modelAnswer"].label, "Secret answer")
+        scrollTo(app.buttons["grade-4"], app: app); app.buttons["grade-4"].tap()
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5)); XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+        app.buttons["revealAnswer"].tap()
+        scrollTo(app.buttons["grade-4"], app: app); app.buttons["grade-4"].tap()
+        XCTAssertFalse(app.staticTexts["studyHint"].exists)
+    }
+
     func testInterruptedReviewPrimaryResumesRevealedDraftWithoutConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]

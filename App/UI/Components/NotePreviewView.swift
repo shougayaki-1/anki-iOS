@@ -8,7 +8,7 @@ struct NotePreviewView: View {
     @State private var revealed = false
 
     private var content: TextContent {
-        TextContent(question: input.question, answer: input.answer, explanation: input.explanation,
+        TextContent(question: input.question, answer: input.answer, explanation: input.explanation, hint: input.hint,
                     reverseEnabled: input.reverseEnabled, imageID: input.imageID,
                     masks: input.masks, hideAllMasks: input.hideAllMasks)
     }
@@ -26,6 +26,9 @@ struct NotePreviewView: View {
                                 StudyImageView(image: image, masks: input.kind == .imageOcclusion ? input.masks : [],
                                                targetID: UUID(uuidString: String(selected.dropFirst("image:".count))),
                                                hideAll: input.hideAllMasks, revealed: revealed)
+                            }
+                            if !revealed {
+                                StudyHintView(hint: shown.hint).id(selected)
                             }
                             if revealed {
                                 Text(shown.answer).accessibilityIdentifier("previewAnswer")
@@ -45,6 +48,34 @@ struct NotePreviewView: View {
             .onChange(of: selected) { _, _ in revealed = false }
             .navigationTitle("出題プレビュー")
             .toolbar { Button("閉じる") { dismiss() }.accessibilityIdentifier("closePreview") }
+        }
+    }
+}
+
+// Expansion is presentation-only: it never changes the answer draft or scheduler.
+struct StudyHintView: View {
+    let hint: String?
+    @State private var expanded = false
+
+    var body: some View {
+        if let hint, !hint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Button { expanded.toggle() } label: {
+                    Label(expanded ? "ヒントを隠す" : "ヒントを見る", systemImage: "lightbulb")
+                        .font(.subheadline).frame(minHeight: 44, alignment: .leading)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(expanded ? "ヒントを隠す" : "ヒントを見る")
+                .accessibilityValue(expanded ? "展開中" : "折り畳み中")
+                .accessibilityIdentifier("toggleHint")
+                if expanded {
+                    Text(hint).font(.body).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("studyHint")
+                }
+            }
+            .onAppear { expanded = false }
+            .onDisappear { expanded = false }
         }
     }
 }

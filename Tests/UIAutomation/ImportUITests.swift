@@ -1,6 +1,38 @@
 import XCTest
 
 final class ImportUITests: XCTestCase {
+    func testCSVHintHeaderPreviewEditingAndLearning() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["openImport"].tap()
+        let text = app.textViews["importText"]
+        XCTAssertTrue(text.waitForExistence(timeout: 5)); text.tap()
+        text.typeText("question,answer,ヒント\nCSV hint question,CSV answer,Initial clue")
+        app.buttons["完了"].tap()
+        app.descendants(matching: .any)["importFormat"].tap(); app.buttons["CSV（カンマ）"].tap()
+        let preview = app.buttons["previewImport"]
+        for _ in 0..<8 where !preview.isHittable { app.swipeUp() }
+        preview.tap()
+        let hint = app.descendants(matching: .any)["importHint-2"]
+        for _ in 0..<8 where !hint.exists || !hint.isHittable { app.swipeUp() }
+        XCTAssertEqual(hint.value as? String, "Initial clue")
+        hint.tap(); hint.typeText(" edited")
+        let editedHint = hint.value as? String ?? ""
+        XCTAssertTrue(editedHint.contains("edited"))
+        app.buttons["完了"].tap()
+        app.buttons["confirmImport"].tap(); app.buttons["commitImport"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["importResult"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["importResult"].label.contains("成功 1件"))
+        app.buttons["closeImport"].tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["toggleHint"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["studyHint"].exists)
+        app.buttons["toggleHint"].tap()
+        XCTAssertEqual(app.staticTexts["studyHint"].label, editedHint)
+        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+    }
     func testPastePreviewConfirmDuplicatesAndErrorsThenLearn() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]
