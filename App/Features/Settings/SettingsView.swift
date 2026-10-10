@@ -92,11 +92,41 @@ struct SettingsView: View {
                     Text("答え表示・評価・Undo・目標達成で控えめに反応します。「豊か」は対応実機の目標達成時にカスタムパターンを使います。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 } header: { Text("触覚").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+                Section {
+                    Toggle("スワイプ操作を有効にする", isOn: Binding(
+                        get: { store.settings.reviewAppearance.gesturesEnabled },
+                        set: { enabled in update { $0.reviewAppearance.gesturesEnabled = enabled } }
+                    )).accessibilityIdentifier("reviewGesturesToggle")
+                    Picker("文字サイズ", selection: Binding(
+                        get: { store.settings.reviewAppearance.textSize },
+                        set: { value in update { $0.reviewAppearance.textSize = value } }
+                    )) {
+                        ForEach(ReviewTextSize.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.accessibilityIdentifier("reviewTextSize")
+                    Picker("画像の表示", selection: Binding(
+                        get: { store.settings.reviewAppearance.imageDisplay },
+                        set: { value in update { $0.reviewAppearance.imageDisplay = value } }
+                    )) {
+                        ForEach(ReviewImageDisplay.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.accessibilityIdentifier("reviewImageDisplay")
+                    Toggle(isOn: Binding(
+                        get: { store.settings.reviewAppearance.answerFirst },
+                        set: { value in update { $0.reviewAppearance.answerFirst = value } }
+                    )) { Text("解答を先に表示").fixedSize(horizontal: false, vertical: true) }
+                    .accessibilityIdentifier("reviewAnswerFirst")
+                    Toggle("学習時のアニメーション", isOn: Binding(
+                        get: { store.settings.reviewAppearance.animationsEnabled },
+                        set: { value in update { $0.reviewAppearance.animationsEnabled = value } }
+                    )).accessibilityIdentifier("reviewAnimationsToggle")
+                    Text("解答の表示順は答え表示後に適用します。スワイプは専用領域で操作し、VoiceOver使用中はボタンを使います。画像マスクは常に表示し、端末の文字サイズと「視差効果を減らす」設定を反映します。")
+                        .fixedSize(horizontal: false, vertical: true)
+                        .font(.footnote).foregroundStyle(Color("SecondaryText"))
+                } header: { Text("学習画面").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
                 Section { Button("バックアップ・復元") { backup = true }.accessibilityIdentifier("openBackup") } header: { Text("データ").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
                 #if DEBUG
                 Section {
                     NavigationLink("Phase 0検証") { Phase0View().modelContainer(probeContainer) }
-                } header: { Text("開発検証").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+                } header: { Text("開発検証").foregroundStyle(Color("SecondaryText")).accessibilityIdentifier("settingsDevelopmentHeader") }.headerProminence(.increased)
                 #endif
             }.navigationTitle("設定")
                 .sheet(isPresented: $backup) { BackupView(store: store) }

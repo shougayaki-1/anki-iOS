@@ -56,6 +56,10 @@ final class OperationsUITests: XCTestCase {
         scrollTo(toggle, in: app); XCTAssertEqual(toggle.value as? String, "0")
     }
     func testActualDueNotificationDeliveryAndTapReturnsHome() {
+        addUIInterruptionMonitor(withDescription: "Local notification permission") { alert in
+            for label in ["許可", "Allow"] where alert.buttons[label].exists { alert.buttons[label].tap(); return true }
+            return false
+        }
         let app = XCUIApplication()
         let id = UUID().uuidString
         app.launchArguments = ["-study-test-store", id, "-study-test-notification-due"]
@@ -65,6 +69,7 @@ final class OperationsUITests: XCTestCase {
         let toggle = app.switches["notificationToggle"]
         scrollTo(toggle, in: app)
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.1)).tap()
         let count = app.staticTexts["notificationCount"]
         expectation(for: NSPredicate(format: "label CONTAINS %@", "30件"), evaluatedWith: count)
         waitForExpectations(timeout: 15)
@@ -72,6 +77,8 @@ final class OperationsUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         if app.state == .runningForeground { XCUIDevice.shared.press(.home) }
+        expectation(for: NSPredicate { _, _ in app.state != .runningForeground }, evaluatedWith: app)
+        waitForExpectations(timeout: 10)
         XCTAssertNotEqual(app.state, .runningForeground, "通知配信はバックグラウンドで確認します。")
         let notification = springboard.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", "復習テスト \(id.prefix(8))")).firstMatch
         if !notification.waitForExistence(timeout: 190) {
@@ -123,7 +130,9 @@ final class OperationsUITests: XCTestCase {
         let onPhone = app.buttons["On My iPhone"]
         if onPhone.waitForExistence(timeout: 10) { onPhone.tap() }
         else if app.buttons["このiPhone内"].exists { app.buttons["このiPhone内"].tap() }
-        let folder = app.cells.containing(.staticText, identifier: "暗記アプリ").firstMatch
+        let local = app.cells.matching(NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone"])).firstMatch
+        if local.exists { local.tap() }
+        let folder = app.cells.containing(.staticText, identifier: "暗記ノート").firstMatch
         if folder.waitForExistence(timeout: 3) { folder.tap() }
         let save = app.buttons["Save"]
         if save.exists { save.tap() } else if app.buttons["保存"].exists { app.buttons["保存"].tap() }

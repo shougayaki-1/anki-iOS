@@ -6,6 +6,75 @@ import UIKit
 
 @MainActor
 final class QualityRepositoryTests: XCTestCase {
+    func testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications() async throws {
+        var date = now
+        let center = NotificationServiceTests.Center()
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date },
+                                   notifications: NotificationService(center: center))
+        let repo = store.repository, deck = try store.repository.decks()[0].id
+        let note = try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A"), now: date)
+        try store.reload()
+        try await Task.sleep(for: .milliseconds(300))
+        let notifications = center.permissionReads
+        let stats = store.statistics?.days.map(\.answers)
+        // Polling uses metadata, not displayed note content or historical stats.
+        try repo.transaction { try repo.notes().first { $0.id == note }?.contentPayload = Data("invalid display content".utf8) }
+        repo.save = { _ in throw Failure.save }
+        for _ in 0..<3 { date = date.addingTimeInterval(15); store.refreshHome() }
+        XCTAssertNil(store.homeFailure); XCTAssertEqual(store.counts.newRemaining, 1)
+        XCTAssertEqual(store.notes.first?.content.question, "Q")
+        XCTAssertEqual(store.statistics?.days.map(\.answers), stats)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(center.permissionReads, notifications)
+        XCTAssertThrowsError(try store.reload())
+        XCTAssertNotNil(store.homeFailure); XCTAssertFalse(store.canStart(.new))
+        // Broken settings fail the lightweight read too, keeping the last good counts.
+        repo.save = { try $0.save() }
+        var options = try repo.options(); options.schemaVersion = 99
+        try repo.updateOptions(options)
+        store.refreshHome(); XCTAssertNotNil(store.homeFailure)
+        XCTAssertEqual(store.counts.newRemaining, 1)
+        options.schemaVersion = 2; try repo.updateOptions(options)
+        store.refreshHome(); XCTAssertNil(store.homeFailure)
+    }
+    func testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft() async throws {
+        var date = now
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date }, mediaStore: media)
+        let repo = store.repository, deck = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "Other", now: date)
+        try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A"), now: date)
+        try repo.start(mode: .new, scope: LearningScope(deckID: deck), now: date)
+        try repo.updateDraft(revealed: true, now: date); try repo.grade(.again, now: date)
+        try repo.applyHomeScope(LearningScope(deckID: other))
+        try store.reload()
+        XCTAssertEqual(store.counts.learnedToday, 1); XCTAssertEqual(store.counts.due, 0)
+        date = try XCTUnwrap(store.review?.nextShortDue)
+        store.refreshHome()
+        XCTAssertEqual(store.counts.due, 0); XCTAssertEqual(store.globalCounts.due, 1)
+        try repo.resume(now: date)
+        try repo.updateDraft(mode: .typing, text: "backup draft", revealed: true, now: date)
+        let undo = try repo.session()?.undoLogID
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: date, appVersion: "31"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Restored.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: media, now: date)
+        let restored = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), clock: { date }, mediaStore: media, storageLocation: location)
+        XCTAssertEqual(restored.scope.deckID, other)
+        XCTAssertEqual(try restored.repository.scope().deckID, deck)
+        XCTAssertEqual(restored.review?.typedDraft, "backup draft"); XCTAssertEqual(restored.review?.answerRevealed, true)
+        XCTAssertEqual(try restored.repository.session()?.undoLogID, undo)
+        XCTAssertEqual(restored.counts.learnedToday, 1)
+        date = StudyDay(calendar: repo.calendar, startHour: store.settings.dayStartHour).interval(containing: date).end
+        restored.refreshHome()
+        XCTAssertEqual(restored.counts.learnedToday, 0)
+        XCTAssertEqual(restored.counts.answerCount, 0)
+        XCTAssertEqual(restored.globalCounts.due, 1)
+        restored.refreshStatistics(); XCTAssertEqual(restored.statistics?.days.first?.cards, 0)
+        try await Task.sleep(for: .milliseconds(300))
+    }
+
     func testAuthorizedNotificationDiagnosticsAndTestCleanup() async throws {
         guard ProcessInfo.processInfo.environment["ANKI_NOTIFICATION_DIAGNOSTICS"] == "1" else {
             throw XCTSkip("実機のテスト通知診断・後片付けが指定されていません。")
@@ -24,11 +93,77 @@ final class QualityRepositoryTests: XCTestCase {
         XCTAssertFalse(remaining.contains { $0.identifier.hasPrefix("review-test-") })
         XCTAssertEqual(Set(remaining.map(\.identifier)), Set(pending.filter { !$0.identifier.hasPrefix("review-test-") }.map(\.identifier)))
     }
+    func testLegacyReviewOptionsAndSettingsDiskRestartPreserveStudyState() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("Study.store")
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+        try repo.initialize(now: now)
+        let row = try ExtraPreferences(options: StudyOptions())
+        row.payload = Data("{\"schemaVersion\":1,\"siblingBuryEnabled\":true}".utf8)
+        repo.context.insert(row); try repo.context.save()
+        XCTAssertEqual(try repo.settings().reviewAppearance, ReviewAppearance())
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.good, now: now)
+        let cards = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate) }, logs = try repo.logs().map(\.id)
+        var settings = try repo.settings()
+        settings.reviewAppearance = ReviewAppearance(gesturesEnabled: true, textSize: .larger, imageDisplay: .compact, answerFirst: true, animationsEnabled: false)
+        try repo.updateSettings(settings)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+        XCTAssertEqual(try reopened.settings(), settings)
+        let actual = try reopened.cards()
+        XCTAssertEqual(actual.count, cards.count)
+        for (id, fsrs, due) in cards {
+            let card = try XCTUnwrap(actual.first { $0.id == id })
+            XCTAssertEqual(card.fsrsPayload, fsrs); XCTAssertEqual(card.dueDate, due)
+        }
+        XCTAssertEqual(try reopened.logs().map(\.id), logs)
+        XCTAssertThrowsError(try JSONDecoder().decode(StudyOptions.self, from: Data("{\"schemaVersion\":2,\"siblingBuryEnabled\":true,\"reviewAppearance\":{\"gesturesEnabled\":true,\"textSize\":\"bad\",\"imageDisplay\":\"hidden\",\"answerFirst\":false,\"animationsEnabled\":true}}".utf8)))
+    }
+    func testTextPaletteContrastAgainstSystemSurfaces() throws {
+        func luminance(_ color: UIColor) -> Double {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            XCTAssertTrue(color.getRed(&r, green: &g, blue: &b, alpha: &a))
+            func linear(_ v: CGFloat) -> Double {
+                let c = Double(v)
+                return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+            }
+            return linear(r) * 0.2126 + linear(g) * 0.7152 + linear(b) * 0.0722
+        }
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            for color in [try XCTUnwrap(UIColor(named: "SecondaryText")), try XCTUnwrap(UIColor(named: "AccentColor")), UIColor.label] {
+                for surface in [UIColor.systemGroupedBackground, UIColor.secondarySystemGroupedBackground] {
+                    let text = luminance(color.resolvedColor(with: traits)), background = luminance(surface.resolvedColor(with: traits))
+                    XCTAssertGreaterThanOrEqual((max(text, background) + 0.05) / (min(text, background) + 0.05), 4.5)
+                }
+            }
+        }
+    }
     func testIdentityAssetsAndPrimaryButtonContrast() throws {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "暗記ノート")
         let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any])
         let primary = try XCTUnwrap(icons["CFBundlePrimaryIcon"] as? [String: Any])
         XCTAssertEqual(primary["CFBundleIconName"] as? String, "AppIcon")
+        func luminance(_ color: UIColor, traits: UITraitCollection) -> Double {
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            XCTAssertTrue(color.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a))
+            func linear(_ value: CGFloat) -> Double {
+                let v = Double(value)
+                return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+            }
+            return linear(r) * 0.2126 + linear(g) * 0.7152 + linear(b) * 0.0722
+        }
+        let secondary = try XCTUnwrap(UIColor(named: "SecondaryText"))
+        for style in [UIUserInterfaceStyle.light, .dark] {
+            let traits = UITraitCollection(userInterfaceStyle: style)
+            let foreground = luminance(secondary, traits: traits)
+            for background in [UIColor.systemBackground, .systemGroupedBackground, .secondarySystemGroupedBackground] {
+                let back = luminance(background, traits: traits)
+                XCTAssertGreaterThanOrEqual((max(foreground, back) + 0.05) / (min(foreground, back) + 0.05), 4.5)
+            }
+        }
         for name in ["AccentColor", "SecondaryText", "PrimaryAction", "GradeAgain", "GradeHard", "GradeGood", "GradeEasy"] {
             let color = try XCTUnwrap(UIColor(named: name))
             for style in [UIUserInterfaceStyle.light, .dark] where name != "AccentColor" && name != "SecondaryText" {

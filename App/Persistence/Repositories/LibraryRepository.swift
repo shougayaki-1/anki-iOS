@@ -131,18 +131,40 @@ extension StudyRepository {
         }
         return ids
     }
-    func scopedQueueCards(_ scope: LearningScope) throws -> [QueueCard] {
+    func scopedQueueCards(_ scope: LearningScope, cards: [QueueCard]? = nil) throws -> [QueueCard] {
         let decks = try scope.deckID.map { try descendants(of: $0) }
         let eligible = Set(try notes().filter { note in
             (decks == nil || decks!.contains(note.deckID)) && Set(scope.tagIDs).isSubset(of: Set(note.tagIDs))
         }.map(\.id))
-        return try queueCards().filter { $0.noteID.map { eligible.contains($0) } ?? false }
+        return try (cards ?? queueCards()).filter { $0.noteID.map { eligible.contains($0) } ?? false }
     }
     func scopedCounts(scope: LearningScope, now: Date) throws -> HomeCounts {
         var result = try ReviewQueueBuilder(calendar: calendar).counts(cards: scopedQueueCards(scope), logs: queueLogs(), settings: settings(), now: now)
         let global = try counts(now: now)
         result.learnedToday = global.learnedToday; result.answerCount = global.answerCount
         return result
+    }
+    // One timestamp, one card snapshot and only today's logs. No displayed content,
+    // full historical statistics, writes, or notification work in the polling path.
+    func homeSnapshot(now: Date) throws -> HomeSnapshot {
+        let selected = try homeScope(), settings = try settings()
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let start = day.start, end = day.end
+        let all = try queueCards(), scoped = try scopedQueueCards(selected, cards: all)
+        let noteIDs = Dictionary(uniqueKeysWithValues: all.compactMap { card in card.noteID.map { (card.id, $0) } })
+        let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+            $0.reviewedAt >= start && $0.reviewedAt < end
+        }))
+        let today = rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID]) }
+        let builder = ReviewQueueBuilder(calendar: calendar)
+        let global = builder.counts(cards: all, logs: today, settings: settings, now: now)
+        var counts = builder.counts(cards: scoped, logs: today, settings: settings, now: now)
+        counts.learnedToday = global.learnedToday; counts.answerCount = global.answerCount
+        let used = Set(today.filter(\.wasNew).map(\.cardID)).count
+        let next = scoped.filter { !$0.suspended && ["learning", "relearning"].contains($0.state) && $0.due > now }.map(\.due).min()
+        return HomeSnapshot(scope: selected, counts: counts, globalCounts: global,
+                            newSlotsRemaining: max(0, settings.dailyNewLimit - used), nextShortDue: next,
+                            hasCards: !all.isEmpty, dayStart: start)
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)
@@ -194,6 +216,128 @@ extension StudyRepository {
             }
             context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))
             return ImportResult(imported: imported, skipped: skipped, errors: errors)
+        }
+    }
+}
+
+
+extension StudyRepository {
+    func previewBulkEdit(cardIDs: Set<UUID>, action: BulkEditAction) throws -> BulkEditPreview {
+        guard !cardIDs.isEmpty else { throw BulkEditError.emptySelection }
+        let allCards = try cards(), selected = allCards.filter { cardIDs.contains($0.id) }
+        guard selected.count == cardIDs.count else { throw BulkEditError.staleSelection }
+        let ids = Set(selected.map(\.noteID)), related = allCards.filter { ids.contains($0.noteID) }
+        let affected = try notes().filter { ids.contains($0.id) }.sorted { $0.id.uuidString < $1.id.uuidString }
+        guard affected.count == ids.count else { throw BulkEditError.staleSelection }
+        let known = try tags(), deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, $0.name) })
+        var changedNotes = Set<UUID>(), changedCards = Set<UUID>(), detail = ""
+        let normalizedAction: BulkEditAction
+        switch action {
+        case .move(let destination):
+            guard deckMap[destination] != nil else { throw LibraryError.invalidDestination }
+            normalizedAction = action; detail = "移動先: \(try deckPath(destination))"
+            changedNotes = Set(affected.filter { $0.deckID != destination }.map(\.id))
+        case .addTags(let names):
+            let clean = Array(Set(names.map(ImportParser.normalized).filter { !$0.isEmpty })).sorted()
+            guard !clean.isEmpty, clean.count <= 100, clean.allSatisfy({ $0.count <= 100 }) else { throw BulkEditError.invalidTags }
+            normalizedAction = .addTags(clean); detail = "追加タグ: \(clean.joined(separator: "、"))"
+            for note in affected {
+                let present = Set(known.filter { note.tagIDs.contains($0.id) }.map { Self.bulkTagKey($0.name) })
+                if clean.contains(where: { !present.contains(Self.bulkTagKey($0)) }) { changedNotes.insert(note.id) }
+            }
+        case .removeTags(let tagIDs):
+            guard !tagIDs.isEmpty, tagIDs.isSubset(of: Set(known.map(\.id))) else { throw BulkEditError.invalidTags }
+            normalizedAction = action
+            detail = "除去タグ: \(known.filter { tagIDs.contains($0.id) }.map(\.name).joined(separator: "、"))"
+            changedNotes = Set(affected.filter { !tagIDs.isDisjoint(with: $0.tagIDs) }.map(\.id))
+        case .suspended(let value):
+            normalizedAction = action; detail = "選択したカードだけを変更します。兄弟カードは変更しません。"
+            changedCards = Set(selected.filter { $0.isSuspended != value }.map(\.id))
+        case .deleteNotes:
+            normalizedAction = action; detail = "対象ノートと兄弟カード、関連する編集下書きを削除します。過去の回答履歴は残ります。"
+            changedNotes = ids
+        }
+        if case .suspended = normalizedAction {} else {
+            changedCards = Set(related.filter { changedNotes.contains($0.noteID) }.map(\.id))
+        }
+        let noteStates = affected.map { BulkEditPreview.NoteState(id: $0.id, deckID: $0.deckID, content: $0.contentPayload, type: $0.type, responseMode: $0.defaultResponseMode, tags: $0.tagIDs, updated: $0.updatedAt) }
+        let cardStates = related.sorted { $0.id.uuidString < $1.id.uuidString }.map {
+            BulkEditPreview.CardState(id: $0.id, noteID: $0.noteID, fsrs: $0.fsrsPayload, due: $0.dueDate, updated: $0.updatedAt, suspended: $0.isSuspended)
+        }
+        let keys = Set(ids.map { "edit:\($0.uuidString)" })
+        let drafts = try context.fetch(FetchDescriptor<EditorDraft>()).filter { keys.contains($0.key) }.sorted { $0.key < $1.key }.map {
+            BulkEditPreview.DraftState(key: $0.key, payload: $0.payload, updated: $0.updatedAt)
+        }
+        let counts = Dictionary(grouping: related, by: \.noteID).mapValues(\.count)
+        let paths = try Dictionary(uniqueKeysWithValues: Set(affected.map(\.deckID)).map { ($0, try deckPath($0)) })
+        let rows = try affected.map { note in
+            BulkEditPreview.Row(id: note.id, question: try JSONDecoder().decode(TextContent.self, from: note.contentPayload).question,
+                                deck: paths[note.deckID] ?? "", cardCount: counts[note.id] ?? 0)
+        }
+        return BulkEditPreview(selection: cardIDs, action: normalizedAction, notes: noteStates, cards: cardStates, drafts: drafts,
+                               rows: rows, changedNotes: changedNotes, changedCards: changedCards, detail: detail)
+    }
+    private static func bulkTagKey(_ name: String) -> String {
+        ImportParser.normalized(name).folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+    }
+    func applyBulkEdit(_ preview: BulkEditPreview, now: Date) throws -> BulkEditResult {
+        let current = try previewBulkEdit(cardIDs: preview.selection, action: preview.action)
+        guard current.notes == preview.notes, current.cards == preview.cards, current.drafts == preview.drafts,
+              current.detail == preview.detail, current.rows == preview.rows, current.changedNotes == preview.changedNotes,
+              current.changedCards == preview.changedCards else { throw BulkEditError.staleSelection }
+        if current.changedCount == 0 { return BulkEditResult(changedNotes: 0, changedCards: 0) }
+        let noteIDs = current.changedNotes, cardIDs = current.changedCards
+        return try transaction {
+            let affected = try notes().filter { noteIDs.contains($0.id) }
+            let cards = try cards().filter { cardIDs.contains($0.id) }
+            let draftKeys = Set(current.drafts.map(\.key))
+            let drafts = try context.fetch(FetchDescriptor<EditorDraft>()).filter { draftKeys.contains($0.key) }
+            var added: [UUID] = [], removedNames = Set<String>()
+            if case .addTags(let names) = current.action { added = try tagIDs(for: names) }
+            if case .removeTags(let ids) = current.action { removedNames = Set(try tags().filter { ids.contains($0.id) }.map { Self.bulkTagKey($0.name) }) }
+            for note in affected {
+                switch current.action {
+                case .move(let id): note.deckID = id
+                case .addTags: note.tagIDs = Array(Set(note.tagIDs + added)).sorted { $0.uuidString < $1.uuidString }
+                case .removeTags(let ids): note.tagIDs.removeAll { ids.contains($0) }
+                case .deleteNotes: context.delete(note)
+                case .suspended: break
+                }
+                if current.action != .deleteNotes { note.updatedAt = now }
+            }
+            for card in cards {
+                switch current.action {
+                case .suspended(let value): card.isSuspended = value; card.updatedAt = now
+                case .deleteNotes: context.delete(card)
+                default: break // Metadata is on Note; FSRS and Card identities are untouched.
+                }
+            }
+            for draft in drafts {
+                guard let noteID = UUID(uuidString: String(draft.key.dropFirst(5))), noteIDs.contains(noteID) else { continue }
+                if current.action == .deleteNotes { context.delete(draft); continue }
+                var input = try JSONDecoder().decode(NoteInput.self, from: draft.payload)
+                switch current.action {
+                case .move(let id): input.deckID = id
+                case .addTags(let names):
+                    var keys = Set(input.tagNames.map(Self.bulkTagKey))
+                    for name in names where keys.insert(Self.bulkTagKey(name)).inserted { input.tagNames.append(name) }
+                case .removeTags: input.tagNames.removeAll { removedNames.contains(Self.bulkTagKey($0)) }
+                default: break
+                }
+                draft.payload = try JSONEncoder().encode(input); draft.updatedAt = now
+            }
+            if case .deleteNotes = current.action {
+                if let draft = try session() {
+                    if let id = draft.cardID, cardIDs.contains(id) {
+                        draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
+                    }
+                    if let undo = draft.undoLogID, try logs().contains(where: { $0.id == undo && cardIDs.contains($0.cardID) }) { draft.undoLogID = nil }
+                    draft.touchedCardIDs.removeAll { cardIDs.contains($0) }
+                }
+            } else if case .suspended(true) = current.action, let draft = try session(), let id = draft.cardID, cardIDs.contains(id) {
+                draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
+            }
+            return BulkEditResult(changedNotes: noteIDs.count, changedCards: cardIDs.count)
         }
     }
 }

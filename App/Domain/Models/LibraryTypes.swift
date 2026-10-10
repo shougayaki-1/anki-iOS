@@ -12,6 +12,7 @@ struct StudyOptions: Codable, Equatable {
     var notification: NotificationOptions? = nil
     var hapticsMode: HapticsMode? = nil
     var homeScope: LearningScope? = nil
+    var reviewAppearance: ReviewAppearance? = nil
 }
 
 struct TagItem: Identifiable {
@@ -62,6 +63,120 @@ enum LibraryError: LocalizedError {
         case .malformedCSV(let line): return "\(line)行目付近の引用符または区切りの形式が不正です。"
         case .fileTooLarge: return "ファイルが大きすぎます（上限10MB）。分割して取り込んでください。"
         case .invalidUTF8: return "UTF-8のテキストファイルを選んでください。"
+        }
+    }
+}
+
+// Optional in StudyOptions: stores created before these settings retain defaults.
+struct ReviewAppearance: Codable, Equatable {
+    var gesturesEnabled = false
+    var textSize = ReviewTextSize.standard
+    var imageDisplay = ReviewImageDisplay.standard
+    var answerFirst = false
+    var animationsEnabled = true
+    func showsImage(for kind: NoteKind) -> Bool { kind == .imageOcclusion || imageDisplay != .hidden }
+}
+
+
+enum ReviewTextSize: String, Codable, CaseIterable {
+    case standard, larger, extraLarge
+    var title: String {
+        switch self { case .standard: return "標準"; case .larger: return "大きめ"; case .extraLarge: return "特大" }
+    }
+}
+
+enum ReviewImageDisplay: String, Codable, CaseIterable {
+    case standard, compact, hidden
+    var title: String {
+        switch self { case .standard: return "標準"; case .compact: return "コンパクト"; case .hidden: return "非表示" }
+    }
+}
+
+enum ReviewSwipeAction: Equatable {
+    case reveal, grade(ReviewGrade)
+    static func decide(x: Double, y: Double, revealed: Bool) -> Self? {
+        guard x.isFinite, y.isFinite else { return nil }
+        if abs(x) >= 96 && abs(x) >= abs(y) * 1.5 {
+            if !revealed { return x > 0 ? .reveal : nil }
+            return .grade(x > 0 ? .good : .again)
+        }
+        if revealed && abs(y) >= 96 && abs(y) >= abs(x) * 1.5 {
+            return .grade(y > 0 ? .hard : .easy)
+        }
+        return nil
+    }
+}
+
+struct ReviewSwipeGate {
+    private var start: (id: UUID, revealed: Bool)?
+    private var lastAction: Date?
+    private var invalidated = false
+    mutating func begin(id: UUID, revealed: Bool) {
+        if start == nil && !invalidated { start = (id, revealed) }
+    }
+    mutating func cancel() { start = nil; invalidated = false }
+    mutating func invalidate() { if start != nil { invalidated = true } }
+    mutating func finish(id: UUID, revealed: Bool, x: Double, y: Double, now: Date) -> ReviewSwipeAction? {
+        defer { start = nil; invalidated = false }
+        guard !invalidated, let start, start.id == id, start.revealed == revealed,
+              lastAction == nil || now.timeIntervalSince(lastAction!) >= 0.6,
+              let action = ReviewSwipeAction.decide(x: x, y: y, revealed: revealed) else { return nil }
+        lastAction = now
+        return action
+    }
+}
+
+
+enum BulkEditAction: Equatable {
+    case move(UUID), addTags([String]), removeTags(Set<UUID>), suspended(Bool), deleteNotes
+    var title: String {
+        switch self {
+        case .move: return "ノートをデッキ移動"
+        case .addTags: return "ノートにタグを追加"
+        case .removeTags: return "ノートからタグを除去"
+        case .suspended(let value): return value ? "選択カードを停止" : "選択カードを再開"
+        case .deleteNotes: return "ノートを削除"
+        }
+    }
+}
+
+struct BulkEditPreview {
+    struct NoteState: Equatable {
+        let id: UUID, deckID: UUID
+        let content: Data
+        let type: String, responseMode: String
+        let tags: [UUID]
+        let updated: Date
+    }
+    struct CardState: Equatable {
+        let id: UUID, noteID: UUID
+        let fsrs: Data
+        let due: Date, updated: Date
+        let suspended: Bool
+    }
+    struct DraftState: Equatable { let key: String; let payload: Data; let updated: Date }
+    struct Row: Identifiable, Equatable { let id: UUID; let question: String, deck: String; let cardCount: Int }
+    let selection: Set<UUID>
+    let action: BulkEditAction
+    let notes: [NoteState], cards: [CardState], drafts: [DraftState]
+    let rows: [Row]
+    let changedNotes: Set<UUID>, changedCards: Set<UUID>
+    let detail: String
+    var selectedCount: Int { selection.count }
+    var changedCount: Int { changedCards.count }
+}
+
+struct BulkEditResult {
+    let changedNotes: Int, changedCards: Int
+}
+
+enum BulkEditError: LocalizedError {
+    case emptySelection, staleSelection, invalidTags
+    var errorDescription: String? {
+        switch self {
+        case .emptySelection: return "カードを選択してください。"
+        case .staleSelection: return "対象が変更されたため確定できません。選択とプレビューを確認し直してください。"
+        case .invalidTags: return "追加・除去するタグを指定してください。"
         }
     }
 }

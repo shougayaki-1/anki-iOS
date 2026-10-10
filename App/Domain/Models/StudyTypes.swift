@@ -24,7 +24,17 @@ enum StudyMode: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .review: return "復習する"
         case .new: return "新しく覚える"
-        case .mixed: return "まとめて学習"
+        case .mixed: return "復習＋新規"
+        }
+    }
+}
+
+extension StudyMode {
+    var explanation: String {
+        switch self {
+        case .review: return "復習のタイミングになったカードを学習します"
+        case .new: return "まだ学んでいないカードを学習します"
+        case .mixed: return "復習と新しいカードを組み合わせて学習します"
         }
     }
 }
@@ -62,6 +72,7 @@ struct StudySettings: Equatable {
     var siblingBuryEnabled = true
     var notification = NotificationOptions()
     var hapticsMode = HapticsMode.standard
+    var reviewAppearance = ReviewAppearance()
 }
 
 struct DeckItem: Identifiable {
@@ -94,6 +105,16 @@ struct HomeCounts: Equatable {
     var answerCount = 0
 }
 
+struct HomeSnapshot: Equatable {
+    let scope: LearningScope
+    let counts: HomeCounts
+    let globalCounts: HomeCounts
+    let newSlotsRemaining: Int
+    let nextShortDue: Date?
+    let hasCards: Bool
+    let dayStart: Date
+}
+
 struct ReviewPresentation {
     let card: NoteItem?
     let mode: StudyMode
@@ -105,7 +126,7 @@ struct ReviewPresentation {
 }
 
 enum StudyError: LocalizedError {
-    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession
+    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards
     var errorDescription: String? {
         switch self {
         case .invalidContent: return "問題文と解答を入力してください。"
@@ -113,6 +134,7 @@ enum StudyError: LocalizedError {
         case .unsupportedContent: return "このデータ形式はまだ編集できません。"
         case .newLimitReached: return "今日の新規カード上限に達しました。"
         case .cannotUndo: return "直前の評価後に状態が変わったため、取り消せません。"
+        case .noAvailableCards: return "今はこの条件で学習できるカードがありません。学習対象を確認してください。"
         case .noSession: return "学習セッションがありません。"
         }
     }

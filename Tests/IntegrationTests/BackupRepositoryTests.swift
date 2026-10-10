@@ -36,7 +36,14 @@ final class BackupRepositoryTests: XCTestCase {
         try repo.updateDraft(mode: .typing, text: "未確定の回答", now: now)
         try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "下書き", imageID: image), now: now)
         var options = try repo.settings(); options.notification.enabled = true; options.hapticsMode = .rich
+        options.reviewAppearance = ReviewAppearance(gesturesEnabled: true, textSize: .extraLarge, imageDisplay: .hidden, answerFirst: true, animationsEnabled: false)
+        let homeScope = LearningScope(deckID: deck, tagIDs: try repo.tags().map(\.id))
+        try repo.applyHomeScope(homeScope)
         try repo.updateSettings(options)
+        XCTAssertEqual(try repo.homeScope(), homeScope)
+        try repo.applyHomeScope(LearningScope())
+        XCTAssertEqual(try repo.settings().reviewAppearance, options.reviewAppearance)
+        try repo.applyHomeScope(homeScope)
         try repo.transaction {
             repo.context.insert(ImportBatch(source: "CSV", now: now, success: 4, skipped: 1, errors: ["行エラー"]))
             try repo.setScopeInTransaction(LearningScope(deckID: deck, tagIDs: repo.tags().map(\.id)))
@@ -62,7 +69,10 @@ final class BackupRepositoryTests: XCTestCase {
             actual.media[index].relativePath = expected.media[index].relativePath
         }
         XCTAssertEqual(actual, expected)
+        XCTAssertEqual(try reopened.homeScope(), try source.homeScope())
+        XCTAssertEqual(try reopened.scope(), try source.scope())
         XCTAssertEqual(try reopened.settings().hapticsMode, .rich)
+        XCTAssertEqual(try reopened.settings().reviewAppearance, try source.settings().reviewAppearance)
         XCTAssertEqual(try reopened.session()?.typedDraft, "未確定の回答")
         let previous = try XCTUnwrap(reopened.logs().last)
         let cardID = previous.cardID, before = previous.fsrsBefore
@@ -97,6 +107,12 @@ final class BackupRepositoryTests: XCTestCase {
         var cycle = original.data; cycle.decks[0].parentID = cycle.decks[0].id; mutations.append(cycle)
         var invalidFSRS = original.data; invalidFSRS.cards[0].fsrsPayload = Data("{}".utf8); mutations.append(invalidFSRS)
         var missingMedia = original.data; missingMedia.media = []; mutations.append(missingMedia)
+        var invalidAppearance = original.data
+        var payload = try XCTUnwrap(JSONSerialization.jsonObject(with: invalidAppearance.options[0].payload) as? [String: Any])
+        var appearance = try XCTUnwrap(payload["reviewAppearance"] as? [String: Any])
+        appearance["textSize"] = "unsupported"; payload["reviewAppearance"] = appearance
+        invalidAppearance.options[0].payload = try JSONSerialization.data(withJSONObject: payload)
+        mutations.append(invalidAppearance)
         for snapshot in mutations {
             var files = try StoredZIP.read(bytes)
             files["data.json"] = try JSONEncoder().encode(snapshot)
@@ -120,6 +136,7 @@ final class BackupRepositoryTests: XCTestCase {
         XCTAssertEqual(backup.data.logs.count, 1); XCTAssertTrue(backup.data.cards.isEmpty)
         XCTAssertFalse(try repo.settings().notification.enabled)
         XCTAssertEqual(try repo.settings().hapticsMode, .standard)
+        XCTAssertEqual(try repo.settings().reviewAppearance, ReviewAppearance())
         let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store"))
         try Data("{\"schemaVersion\":1,\"relativePath\":\"../outside.store\"}".utf8).write(to: location.pointer)
         XCTAssertThrowsError(try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore))

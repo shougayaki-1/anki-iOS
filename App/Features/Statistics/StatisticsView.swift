@@ -7,8 +7,8 @@ struct StatisticsView: View {
             List {
                 if let stats = store.statistics {
                     Section("今日の記録") {
-                        LabeledContent("学習カード", value: "\(stats.days.first?.cards ?? 0)枚")
-                        LabeledContent("回答回数", value: "\(stats.days.first?.answers ?? 0)回").accessibilityIdentifier("todayAnswerCount")
+                        LabeledContent("学習カード（ユニーク）", value: "\(store.counts.learnedToday)枚")
+                        LabeledContent("回答回数", value: "\(store.counts.answerCount)回").accessibilityIdentifier("todayAnswerCount")
                         LabeledContent("継続日数", value: "\(stats.streak)日")
                         Text("全デッキの記録。学習日の切替は午前\(store.settings.dayStartHour)時です。")
                             .font(.footnote).foregroundStyle(.secondary)

@@ -83,6 +83,10 @@ struct AppRootView: View {
                     try UITestFixtures.populateScale(store.repository, now: store.clock())
                     try store.reload()
                 }
+                if studyURL != nil, args.contains("-study-test-home-filters"), let store {
+                    try UITestFixtures.populateHomeFilters(store.repository, now: store.clock())
+                    try store.reload()
+                }
                 if studyURL != nil, args.contains("-study-test-notification-due"), let store {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
                     try store.reload()
