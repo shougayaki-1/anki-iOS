@@ -22,8 +22,8 @@ struct MainTabs: View {
         // One alert presenter avoids two .alert modifiers competing on TabView.
         .alert(Text(store.failure != nil ? "処理に失敗しました" : "ショートカット"),
                isPresented: Binding(
-                get: { store.failure != nil || shortcutNotice != nil },
-                set: { if !$0 { store.failure = nil; shortcutNotice = nil } }
+                get: { !store.showingReview && (store.failure != nil || shortcutNotice != nil) },
+                set: { if !$0 && !store.showingReview { store.failure = nil; shortcutNotice = nil } }
                )) {
             Button("閉じる", role: .cancel) { store.failure = nil; shortcutNotice = nil }
         } message: {
