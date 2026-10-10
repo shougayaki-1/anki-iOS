@@ -27,6 +27,12 @@ final class StudyStore {
     var showingReview = false
     var selectedTab = 0
     var statistics: StudyStatistics?
+    var statisticsLoading = false
+    var statisticsError: String?
+    var statisticsScope = LearningScope()
+    @ObservationIgnored private var statisticsReader: StatisticsReader
+    @ObservationIgnored private var statisticsTask: Task<Void, Never>?
+    @ObservationIgnored private var statisticsGeneration = 0
     var notificationPermission = NotificationPermission.unknown
     var notificationFailure: String?
     let notifications: NotificationService
@@ -36,6 +42,7 @@ final class StudyStore {
 
     init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil) throws {
         repository = StudyRepository(container: container, mediaStore: mediaStore)
+        statisticsReader = StatisticsReader(container: container)
         self.clock = clock
         self.storageLocation = storageLocation
         self.notifications = notifications ?? NotificationService()
@@ -54,10 +61,15 @@ final class StudyStore {
             let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
             let settings = try repository.settings()
             let review = try repository.presentation(now: now)
-            let statistics = try repository.statistics(now: now)
+            // History scans and FSRS predictions belong to the statistics actor,
+            // never to the review/save/home reload path.
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
-            self.settings = settings; self.review = review; self.statistics = statistics
+            self.settings = settings; self.review = review
+            statisticsTask?.cancel()
+            statisticsGeneration += 1
+            statistics = nil
+            statisticsLoading = false
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()
@@ -91,8 +103,34 @@ final class StudyStore {
         } catch { homeFailure = error.localizedDescription }
     }
     func refreshStatistics() {
-        do { statistics = try repository.statistics(now: clock()) }
-        catch { failure = error.localizedDescription }
+        statisticsTask?.cancel()
+        statisticsGeneration += 1
+        let generation = statisticsGeneration
+        statisticsLoading = true
+        statisticsError = nil
+        let reader = statisticsReader
+        let now = clock()
+        let calendar = repository.calendar
+        let startHour = settings.dayStartHour
+        let scope = statisticsScope
+        statisticsTask = Task { [weak self] in
+            do {
+                let report = try await reader.load(now: now, calendar: calendar,
+                                                   startHour: startHour, scope: scope)
+                guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
+                self?.statistics = report
+                self?.statisticsLoading = false
+            } catch {
+                guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
+                self?.statisticsError = error.localizedDescription
+                self?.statisticsLoading = false
+            }
+        }
+    }
+
+    func updateStatisticsScope(_ scope: LearningScope) {
+        statisticsScope = scope
+        refreshStatistics()
     }
     func sceneChanged(active: Bool) {
         do {
@@ -251,6 +289,13 @@ final class StudyStore {
         notificationJob?.cancel()
         do {
             let container = try BackupService.restore(backup, location: storageLocation, mediaStore: repository.mediaStore, now: clock())
+            statisticsTask?.cancel()
+            statisticsGeneration += 1
+            statistics = nil
+            statisticsLoading = false
+            statisticsError = nil
+            statisticsScope = LearningScope()
+            statisticsReader = StatisticsReader(container: container)
             repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
             showingReview = false
             do { scope = try repository.homeScope(); try reload() }
