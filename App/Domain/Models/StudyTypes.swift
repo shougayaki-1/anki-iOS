@@ -73,7 +73,8 @@ struct NoteInput: Codable, Equatable {
     var imageID: UUID? = nil
     var masks: [ImageMask] = []
     var hideAllMasks = true
-    var speechOverrides: [String: SpeechAutoplay] = [:]
+    // Optional to decode editor drafts saved by older releases.
+    var speechOverrides: [String: SpeechAutoplay]? = nil
     var speechQuestion: String? = nil
     var speechAnswer: String? = nil
 }

@@ -117,7 +117,7 @@ final class StudyRepository {
                                   speechAnswer: input.speechAnswer)
         let variants = Set(try CardGeneration.variants(kind: input.kind, content: content))
         var sanitized = content
-        sanitized.speechOverrides = input.speechOverrides.filter { variants.contains($0.key) }
+        sanitized.speechOverrides = input.speechOverrides?.filter { variants.contains($0.key) }
         return try JSONEncoder().encode(sanitized)
     }
 

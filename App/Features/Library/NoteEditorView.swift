@@ -85,8 +85,12 @@ struct NoteEditorView: View {
                     if let variants = speechVariants, !variants.isEmpty {
                         ForEach(variants, id: \.self) { variant in
                             Picker(variants.count == 1 ? "自動読み上げ" : "自動読み上げ（\(variant)）", selection: Binding(
-                                get: { input.speechOverrides[variant] },
-                                set: { value in input.speechOverrides[variant] = value }
+                                get: { input.speechOverrides?[variant] },
+                                set: { value in
+                                    var overrides = input.speechOverrides ?? [:]
+                                    overrides[variant] = value
+                                    input.speechOverrides = overrides.isEmpty ? nil : overrides
+                                }
                             )) {
                                 Text("デッキに従う").tag(SpeechAutoplay?.none)
                                 ForEach(SpeechAutoplay.allCases) { mode in

@@ -3,7 +3,7 @@ import XCTest
 
 final class SpeechReadoutTests: XCTestCase {
     func testOldNotesAndOptionsDefaultToSilence() throws {
-        let note = try JSONDecoder().decode(TextContent.self, from: Data(#"{"question":"Hello!","answer":"Hi.","explanation":""}"#.utf8))
+        let note = try JSONDecoder().decode(TextContent.self, from: Data(#"{"schemaVersion":2,"question":"Hello!","answer":"Hi.","explanation":""}"#.utf8))
         XCTAssertNil(note.speechOverrides)
         XCTAssertNil(note.speechQuestion)
         XCTAssertNil(note.speechAnswer)
