@@ -18,7 +18,7 @@ struct BackupService {
             var media: [UUID: Data] = [:]
             for (id, url) in urls {
                 try Task.checkCancellation()
-                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= 20_000_000 else { throw BackupError.tooLarge }
+                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= ImageEncodingPolicy.maximumBytes else { throw BackupError.tooLarge }
                 media[id] = try Data(contentsOf: url, options: .mappedIfSafe)
             }
             return try BackupArchive.create(data: snapshot, media: media, now: now, appVersion: appVersion)
@@ -40,7 +40,8 @@ struct BackupService {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for index in snapshot.media.indices {
                 let assetID = snapshot.media[index].id
-                let path = "\(mediaPrefix)/\(assetID.uuidString).jpg"
+                let ext = snapshot.media[index].mediaType == "image/png" ? "png" : "jpg"
+                let path = "\(mediaPrefix)/\(assetID.uuidString).\(ext)"
                 let file = try mediaStore.url(for: path)
                 try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
                 guard let data = backup.media[assetID] else { throw BackupError.invalidData }

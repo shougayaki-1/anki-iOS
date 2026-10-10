@@ -257,13 +257,21 @@ final class StudyRepository {
 
     // A fixed number of confirmed answers provides an honest end to each study set.
     // Unlike the dynamic FSRS due queue, this count cannot grow from short-term repeats.
+    private func lastReviewSequence() throws -> Int {
+        var descriptor = FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first?.sequence ?? 0
+    }
+
     func sessionProgress() throws -> SessionAnswerProgress? {
         guard try session() != nil, let saved = try options().activeSessionProgress else { return nil }
-        let answered = try logs().filter { $0.sequence > saved.startSequence }.count
+        let startSequence = saved.startSequence
+        let answered = try context.fetchCount(FetchDescriptor<StudyReviewLog>(
+            predicate: #Predicate { $0.sequence > startSequence }))
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, now: Date) throws {
         try transaction {
             let normalized = try normalizedScope(scope)
             let available = try ReviewQueueBuilder(calendar: calendar).queue(
@@ -276,16 +284,26 @@ final class StudyRepository {
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
             var saved = try options()
-            let limit = saved.sessionAnswerLimit ?? 20
+            let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
-                startSequence: try logs().map(\.sequence).max() ?? 0, answerLimit: limit)
+                startSequence: try lastReviewSequence(), answerLimit: limit)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
             try selectNext(draft: draft, now: now)
         }
     }
+    func startAnotherSession(now: Date) throws {
+        guard let draft = try session(), draft.cardID == nil,
+              let mode = StudyMode(rawValue: draft.mode) else { throw StudyError.noSession }
+        let originalScope = try scope()
+        let limit = try options().activeSessionProgress?.answerLimit
+        // start validates candidates before replacing anything and rolls back a
+        // failed save, so an empty/failed restart retains the final Undo.
+        try start(mode: mode, scope: originalScope, answerLimit: limit, now: now)
+    }
+
     func completeSession(now: Date) throws {
         try transaction {
             guard let draft = try session(), draft.cardID == nil else { throw StudyError.noSession }
@@ -384,7 +402,7 @@ final class StudyRepository {
             let log = StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
                                      mode: responseMode,
                                      durationMs: duration, wasNew: summary.state == "new",
-                                     sequence: (try logs().map(\.sequence).max() ?? 0) + 1)
+                                     sequence: try lastReviewSequence() + 1)
             context.insert(log)
             card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
             card.updatedAt = now

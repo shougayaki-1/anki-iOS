@@ -345,3 +345,75 @@ extension StudyRepository {
         }
     }
 }
+
+
+extension StudyRepository {
+    /// Captures membership, the full deck hierarchy and all affected Note/Card/Draft
+    /// states. The caller must show these counts and explicitly confirm before applying.
+    func previewDeckContents(deckID: UUID, scope: DeckContentsScope, action: DeckContentsAction) throws -> DeckContentsPreview {
+        let allDecks = try decks()
+        guard allDecks.contains(where: { $0.id == deckID }) else { throw StudyError.missingRecord }
+        let descendants = try descendants(of: deckID)
+        let included: Set<UUID> = scope == .direct ? [deckID] : descendants
+
+        let bulkAction: BulkEditAction
+        var destinationPath: String?
+        switch action {
+        case .move(to: let destination):
+            // Moving direct notes into a child is permitted; moving all descendants
+            // into their own subtree is not, to avoid surprising mixed membership.
+            guard destination != deckID,
+                  allDecks.contains(where: { $0.id == destination }),
+                  !(scope == .includingDescendants && descendants.contains(destination))
+            else { throw LibraryError.invalidDestination }
+            destinationPath = try deckPath(destination)
+            bulkAction = .move(destination)
+        case .delete:
+            bulkAction = .deleteNotes
+        }
+
+        let matchingNotes = try notes().filter { included.contains($0.deckID) }
+        let noteIDs = Set(matchingNotes.map(\.id))
+        let cardIDs = Set(try cards().filter { noteIDs.contains($0.noteID) }.map(\.id))
+        // Bulk edits operate on notes via their cards. Refuse structurally broken
+        // data instead of silently leaving zero-card notes behind.
+        let bulk = cardIDs.isEmpty ? nil : try previewBulkEdit(cardIDs: cardIDs, action: bulkAction)
+        guard noteIDs.isEmpty || Set(bulk?.notes.map(\.id) ?? []) == noteIDs
+        else { throw BulkEditError.staleSelection }
+
+        let hierarchy = allDecks.map {
+            DeckContentsPreview.DeckState(id: $0.id, name: $0.name, parentID: $0.parentID,
+                                          sortOrder: $0.sortOrder, createdAt: $0.createdAt, updatedAt: $0.updatedAt)
+        }.sorted { $0.id.uuidString < $1.id.uuidString }
+        let childPaths = try allDecks.filter { included.contains($0.id) && $0.id != deckID }
+            .map { try deckPath($0.id) }.sorted()
+
+        return DeckContentsPreview(sourceID: deckID, scope: scope, action: action,
+                                   hierarchy: hierarchy, sourcePath: try deckPath(deckID),
+                                   destinationPath: destinationPath, includedChildPaths: childPaths,
+                                   noteIDs: noteIDs, cardIDs: cardIDs, bulk: bulk)
+    }
+
+    /// Never applies an old preview when membership, hierarchy, destination, content,
+    /// scheduling, or editor drafts changed. applyBulkEdit performs a second snapshot
+    /// comparison and the entire mutation inside its rollback-on-save-failure transaction.
+    func applyDeckContents(_ preview: DeckContentsPreview, now: Date) throws -> BulkEditResult {
+        let current = try previewDeckContents(deckID: preview.sourceID, scope: preview.scope, action: preview.action)
+        guard current.hierarchy == preview.hierarchy,
+              current.sourcePath == preview.sourcePath,
+              current.destinationPath == preview.destinationPath,
+              current.includedChildPaths == preview.includedChildPaths,
+              current.noteIDs == preview.noteIDs, current.cardIDs == preview.cardIDs
+        else { throw BulkEditError.staleSelection }
+
+        guard let initial = preview.bulk, let latest = current.bulk else { throw BulkEditError.emptySelection }
+        guard initial.selection == latest.selection, initial.action == latest.action,
+              initial.notes == latest.notes, initial.cards == latest.cards,
+              initial.drafts == latest.drafts, initial.rows == latest.rows,
+              initial.detail == latest.detail, initial.changedNotes == latest.changedNotes,
+              initial.changedCards == latest.changedCards
+        else { throw BulkEditError.staleSelection }
+        guard latest.changedNotes.count > 0 else { throw BulkEditError.emptySelection }
+        return try applyBulkEdit(initial, now: now)
+    }
+}

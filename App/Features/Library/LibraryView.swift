@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LibraryView: View {
     @Bindable var store: StudyStore
+    @Binding var shortcutDeck: ShortcutDeckDestination?
     @State private var adding = false
     @State private var ocr = false
     @State private var importing = false
@@ -65,6 +66,9 @@ struct LibraryView: View {
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
             .navigationTitle("ライブラリ")
+            .navigationDestination(item: $shortcutDeck) { destination in
+                ShortcutDeckContentsView(store: store, deckID: destination.id)
+            }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
                 ToolbarItem(placement: .topBarTrailing) {

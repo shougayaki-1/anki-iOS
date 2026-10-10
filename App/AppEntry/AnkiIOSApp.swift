@@ -5,7 +5,10 @@ import UserNotifications
 @main
 struct AnkiIOSApp: App {
     private let notificationDelegate = StudyNotificationDelegate()
-    init() { UNUserNotificationCenter.current().delegate = notificationDelegate }
+    init() {
+        UNUserNotificationCenter.current().delegate = notificationDelegate
+        StudyAppShortcuts.updateAppShortcutParameters()
+    }
     var body: some Scene {
         WindowGroup { AppRootView().tint(Color("AccentColor")) }
     }
@@ -105,6 +108,24 @@ struct AppRootView: View {
                 if studyURL != nil, args.contains("-study-test-numeric-mask"), let store {
                     try UITestFixtures.populateMask(store.repository, now: store.clock())
                     try store.reload()
+                }
+                // UI tests can exercise the navigation adapter without launching Siri.
+                if studyURL != nil, let index = args.firstIndex(of: "-study-test-shortcut"),
+                   args.count > index + 1 {
+                    switch args[index + 1] {
+                    case "review": ShortcutNavigation.shared.submit(.study(.review))
+                    case "new": ShortcutNavigation.shared.submit(.study(.new))
+                    case "progress": ShortcutNavigation.shared.submit(.progress)
+                    case "deck:first":
+                        if let store, let first = try? store.repository.decks().first {
+                            ShortcutNavigation.shared.submit(.deck(first.id))
+                        }
+                    default:
+                        if args[index + 1].hasPrefix("deck:"),
+                           let id = UUID(uuidString: String(args[index + 1].dropFirst(5))) {
+                            ShortcutNavigation.shared.submit(.deck(id))
+                        }
+                    }
                 }
                 #endif
             }

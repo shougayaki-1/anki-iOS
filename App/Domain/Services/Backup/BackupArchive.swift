@@ -16,13 +16,18 @@ struct ValidatedBackup: Sendable {
 
 struct BackupArchive {
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
-    static func mediaPath(_ id: UUID) -> String { "media/\(id.uuidString).jpg" }
+    static func mediaPath(_ id: UUID, mediaType: String = "image/jpeg") -> String {
+        "media/\(id.uuidString).\(mediaType == "image/png" ? "png" : "jpg")"
+    }
 
     static func create(data: BackupData, media: [UUID: Data], now: Date, appVersion: String) throws -> Data {
         try BackupValidation.validate(data, media: media)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         var files = ["data.json": try encoder.encode(data)]
-        for (id, bytes) in media { files[mediaPath(id)] = bytes }
+        for asset in data.media {
+            guard let bytes = media[asset.id] else { throw BackupError.invalidData }
+            files[mediaPath(asset.id, mediaType: asset.mediaType)] = bytes
+        }
         let manifest = BackupManifest(createdAt: now, appVersion: appVersion, files: files.mapValues(hash))
         files["manifest.json"] = try encoder.encode(manifest)
         return try StoredZIP.write(files)
@@ -45,7 +50,8 @@ struct BackupArchive {
         }
         var media: [UUID: Data] = [:]
         for asset in snapshot.media {
-            guard let bytes = files[mediaPath(asset.id)], media[asset.id] == nil else { throw BackupError.invalidData }
+            guard let bytes = files[mediaPath(asset.id, mediaType: asset.mediaType)],
+                  media[asset.id] == nil else { throw BackupError.invalidData }
             media[asset.id] = bytes
         }
         guard files.count == media.count + 2 else { throw BackupError.invalidArchive }

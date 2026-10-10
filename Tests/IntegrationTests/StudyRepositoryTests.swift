@@ -22,6 +22,77 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testAnotherSetUsesOriginalScopeAndLimitAndEmptyOrFailedStartKeepsUndo() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "Other", now: now)
+        for index in 0..<2 {
+            try repo.createNote(NoteInput(deckID: deck, question: "Q\(index)", answer: "A"), now: now)
+        }
+        var options = try repo.options(); options.sessionAnswerLimit = 1
+        try repo.updateOptions(options)
+        try repo.start(mode: .new, scope: LearningScope(deckID: deck), now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        options = try repo.options(); options.sessionAnswerLimit = 30
+        try repo.updateOptions(options)
+        try repo.applyHomeScope(LearningScope(deckID: other))
+        let before = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.startAnotherSession(now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        repo.save = { try $0.save() }
+        try repo.startAnotherSession(now: now)
+        XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 0, limit: 1))
+        XCTAssertEqual(try repo.scope().deckID, deck)
+        XCTAssertEqual(try repo.homeScope().deckID, other)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        let exhausted = try BackupData.capture(repo).canonical()
+        XCTAssertThrowsError(try repo.startAnotherSession(now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), exhausted)
+        XCTAssertTrue(try repo.presentation(now: now)?.canUndo == true)
+    }
+
+    func testSessionProgressSaveFailureRepeatsDayBoundaryLegacyAndBackup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let repo = StudyRepository(container: container, mediaStore: media)
+        try repo.initialize(now: now)
+        try create(repo)
+        var options = try repo.options(); options.sessionAnswerLimit = 10
+        try repo.updateOptions(options)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.grade(.again, now: now))
+        XCTAssertEqual(try repo.sessionProgress()?.answered, 0)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        repo.save = { try $0.save() }
+        try repo.grade(.again, now: now)
+        let boundary = StudyDay(calendar: repo.calendar, startHour: 4).interval(containing: now).end
+        try repo.resume(now: boundary)
+        try revealAndGrade(repo, grade: .easy, date: boundary)
+        XCTAssertEqual(try repo.sessionProgress()?.answered, 2)
+        XCTAssertEqual(Set(try repo.logs().map(\.cardID)).count, 1)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: boundary, appVersion: "audit"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Restored.store"))
+        let restoredContainer = try BackupService.restore(backup, location: location, mediaStore: media, now: boundary)
+        let restored = StudyRepository(container: restoredContainer, mediaStore: media)
+        try restored.initialize(now: boundary)
+        XCTAssertEqual(try restored.sessionProgress(), SessionAnswerProgress(answered: 2, limit: 10))
+        try restored.undo(now: boundary)
+        XCTAssertEqual(try restored.sessionProgress()?.answered, 1)
+        var invalid = backup.data
+        options = try JSONDecoder().decode(StudyOptions.self, from: invalid.options[0].payload)
+        options.activeSessionProgress?.startSequence = -1
+        invalid.options[0].payload = try JSONEncoder().encode(options)
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: backup.media))
+        options.activeSessionProgress = nil
+        try restored.updateOptions(options)
+        XCTAssertNotNil(try restored.session())
+        XCTAssertNil(try restored.sessionProgress()) // Legacy session stays intact; no invented count.
+    }
+
     func testSessionAnswerProgressTracksRemainingAndFinishesAt20RegardlessOfDailyGoal() throws {
         let repo = try fixture()
         var settings = try repo.settings()
@@ -808,4 +879,37 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertTrue(try repo.notes().isEmpty)
         XCTAssertTrue(try repo.cards().isEmpty)
     }
+    func testBackgroundStatisticsReaderKeepsDeletedHistoryAndRespectsDeckScope() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try XCTUnwrap(repo.decks().first).id
+        let child = try repo.createDeck(name: "Child", parentID: root, now: now)
+        let other = try repo.createDeck(name: "Other", now: now)
+        let noteID = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A"), now: now)
+        try repo.start(mode: .new, scope: LearningScope(deckID: child), now: now)
+        try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(3))
+
+        let reader = StatisticsReader(container: container)
+        let calendar = Calendar.current
+        let all = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                        startHour: 4, scope: LearningScope())
+        let descendant = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                               startHour: 4, scope: LearningScope(deckID: root))
+        let excluded = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                             startHour: 4, scope: LearningScope(deckID: other))
+        XCTAssertEqual(all.days[0].answers, 1)
+        XCTAssertEqual(descendant.days[0].answers, 1)
+        XCTAssertEqual(excluded.days[0].answers, 0)
+
+        try repo.deleteNote(id: noteID)
+        let orphan = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                           startHour: 4, scope: LearningScope())
+        let orphanScoped = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
+                                                 startHour: 4, scope: LearningScope(deckID: root))
+        XCTAssertEqual(orphan.days[0].answers, 1)
+        XCTAssertEqual(orphan.unattributedAnswers, 1)
+        XCTAssertEqual(orphanScoped.days[0].answers, 0)
+    }
+
 }
