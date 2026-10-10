@@ -87,6 +87,9 @@ struct AppRootView: View {
                     try UITestFixtures.populateHints(store.repository, now: store.clock())
                     try store.reload()
                 }
+                if studyURL != nil, args.contains("-study-test-new-review-due"), let store {
+                    try UITestFixtures.populateNewReviewDue(store)
+                }
                 if studyURL != nil, args.contains("-study-test-scale"), let store {
                     try UITestFixtures.populateScale(store.repository, now: store.clock())
                     try store.reload()
@@ -97,6 +100,10 @@ struct AppRootView: View {
                 }
                 if studyURL != nil, args.contains("-study-test-notification-due"), let store {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
+                    try store.reload()
+                }
+                if studyURL != nil, args.contains("-study-test-numeric-mask"), let store {
+                    try UITestFixtures.populateMask(store.repository, now: store.clock())
                     try store.reload()
                 }
                 #endif

@@ -23,6 +23,7 @@ final class StudyStore {
     var settings = StudySettings()
     var review: ReviewPresentation?
     var failure: String?
+    var reviewRefreshFailed = false
     var showingReview = false
     var selectedTab = 0
     var statistics: StudyStatistics?
@@ -57,6 +58,7 @@ final class StudyStore {
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
             self.settings = settings; self.review = review; self.statistics = statistics
+            reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()
         } catch { homeFailure = error.localizedDescription; throw error }
@@ -80,6 +82,7 @@ final class StudyStore {
             if try repository.advanceWaitingSession(now: now) {
                 review = try repository.presentation(now: now)
             }
+
             let snapshot = try repository.homeSnapshot(now: now)
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due
@@ -102,6 +105,22 @@ final class StudyStore {
                 if showingReview { refreshQueue() }
             }
         } catch { failure = error.localizedDescription }
+    }
+
+    @discardableResult
+    func updateSettings(_ edit: (inout StudySettings) -> Void) -> Bool {
+        var value = settings
+        edit(&value)
+        do { try repository.updateSettings(value) }
+        catch { failure = error.localizedDescription; return false }
+        // Publish the committed settings even if a later screen refresh fails.
+        settings = value
+        do { try reload() }
+        catch {
+            homeFailure = error.localizedDescription
+            failure = "設定は保存しましたが画面を更新できません。再表示してください。\n" + error.localizedDescription
+        }
+        return true
     }
 
     @discardableResult
@@ -131,16 +150,45 @@ final class StudyStore {
         if counts.newRemaining > 0 { return .start(.new, counts.newRemaining) }
         return .unavailable
     }
-    func completeSession() {
-        perform { try repository.completeSession(now: clock()) }
+    func completeSession(destination: Int = 0) {
+        do { try repository.completeSession(now: clock()) }
+        catch { failure = error.localizedDescription; return }
+        review = nil; showingReview = false; selectedTab = destination
+        do { try reload() }
+        catch { homeFailure = error.localizedDescription; failure = "学習は終了しましたが、ホームを更新できません。" }
+    }
+    var isNewLimitReached: Bool {
+        homeFailure == nil && counts.eligibleNew > 0 && newSlotsRemaining == 0
+    }
+    var studyDayBoundaryMessage: String {
+        let hour = settings.dayStartHour
+        return "学習日の切替：\(hour < 12 ? "午前" : "午後")\(hour < 12 ? hour : hour - 12)時"
     }
     var newAvailabilityMessage: String {
         if counts.newRemaining > 0 { return "今日学べる新規カードは\(counts.newRemaining)枚です。" }
-        if newSlotsRemaining == 0 {
-            return "今日の新規枠の上限です。学習日の切替は午前\(settings.dayStartHour)時です。"
+        if counts.totalNew == 0 {
+            if counts.suspendedNew > 0 { return "現在のフィルター内の未学習カードは停止中です。ライブラリで停止を解除できます。" }
+            if globalCounts.totalNew > 0 { return "ほかの学習対象に未学習カードがあります。" }
+            if nextShortDue != nil { return "未学習カードはありません。短期復習の期限を待っています。" }
+            return "未学習カードはありません。"
         }
-        if counts.totalNew > 0 { return "今は新規カードを出題できません。同じノートのカードは学習日の切替まで待機します。" }
-        return globalCounts.totalNew > 0 ? "ほかの学習対象に未学習カードがあります。" : "未学習カードはありません。"
+        if counts.eligibleNew == 0 {
+            return "現在のフィルター内の未学習カードは兄弟カードの同日抑制で待機中です。\(studyDayBoundaryMessage)"
+        }
+        if isNewLimitReached {
+            return "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。\(studyDayBoundaryMessage)"
+        }
+        return "今は新規カードを出題できません。"
+    }
+    var newLimitRemainingMessage: String {
+        var message = "未学習カードはあと\(globalCounts.totalNew)枚（全デッキ・停止中を除く）。"
+        if scope != LearningScope() {
+            message += "現在のフィルター内は\(counts.totalNew)枚です。"
+        }
+        let buried = counts.totalNew - counts.eligibleNew
+        if buried > 0 { message += "うち\(buried)枚は兄弟カードの同日抑制で待機中です。" }
+        if counts.suspendedNew > 0 { message += "別に停止中の未学習カードが\(counts.suspendedNew)枚あります（現在のフィルター内）。" }
+        return message
     }
     var mixedAvailabilityMessage: String {
         if counts.due > 0 && counts.newRemaining > 0 { return StudyMode.mixed.explanation }
@@ -183,7 +231,7 @@ final class StudyStore {
             } else if let old = review {
                 review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
-                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable)
+                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState)
             }
             if revealed == true && !wasRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
@@ -232,10 +280,11 @@ final class StudyStore {
         }
     }
     func refreshQueue() {
-        perform {
+        let succeeded = perform {
             if let draft = try repository.session(), draft.cardID == nil {
                 try repository.resume(now: clock())
             }
         }
+        reviewRefreshFailed = !succeeded
     }
 }

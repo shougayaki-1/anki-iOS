@@ -136,6 +136,94 @@ final class StudyUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["studyHint"].exists)
     }
 
+    func editNumber(_ app: XCUIApplication, id: String, text: String, done: Bool = true) {
+        let field = app.textFields[id]
+        for _ in 0..<25 where !field.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)))
+        }
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap()
+        app.buttons[id + "Clear"].tap()
+        field.typeText(text)
+        if done { app.buttons[id + "Done"].tap() }
+    }
+
+    func testNumericSettingsLargestTypeAndDarkMode() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-accessibility"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["設定"].tap()
+        editNumber(app, id: "dailyNewLimit", text: "200")
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("200") == true)
+        XCTAssertEqual(app.textFields["dailyNewLimit"].label, "1日の新規上限")
+        attach(app, "Issue42-largest-type-dark")
+    }
+
+    func testNumericSettingsDirectInputValidationCancellationAndRelaunch() {
+        let app = app()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["設定"].tap()
+        for value in ["200", "10", "0", "500"] {
+            editNumber(app, id: "dailyNewLimit", text: value)
+            XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains(value) == true)
+        }
+        editNumber(app, id: "dailyNewLimit", text: "501")
+        XCTAssertTrue(app.staticTexts["dailyNewLimitError"].exists)
+        app.buttons["dailyNewLimitCancel"].tap()
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("500") == true)
+        editNumber(app, id: "dailyNewLimit", text: "200", done: false)
+        app.buttons["dailyNewLimitCancel"].tap()
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("500") == true)
+        for value in ["200", "1", "500"] { editNumber(app, id: "dailyGoal", text: value) }
+        let toggle = app.switches["dailyGoalToggle"]
+        for _ in 0..<5 where toggle.frame.minY < 100 { app.swipeDown() }
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.textFields["dailyGoal"])
+        waitForExpectations(timeout: 5)
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap(); XCTAssertTrue((app.textFields["dailyGoal"].value as? String)?.contains("500") == true)
+        for value in ["0", "23"] { editNumber(app, id: "dayStartHour", text: value) }
+        for value in ["80", "90", "97"] { editNumber(app, id: "desiredRetention", text: value) }
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["設定"].tap()
+        XCTAssertTrue((app.textFields["dailyNewLimit"].value as? String)?.contains("500") == true)
+        XCTAssertTrue((app.textFields["dailyGoal"].value as? String)?.contains("500") == true)
+        let field = app.textFields["dayStartHour"]
+        for _ in 0..<25 where !field.isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.5)))
+        }
+        XCTAssertTrue((field.value as? String)?.contains("23") == true)
+        attach(app, "Issue42-numeric-settings")
+    }
+
+    func testNewLimitNavigationRefreshAndRelaunch() {
+        let app = app()
+        create(app, question: "Limit question", answer: "Limit answer")
+        app.tabBars.buttons["設定"].tap()
+        let limit = app.textFields["dailyNewLimit"]
+        XCTAssertTrue(limit.waitForExistence(timeout: 5))
+        editNumber(app, id: "dailyNewLimit", text: "0")
+        app.tabBars.buttons["ホーム"].tap()
+        let change = app.buttons["changeNewLimit"]
+        scrollTo(change, app: app)
+        XCTAssertTrue(change.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["newLimitRemaining"].label.contains("1枚"))
+        attach(app, "Issue36-limit-reached")
+        change.tap()
+        XCTAssertTrue(app.navigationBars["学習設定"].waitForExistence(timeout: 5))
+        editNumber(app, id: "dailyNewLimit", text: "1")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["start-new"].isEnabled)
+        XCTAssertFalse(app.buttons["changeNewLimit"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["start-new"].isEnabled)
+    }
+
     func testInterruptedReviewPrimaryResumesRevealedDraftWithoutConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
@@ -262,7 +350,9 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["completeStudy"].exists)
         let waiting = app.staticTexts["nextShortReview"]
         scrollTo(waiting, app: app); XCTAssertTrue(waiting.exists)
+        scrollTo(app.buttons["start-new"], app: app)
         XCTAssertFalse(app.buttons["start-new"].isEnabled)
+        scrollTo(app.buttons["start-mixed"], app: app)
         XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
         attach(app, "Issue30-short-review-waiting")
         // Remain on Home without polling-triggering gestures or tab changes.
@@ -457,6 +547,73 @@ final class StudyUITests: XCTestCase {
         app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["記録"].tap()
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("0回"))
+    }
+
+    func testNewLongTermDueShowsModeGuidanceAndKeepsUndo() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-new-review-due"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 15))
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の新規学習は完了しました")
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "復習期限に達したカードは「復習する」")).firstMatch.exists)
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+        let finish = app.buttons["finishReview"]
+        XCTAssertTrue(finish.isHittable)
+        XCTAssertGreaterThanOrEqual(finish.frame.width, app.frame.width * 0.8)
+        XCTAssertGreaterThan(finish.frame.minY, app.frame.height * 0.7)
+        attach(app, "PR46-new-long-term-due")
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Long-term review")
+    }
+
+    func testWaitingEmptyStateInDarkLargestTypeCanFinish() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-accessibility"]
+        app.launch()
+        create(app, question: "Waiting question", answer: "Answer")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        scrollTo(app.buttons["revealAnswer"], app: app); app.buttons["revealAnswer"].tap()
+        scrollTo(app.buttons["grade-1"], app: app); app.buttons["grade-1"].tap()
+        XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今出題できるカードはありません")
+        scrollTo(app.staticTexts["reviewNextShortDue"], app: app)
+        XCTAssertTrue(app.staticTexts["reviewNextShortDue"].exists)
+        XCTAssertTrue(app.buttons["finishReview"].isHittable)
+        let fixedFrame = app.buttons["finishReview"].frame
+        app.swipeDown()
+        XCTAssertEqual(app.buttons["finishReview"].frame.minY, fixedFrame.minY, accuracy: 2)
+        XCTAssertGreaterThanOrEqual(fixedFrame.width, app.frame.width * 0.8)
+        attach(app, "Issue37-waiting-dark-largest-type")
+        app.buttons["finishReview"].tap()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
+    }
+
+    func testFinishEmptySessionKeepsUndoUntilCompletion() {
+        let app = app()
+        create(app, question: "Finish question", answer: "Answer")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の学習は完了しました")
+        XCTAssertEqual(app.buttons["pauseStudy"].label, "閉じる")
+        XCTAssertGreaterThan(app.staticTexts["reviewEmptyTitle"].frame.minY, app.frame.height * 0.25)
+        XCTAssertGreaterThanOrEqual(app.buttons["finishReview"].frame.height, 56)
+        XCTAssertGreaterThanOrEqual(app.buttons["finishReview"].frame.width, app.frame.width * 0.8)
+        XCTAssertGreaterThan(app.buttons["finishReview"].frame.minY, app.frame.height * 0.7)
+        attach(app, "Issue37-complete")
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        app.buttons["finishReview"].tap()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
+        XCTAssertFalse(app.buttons["completeStudy"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
     }
 
     func testCreateLearnUndoRestartEditAndDelete() {

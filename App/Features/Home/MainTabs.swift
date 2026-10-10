@@ -78,9 +78,6 @@ struct HomeView: View {
                     Section {
                         Text("今はこの条件で学習できるカードがありません。")
                         Button("学習対象を変更") { editingScope = true }
-                        if store.newSlotsRemaining == 0 {
-                            Button("新規学習の設定を変更") { store.selectedTab = 3 }
-                        }
                     }
                 }
             }
@@ -179,7 +176,7 @@ struct ReviewHeroSection: View {
                     Text("次の短期復習: \(next.formatted(date: .omitted, time: .shortened))")
                         .accessibilityIdentifier("nextShortReview")
                     Text("開始時の学習対象で待機しています。期限になると続きから再開できます。")
-                    Button("今回の学習を完了", action: store.completeSession)
+                    Button("今回の学習を完了", action: { store.completeSession() })
                         .accessibilityIdentifier("completeStudy")
                 case .complete:
                     Text("今回の出題は完了しました").font(.headline)
@@ -199,7 +196,6 @@ struct ReviewHeroSection: View {
                             .accessibilityIdentifier("nextShortReview")
                     }
                     if store.globalCounts.due > 0 { Text("ほかの学習対象に復習があります。") }
-                    Text(store.newAvailabilityMessage).font(.footnote)
                 }
                 if executable {
                     Button(action: execute) {
@@ -240,7 +236,17 @@ struct OtherStudyModesSection: View {
                     }.padding(.vertical, 6)
                 }.accessibilityIdentifier("start-\(mode.rawValue)").disabled(!store.canStart(mode))
                     .accessibilityHint(mode == .new ? store.newAvailabilityMessage : store.mixedAvailabilityMessage)
-                if mode == .new { Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(Color("SecondaryText")) }
+                if mode == .new {
+                    Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(Color("SecondaryText"))
+                        .accessibilityIdentifier("newAvailabilityMessage")
+                    if store.isNewLimitReached {
+                        Text(store.newLimitRemainingMessage).font(.footnote)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("newLimitRemaining")
+                        NavigationLink("新規学習の上限を変更") { StudySettingsView(store: store) }
+                            .accessibilityIdentifier("changeNewLimit")
+                    }
+                }
             }
             if case .start(.new, _) = store.homePrimaryAction {
                 Text("今日学べる新規カード: \(store.counts.newRemaining)枚").accessibilityIdentifier("newCount")

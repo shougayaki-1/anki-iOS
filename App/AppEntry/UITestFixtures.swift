@@ -11,6 +11,18 @@ enum UITestFixtures {
             scene.traitOverrides.userInterfaceStyle = .dark
         }
     }
+    @MainActor static func populateNewReviewDue(_ store: StudyStore) throws {
+        let repo = store.repository, now = store.clock()
+        guard try repo.notes().isEmpty else { return }
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Long-term review", answer: "Answer"), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.easy, now: now)
+        guard let due = try repo.cards().first?.dueDate else { throw StudyError.missingRecord }
+        store.clock = { due }
+        try store.reload()
+        store.showingReview = true
+    }
     @MainActor static func populateScale(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let base = now.addingTimeInterval(-300 * 86400), scheduler = try ReviewScheduler()
@@ -88,6 +100,19 @@ enum UITestFixtures {
         try repository.createNote(NoteInput(deckID: child, question: "Both tags", answer: "A", tagNames: ["A", "B"]), now: now)
         try repository.createNote(NoteInput(deckID: child, question: "Only A", answer: "A", tagNames: ["A"]), now: now)
         try repository.createNote(NoteInput(deckID: other, question: "Other card", answer: "A", tagNames: ["A", "B"]), now: now)
+    }
+    @MainActor static func populateMask(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 80), format: format).image { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 120, height: 80))
+        }
+        let imageID = try repository.addImage(image.pngData()!, now: now)
+        let deckID = try repository.decks()[0].id
+        let input = NoteInput(deckID: deckID, kind: .imageOcclusion,
+                              question: "Numeric mask fixture", imageID: imageID,
+                              masks: [ImageMask(rect: MaskRect(x: 0.25, y: 0.25, width: 0.5, height: 0.25))])
+        try repository.createNote(input, now: now)
     }
     static func prepare(name: String) throws {
         guard UUID(uuidString: name) != nil else { throw StudyError.invalidContent }
