@@ -138,6 +138,16 @@ extension StudyRepository {
         }.map(\.id))
         return try (cards ?? queueCards()).filter { $0.noteID.map { eligible.contains($0) } ?? false }
     }
+    // Only an explicit ordering override restricts candidates. Use displayed answers
+    // so reverse cards follow the same eligibility rules as the study UI.
+    func responseEligibleCards(_ cards: [QueueCard], mode: SessionResponseMode) throws -> [QueueCard] {
+        guard mode == .ordering else { return cards }
+        let items = try noteItems()
+        let eligible = Set(items.filter {
+            OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) == nil
+        }.map(\.id))
+        return cards.filter { eligible.contains($0.id) }
+    }
     func scopedCounts(scope: LearningScope, now: Date) throws -> HomeCounts {
         var result = try ReviewQueueBuilder(calendar: calendar).counts(cards: scopedQueueCards(scope), logs: queueLogs(), settings: settings(), now: now)
         let global = try counts(now: now)
@@ -150,7 +160,8 @@ extension StudyRepository {
         let selected = try homeScope(), settings = try settings()
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let start = day.start, end = day.end
-        let all = try queueCards(), scoped = try scopedQueueCards(selected, cards: all)
+        let all = try queueCards()
+        let scoped = try responseEligibleCards(scopedQueueCards(selected, cards: all), mode: options().sessionResponseMode ?? .cardDefault)
         let today = try todayQueueLogs(cards: all, settings: settings, now: now)
         let builder = ReviewQueueBuilder(calendar: calendar)
         let global = builder.counts(cards: all, logs: today, settings: settings, now: now)

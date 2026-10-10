@@ -271,14 +271,18 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, now: Date) throws {
         try transaction {
             let normalized = try normalizedScope(scope)
+            let selectedResponse = try responseMode ?? options().sessionResponseMode ?? .cardDefault
             let available = try ReviewQueueBuilder(calendar: calendar).queue(
-                cards: scopedQueueCards(normalized), logs: queueLogs(), settings: settings(),
+                cards: responseEligibleCards(scopedQueueCards(normalized), mode: selectedResponse), logs: queueLogs(), settings: settings(),
                 mode: mode, touched: [], reviewStreak: 0, now: now)
             // Check before replacing an interrupted draft, even if home counts were stale.
-            guard !available.isEmpty else { throw StudyError.noAvailableCards }
+            guard !available.isEmpty else {
+                if selectedResponse == .ordering { throw StudyError.noOrderingCards }
+                throw StudyError.noAvailableCards
+            }
             if let existing = try session() { context.delete(existing) }
             try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
@@ -287,7 +291,7 @@ final class StudyRepository {
             let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
-                startSequence: try lastReviewSequence(), answerLimit: limit)
+                startSequence: try lastReviewSequence(), answerLimit: limit, responseMode: selectedResponse)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
@@ -298,10 +302,11 @@ final class StudyRepository {
         guard let draft = try session(), draft.cardID == nil,
               let mode = StudyMode(rawValue: draft.mode) else { throw StudyError.noSession }
         let originalScope = try scope()
-        let limit = try options().activeSessionProgress?.answerLimit
+        let progress = try options().activeSessionProgress
+        let limit = progress?.answerLimit
         // start validates candidates before replacing anything and rolls back a
         // failed save, so an empty/failed restart retains the final Undo.
-        try start(mode: mode, scope: originalScope, answerLimit: limit, now: now)
+        try start(mode: mode, scope: originalScope, answerLimit: limit, responseMode: progress?.responseMode ?? .cardDefault, now: now)
     }
 
     func completeSession(now: Date) throws {
@@ -342,7 +347,7 @@ final class StudyRepository {
         if let progress = try sessionProgress(), progress.isComplete { return [] }
         let cards = try queueCards(), settings = try settings()
         return try ReviewQueueBuilder(calendar: calendar).queue(
-            cards: scopedQueueCards(scope(), cards: cards), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
+            cards: responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
             mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
             reviewStreak: draft.reviewStreak, now: now)
     }
@@ -354,7 +359,7 @@ final class StudyRepository {
         draft.elapsedMs = 0; draft.updatedAt = now
         draft.activeSince = draft.cardID == nil ? nil : now
         if let id = draft.cardID, let item = try noteItems(cardID: id).first {
-            draft.answerMode = item.responseMode.rawValue
+            draft.answerMode = try (options().activeSessionProgress?.responseMode?.override ?? item.responseMode).rawValue
             try prepareOrderingDraft(draft)
         }
     }
@@ -444,7 +449,7 @@ final class StudyRepository {
         guard let draft = try session() else { return nil }
         let mode = StudyMode(rawValue: draft.mode) ?? .review
         let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
-        let short = try scopedQueueCards(scope()).filter {
+        let short = try responseEligibleCards(scopedQueueCards(scope()), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
             !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()
@@ -467,13 +472,19 @@ final class StudyRepository {
             return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
                                     message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
         }
-        let cards = try scopedQueueCards(scope()), logs = try queueLogs(), settings = try settings()
+        let scoped = try scopedQueueCards(scope())
+        let response = try options().activeSessionProgress?.responseMode ?? .cardDefault
+        let cards = try responseEligibleCards(scoped, mode: response), logs = try queueLogs(), settings = try settings()
         let builder = ReviewQueueBuilder(calendar: calendar)
         let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
         let queue = builder.queue(cards: cards, logs: logs, settings: settings, mode: mode,
                                   touched: Set(draft.touchedCardIDs), reviewStreak: draft.reviewStreak, now: now)
         guard draft.cardID == nil, queue.isEmpty else {
             return ReviewEmptyState(reason: .retry, title: "出題を確認してください", message: "学習状態を再取得してください。", canRetry: true)
+        }
+        if response == .ordering && cards.isEmpty && !scoped.isEmpty {
+            return ReviewEmptyState(reason: .noTargets, title: "並び替えに対応するカードがありません",
+                                    message: "英文の一問一答・記述式カードが対象です。ホームの学習設定で回答形式または学習対象を変更してください。", suggestsScopeChange: true)
         }
         let limit = mode != .review && counts.eligibleNew > 0 && counts.newRemaining == 0
         let global = builder.counts(cards: try queueCards(), logs: logs, settings: settings, now: now)

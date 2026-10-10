@@ -16,6 +16,22 @@ final class StudyUITests: XCTestCase {
         app.launch()
         return app
     }
+    func testHomeResponseSettingPersistsAndStartsTyping() {
+        let app = app()
+        create(app, question: "Mode snapshot", answer: "Tokyo")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["openSessionAnswerLimit"].tap()
+        app.buttons["sessionResponseMode"].tap()
+        app.buttons["文字入力"].tap()
+        app.buttons["閉じる"].tap()
+        app.terminate(); app.launch()
+        app.buttons["openSessionAnswerLimit"].tap()
+        XCTAssertTrue(app.buttons["sessionResponseMode"].label.contains("文字入力"))
+        app.buttons["閉じる"].tap()
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.textFields["typedAnswer"].waitForExistence(timeout: 10)
+            || app.textViews["typedAnswer"].exists)
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]

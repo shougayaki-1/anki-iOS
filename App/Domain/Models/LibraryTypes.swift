@@ -17,6 +17,7 @@ struct StudyOptions: Codable, Equatable {
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil
+    var sessionResponseMode: SessionResponseMode? = nil
     var activeSessionProgress: StudySessionProgressSnapshot? = nil
 }
 
@@ -25,6 +26,23 @@ struct StudyOptions: Codable, Equatable {
 struct StudySessionProgressSnapshot: Codable, Equatable {
     var startSequence: Int
     var answerLimit: Int
+    var responseMode: SessionResponseMode? = nil
+}
+
+enum SessionResponseMode: String, Codable, CaseIterable {
+    case cardDefault, mental, typing, ordering
+    var title: String {
+        switch self {
+        case .cardDefault: return "カードに合わせる"
+        case .mental: return "頭の中"
+        case .typing: return "文字入力"
+        case .ordering: return "並び替え"
+        }
+    }
+    var override: ResponseMode? { ResponseMode(rawValue: rawValue) }
+    init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .cardDefault
+    }
 }
 
 struct TagItem: Identifiable {
