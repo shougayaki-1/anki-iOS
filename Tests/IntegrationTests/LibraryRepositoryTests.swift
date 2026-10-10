@@ -430,6 +430,42 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.cards().count, 3)
     }
 
+    func testThousandNoteDeckContentsPreviewMoveAndDeletePreservesDecksAndCardState() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        let destination = try repo.createDeck(name: "移動先", now: now)
+        let payload = try JSONEncoder().encode(ReviewScheduler().newCard(now: now))
+        var originalCards: Set<UUID> = []
+        for index in 0..<1000 {
+            let input = NoteInput(deckID: index.isMultiple(of: 2) ? root : child,
+                                  question: "Question \(index)", answer: "Answer")
+            let content = try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: ""))
+            let note = Note(input: input, content: content, now: now)
+            let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now)
+            repo.context.insert(note); repo.context.insert(card)
+            originalCards.insert(card.id)
+        }
+        try repo.context.save()
+        let started = Date()
+        let direct = try repo.previewDeckContents(deckID: root, scope: .direct, action: .move(to: destination))
+        XCTAssertEqual(direct.noteCount, 500)
+        let all = try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .move(to: destination))
+        XCTAssertEqual(all.noteCount, 1000)
+        XCTAssertEqual(all.cardCount, 1000)
+        let result = try repo.applyDeckContents(all, now: now)
+        XCTAssertEqual(result.changedNotes, 1000)
+        XCTAssertEqual(Set(try repo.cards().map(\.id)), originalCards)
+        XCTAssertTrue(try repo.cards().allSatisfy { $0.fsrsPayload == payload })
+        XCTAssertTrue(try repo.notes().allSatisfy { $0.deckID == destination })
+        let deletion = try repo.previewDeckContents(deckID: destination, scope: .direct, action: .delete)
+        _ = try repo.applyDeckContents(deletion, now: now)
+        XCTAssertTrue(try repo.notes().isEmpty)
+        XCTAssertTrue(try repo.cards().isEmpty)
+        XCTAssertEqual(Set(try repo.decks().map(\.id)), [root, child, destination])
+        XCTAssertEqual(try repo.decks().first { $0.id == child }?.parentID, root)
+        print("1000-note deck contents preview/move/delete: \(Date().timeIntervalSince(started))s")
+    }
+
     func testDeckContentsStalePreviewRejectsMembershipAndParentChanges() throws {
         let repo = try fixture(), root = try repo.decks()[0].id
         let child = try repo.createDeck(name: "子", parentID: root, now: now)
