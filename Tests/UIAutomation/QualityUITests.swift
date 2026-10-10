@@ -1,6 +1,46 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testDeckManagerShowsFolderTreeAndSupportsChildCreation() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["デッキ管理"].tap()
+
+        // Toolbar plus always creates a root, independent of the selected row.
+        app.buttons["デッキ追加"].tap()
+        let name = app.textFields["deckNameInput"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap(); name.typeText("英語")
+        app.buttons["保存"].tap()
+        let root = app.buttons.matching(NSPredicate(format: "label == %@", "英語を編集")).firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 5))
+        root.press(forDuration: 1.1)
+        let addChild = app.buttons["子デッキを追加"]
+        XCTAssertTrue(addChild.waitForExistence(timeout: 5))
+        addChild.tap()
+        let childName = app.textFields["deckNameInput"]
+        XCTAssertTrue(childName.waitForExistence(timeout: 5))
+        childName.tap(); childName.typeText("Final Draft")
+        app.buttons["保存"].tap()
+
+        let child = app.buttons.matching(NSPredicate(format: "label == %@", "英語 / Final Draftを編集")).firstMatch
+        let collapse = app.buttons.matching(NSPredicate(format: "label == %@", "英語を折りたたむ")).firstMatch
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
+        collapse.tap()
+        XCTAssertFalse(child.exists)
+        let expand = app.buttons.matching(NSPredicate(format: "label == %@", "英語を展開する")).firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
+        child.tap()
+        XCTAssertTrue(app.textFields["deckNameInput"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["deckNameInput"].value as? String, "Final Draft")
+    }
+
     func testNativeIdentityDeckCancellationAndEmptySearch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]

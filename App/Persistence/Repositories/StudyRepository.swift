@@ -255,6 +255,14 @@ final class StudyRepository {
                                                         settings: settings(), now: now)
     }
 
+    // A fixed number of confirmed answers provides an honest end to each study set.
+    // Unlike the dynamic FSRS due queue, this count cannot grow from short-term repeats.
+    func sessionProgress() throws -> SessionAnswerProgress? {
+        guard try session() != nil, let saved = try options().activeSessionProgress else { return nil }
+        let answered = try logs().filter { $0.sequence > saved.startSequence }.count
+        return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
+    }
+
     func start(mode: StudyMode, scope: LearningScope = LearningScope(), now: Date) throws {
         try transaction {
             let normalized = try normalizedScope(scope)
@@ -267,6 +275,14 @@ final class StudyRepository {
             try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
+            var saved = try options()
+            let limit = saved.sessionAnswerLimit ?? 20
+            guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
+            saved.activeSessionProgress = StudySessionProgressSnapshot(
+                startSequence: try logs().map(\.sequence).max() ?? 0, answerLimit: limit)
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+                row.payload = try JSONEncoder().encode(saved)
+            } else { context.insert(try ExtraPreferences(options: saved)) }
             try selectNext(draft: draft, now: now)
         }
     }
@@ -278,6 +294,11 @@ final class StudyRepository {
             guard draft.cardID == nil else { throw StudyError.noAvailableCards }
             context.delete(draft)
             for row in try context.fetch(FetchDescriptor<SessionScope>()) { context.delete(row) }
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+                var saved = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
+                saved.activeSessionProgress = nil
+                row.payload = try JSONEncoder().encode(saved)
+            }
         }
     }
     func resume(now: Date) throws {
@@ -300,6 +321,7 @@ final class StudyRepository {
         return true
     }
     private func nextCardIDs(draft: SessionDraft, now: Date) throws -> [UUID] {
+        if let progress = try sessionProgress(), progress.isComplete { return [] }
         let cards = try queueCards(), settings = try settings()
         return try ReviewQueueBuilder(calendar: calendar).queue(
             cards: scopedQueueCards(scope(), cards: cards), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
@@ -348,6 +370,7 @@ final class StudyRepository {
                   let card = try cards().first(where: { $0.id == cardID && !$0.isSuspended }) else {
                 throw StudyError.noSession
             }
+            let progressBefore = try sessionProgress()
             let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
@@ -369,7 +392,13 @@ final class StudyRepository {
             if !draft.touchedCardIDs.contains(card.id) { draft.touchedCardIDs.append(card.id) }
             if summary.state == "new" { draft.reviewStreak = 0 }
             else if summary.state == "review" { draft.reviewStreak += 1 }
-            try selectNext(draft: draft, now: now)
+            if let progress = progressBefore, progress.limit > 0,
+               progress.answered + 1 >= progress.limit {
+                // Keep the final evaluation undoable until the user confirms completion.
+                try selectCard(nil, draft: draft, now: now)
+            } else {
+                try selectNext(draft: draft, now: now)
+            }
         }
     }
 
@@ -411,9 +440,15 @@ final class StudyRepository {
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
                                   canUndo: draft.undoLogID != nil, nextShortDue: short,
                                   ordering: ordering, orderingUnavailable: reason,
-                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil)
+                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil,
+                                  sessionProgress: try sessionProgress())
     }
     private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date) throws -> ReviewEmptyState {
+        let sessionCount = try sessionProgress()
+        if let progress = sessionCount, progress.isComplete {
+            return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
+                                    message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
+        }
         let cards = try scopedQueueCards(scope()), logs = try queueLogs(), settings = try settings()
         let builder = ReviewQueueBuilder(calendar: calendar)
         let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
@@ -488,6 +523,10 @@ final class StudyRepository {
             return ReviewEmptyState(reason: .modeExcluded, title: "このモードの学習対象にカードがありません",
                                     message: mode == .review ? "未学習カードは「新しく覚える」から学習できます。" : "復習カードは「復習する」から学習できます。新規学習で続ける短期復習は、このセッションで学んだカードだけです。",
                                     suggestsScopeChange: true)
+        }
+        if let progress = sessionCount, progress.limit > 0, !progress.isComplete {
+            return ReviewEmptyState(reason: .complete, title: "今回はここまで",
+                                    message: "\(progress.answered) / \(progress.limit)問回答しました。現在、この条件で追加出題できるカードはありません。次回の復習は期限到来後に始められます。")
         }
         return ReviewEmptyState(reason: .complete, title: "今回の学習は完了しました",
                                 message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")

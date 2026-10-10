@@ -27,10 +27,6 @@ struct ReviewView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
                         if let review = store.review, let item = review.card {
-                            if let goal = store.settings.dailyGoal {
-                                Text(store.counts.learnedToday >= goal ? "今日の目標を達成しました。学習を続けられます。" : "今日の学習 \(store.counts.learnedToday) / \(goal)枚")
-                                    .font(.footnote).accessibilityIdentifier("reviewGoalProgress")
-                            }
                             Text(item.deckName).font(.caption).foregroundStyle(.secondary)
                             if review.answerRevealed && store.settings.reviewAppearance.answerFirst {
                                 answerContent(review, item: item)
@@ -101,6 +97,35 @@ struct ReviewView: View {
                         .frame(minHeight: store.review?.card == nil ? geometry.size.height : 0)
                 }
             }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if let review = store.review, let progress = review.sessionProgress {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(progress.limit == 0 ? "今回回答済み \(progress.answered)問" :
+                                 progress.isComplete ? "今回の\(progress.limit)問を完了" :
+                                 review.card == nil ? "回答済み \(progress.answered)問" :
+                                 "残り\(progress.remaining ?? 0)問")
+                                .font(.headline)
+                                .accessibilityIdentifier("remainingQuestions")
+                            Spacer(minLength: 8)
+                            if progress.limit > 0 {
+                                Text("今回 \(progress.answered) / \(progress.limit)問")
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                    .accessibilityIdentifier("sessionProgress")
+                            }
+                        }
+                        if progress.limit > 0 {
+                            ProgressView(value: Double(min(progress.answered, progress.limit)), total: Double(progress.limit))
+                                .accessibilityIdentifier("sessionProgressBar")
+                                .accessibilityLabel("今回の学習進捗")
+                                .accessibilityValue("\(progress.answered)問回答済み、残り\(progress.remaining ?? 0)問")
+                        }
+                    }
+                    .padding(.horizontal, 24).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(uiColor: .systemBackground))
+                }
+            }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let review = store.review, review.card == nil {
                     Button { store.completeSession() } label: {
@@ -135,9 +160,9 @@ struct ReviewView: View {
                 lastSpeechEvent = nil
                 autoSpeechPaused = false
             }
-            .onChange(of: store.counts.learnedToday) { old, new in
-                if let goal = store.settings.dailyGoal, old < goal, new >= goal {
-                    UIAccessibility.post(notification: .announcement, argument: "今日の学習目標を達成しました。学習を続けられます。")
+            .onChange(of: store.review?.sessionProgress?.answered) { old, new in
+                if old != new, let progress = store.review?.sessionProgress, progress.isComplete {
+                    UIAccessibility.post(notification: .announcement, argument: "今回の\(progress.limit)問を完了しました。")
                 }
             }
             .navigationTitle(store.review?.mode.title ?? "学習")

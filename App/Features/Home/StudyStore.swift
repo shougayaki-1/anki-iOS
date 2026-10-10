@@ -21,6 +21,7 @@ final class StudyStore {
     @ObservationIgnored private var homeDayStart: Date?
     @ObservationIgnored private var homeTimeZone: String?
     var settings = StudySettings()
+    var sessionAnswerLimit = 20
     var review: ReviewPresentation?
     var failure: String?
     var reviewRefreshFailed = false
@@ -49,15 +50,17 @@ final class StudyStore {
             repository.calendar = .current
             let now = clock()
             let snapshot = try repository.homeSnapshot(now: now)
-            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
+            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id), shortName: $0.name, parentID: $0.parentID) }
             let notes = try repository.noteItems()
             let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
             let settings = try repository.settings()
+            let answerLimit = try repository.options().sessionAnswerLimit ?? 20
             let review = try repository.presentation(now: now)
             let statistics = try repository.statistics(now: now)
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
-            self.settings = settings; self.review = review; self.statistics = statistics
+            self.settings = settings; self.sessionAnswerLimit = answerLimit
+            self.review = review; self.statistics = statistics
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()
@@ -138,10 +141,20 @@ final class StudyStore {
         case .mixed: return counts.due > 0 || counts.newRemaining > 0
         }
     }
+    func changeSessionAnswerLimit(_ limit: Int) {
+        guard [0, 10, 20, 30].contains(limit) else { failure = "回答数を選択し直してください。"; return }
+        perform {
+            var saved = try repository.options()
+            saved.sessionAnswerLimit = limit
+            try repository.updateOptions(saved)
+        }
+    }
+
     var homePrimaryAction: HomePrimaryAction {
         guard homeFailure == nil else { return .unavailable }
         if let review {
             if review.card != nil { return .resume(review.mode) }
+            if review.sessionProgress?.isComplete == true { return .complete }
             if let next = review.nextShortDue { return .waiting(next) }
             return .complete
         }
@@ -207,13 +220,13 @@ final class StudyStore {
         if perform({ try repository.resume(now: clock()) }) { showingReview = true }
     }
     func grade(_ grade: ReviewGrade) {
-        let previous = counts.learnedToday
+        let previouslyComplete = review?.sessionProgress?.isComplete == true
         do { try repository.grade(grade, now: clock()) }
         catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
         do { try reload() }
         catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
-        let goalReached = settings.dailyGoal.map { previous < $0 && counts.learnedToday >= $0 } ?? false
-        haptics.play(goalReached ? .goal : .grade, mode: settings.hapticsMode)
+        let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
+        haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
     }
     func undo() {
         do { try repository.undo(now: clock()) }
@@ -231,7 +244,8 @@ final class StudyStore {
             } else if let old = review {
                 review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
-                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState)
+                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable,
+                                           emptyState: old.emptyState, sessionProgress: old.sessionProgress)
             }
             if revealed == true && !wasRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
