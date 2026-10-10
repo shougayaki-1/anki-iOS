@@ -255,6 +255,7 @@ final class StudyRepository {
             try selectNext(draft: draft, now: now)
             guard draft.cardID == nil else { throw StudyError.noAvailableCards }
             context.delete(draft)
+            for row in try context.fetch(FetchDescriptor<SessionScope>()) { context.delete(row) }
         }
     }
     func resume(now: Date) throws {
@@ -354,6 +355,52 @@ final class StudyRepository {
         return ReviewPresentation(card: item, mode: mode,
                                   responseMode: ResponseMode(rawValue: draft.answerMode) ?? .mental,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
-                                  canUndo: draft.undoLogID != nil, nextShortDue: short)
+                                  canUndo: draft.undoLogID != nil, nextShortDue: short,
+                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil)
     }
+    private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date) throws -> ReviewEmptyState {
+        let cards = try scopedQueueCards(scope()), logs = try queueLogs(), settings = try settings()
+        let builder = ReviewQueueBuilder(calendar: calendar)
+        let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
+        let queue = builder.queue(cards: cards, logs: logs, settings: settings, mode: mode,
+                                  touched: Set(draft.touchedCardIDs), reviewStreak: draft.reviewStreak, now: now)
+        guard draft.cardID == nil, queue.isEmpty else {
+            return ReviewEmptyState(reason: .retry, title: "出題を確認してください", message: "学習状態を再取得してください。", canRetry: true)
+        }
+        let limit = mode != .review && counts.eligibleNew > 0 && counts.newRemaining == 0
+        let global = builder.counts(cards: try queueCards(), logs: logs, settings: settings, now: now)
+        let remaining = "未学習カードはあと\(global.totalNew)枚（全デッキ・停止中を除く）。現在の学習対象内は\(counts.totalNew)枚です。"
+        if short != nil {
+            return ReviewEmptyState(reason: .waiting, title: "今出題できるカードはありません",
+                                    message: "期限が来ると自動で出題を再確認します。このセッションで続けるか、今回はここまでにできます。" + (limit ? "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。" + remaining : ""),
+                                    suggestsSettings: limit, canRetry: true)
+        }
+        if limit {
+            return ReviewEmptyState(reason: .newLimit, title: "今日の新規学習は上限です",
+                                    message: "上限\(settings.dailyNewLimit)枚。" + remaining + "設定 > 学習で変更できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsSettings: true, canRetry: true)
+        }
+        let relevant = cards.filter {
+            switch mode {
+            case .review: return $0.state != "new"
+            case .new: return $0.state == "new" || draft.touchedCardIDs.contains($0.id)
+            case .mixed: return true
+            }
+        }
+        if relevant.isEmpty {
+            return ReviewEmptyState(reason: .noTargets, title: "このモードの学習対象にカードがありません",
+                                    message: "ホームでデッキ・タグなどの学習対象を確認できます。", suggestsScopeChange: true)
+        }
+        if relevant.allSatisfy(\.suspended) {
+            return ReviewEmptyState(reason: .suspended, title: "対象のカードは停止中です",
+                                    message: "ライブラリで停止を解除できます。", suggestsScopeChange: true)
+        }
+        let otherwiseDue = relevant.contains { !$0.suspended && (($0.state != "new" && $0.due <= now) || (mode != .review && $0.state == "new")) }
+        if otherwiseDue {
+            return ReviewEmptyState(reason: .siblings, title: "兄弟カードの同日抑制で待機中です",
+                                    message: "同じノートのカードは次の学習日に出題できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsScopeChange: true, canRetry: true)
+        }
+        return ReviewEmptyState(reason: .complete, title: "今回の学習は完了しました",
+                                message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")
+    }
+
 }

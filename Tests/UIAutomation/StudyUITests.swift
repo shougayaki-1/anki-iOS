@@ -388,6 +388,48 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("0回"))
     }
 
+    func testWaitingEmptyStateInDarkLargestTypeCanFinish() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-accessibility"]
+        app.launch()
+        create(app, question: "Waiting question", answer: "Answer")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        scrollTo(app.buttons["revealAnswer"], app: app); app.buttons["revealAnswer"].tap()
+        scrollTo(app.buttons["grade-1"], app: app); app.buttons["grade-1"].tap()
+        XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今出題できるカードはありません")
+        scrollTo(app.staticTexts["reviewNextShortDue"], app: app)
+        XCTAssertTrue(app.staticTexts["reviewNextShortDue"].exists)
+        scrollTo(app.buttons["finishReview"], app: app)
+        XCTAssertTrue(app.buttons["finishReview"].isHittable)
+        attach(app, "Issue37-waiting-dark-largest-type")
+        app.buttons["finishReview"].tap()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
+    }
+
+    func testFinishEmptySessionKeepsUndoUntilCompletion() {
+        let app = app()
+        create(app, question: "Finish question", answer: "Answer")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の学習は完了しました")
+        XCTAssertEqual(app.buttons["pauseStudy"].label, "閉じる")
+        attach(app, "Issue37-complete")
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        app.buttons["finishReview"].tap()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
+        XCTAssertFalse(app.buttons["completeStudy"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["resumeStudy"].exists)
+    }
+
     func testCreateLearnUndoRestartEditAndDelete() {
         let app = app()
         create(app, question: "Capital of Japan?", answer: "Tokyo")
