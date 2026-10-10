@@ -113,6 +113,7 @@ struct HomeSnapshot: Equatable {
     let nextShortDue: Date?
     let hasCards: Bool
     let dayStart: Date
+    let nextRefresh: Date
 }
 
 struct ReviewPresentation {

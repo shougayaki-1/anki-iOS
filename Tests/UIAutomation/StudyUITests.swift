@@ -174,6 +174,13 @@ final class StudyUITests: XCTestCase {
         XCTAssertFalse(app.buttons["start-new"].isEnabled)
         XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
         attach(app, "Issue30-short-review-waiting")
+        // Remain on Home without polling-triggering gestures or tab changes.
+        let dueResume = app.buttons["resumeStudy"]
+        XCTAssertTrue(dueResume.waitForExistence(timeout: 75))
+        dueResume.tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "State question")
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
     }
 
     func testReviewHeroVisibleWithoutScrollingAndHomeAddCancel() {

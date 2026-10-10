@@ -14,6 +14,7 @@ final class StudyStore {
     var counts = HomeCounts()
     var globalCounts = HomeCounts()
     var nextShortDue: Date?
+    var nextHomeRefresh = Date.distantFuture
     var newSlotsRemaining = 0
     var homeFailure: String?
     var hasCards = false
@@ -67,6 +68,7 @@ final class StudyStore {
         if nextShortDue != snapshot.nextShortDue { nextShortDue = snapshot.nextShortDue }
         if newSlotsRemaining != snapshot.newSlotsRemaining { newSlotsRemaining = snapshot.newSlotsRemaining }
         if hasCards != snapshot.hasCards { hasCards = snapshot.hasCards }
+        if nextHomeRefresh != snapshot.nextRefresh { nextHomeRefresh = snapshot.nextRefresh }
         homeDayStart = snapshot.dayStart; homeTimeZone = repository.calendar.timeZone.identifier
         homeFailure = nil
     }
@@ -74,12 +76,10 @@ final class StudyStore {
         do {
             repository.calendar = .current
             let now = clock()
-            // Advance only an empty session, retaining its original scope and Undo.
-            if let draft = try repository.session(), draft.cardID == nil {
-                try repository.resume(now: now)
-                try repository.setSessionActive(false, now: now)
+            // A waiting session only writes when a next card becomes available.
+            if try repository.advanceWaitingSession(now: now) {
+                review = try repository.presentation(now: now)
             }
-            review = try repository.presentation(now: now)
             let snapshot = try repository.homeSnapshot(now: now)
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due

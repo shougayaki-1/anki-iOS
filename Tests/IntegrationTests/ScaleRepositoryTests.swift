@@ -51,6 +51,34 @@ final class ScaleRepositoryTests: XCTestCase {
         for _ in 0..<5 { store.refreshHome() }
         let pollTime = Date().timeIntervalSince(pollStart) / 5
         XCTAssertNil(store.homeFailure); XCTAssertEqual(store.counts.due, 3000)
+        // Empty sessions with 3000 future cards must not write on repeated home reads.
+        store.clock = { now }
+        try store.repository.transaction {
+            store.repository.context.insert(SessionDraft(mode: .review, now: now))
+        }
+        try store.reload()
+        var homeSaves = 0
+        store.repository.save = { context in homeSaves += 1; try context.save() }
+        let waitingStart = Date()
+        for _ in 0..<5 { store.refreshHome() }
+        let waitingTime = Date().timeIntervalSince(waitingStart) / 5
+        XCTAssertEqual(homeSaves, 0)
+        XCTAssertNil(store.homeFailure)
+        XCTAssertLessThan(waitingTime, max(1, pollTime * 3))
+        let legacyStart = Date()
+        for _ in 0..<5 {
+            // The original PR #44 refresh path, on the same waiting fixture.
+            try store.repository.resume(now: now)
+            try store.repository.setSessionActive(false, now: now)
+            _ = try store.repository.presentation(now: now)
+            _ = try store.repository.homeSnapshot(now: now)
+        }
+        let legacyTime = Date().timeIntervalSince(legacyStart) / 5
+        XCTAssertEqual(homeSaves, 10)
+        XCTAssertLessThan(waitingTime, legacyTime * 1.25 + 0.05)
+        print("home waiting: cards=3000 logs=10000 newSaves=0 legacySaves=\(homeSaves) average=\(waitingTime)s legacy=\(legacyTime)s readOnlyBaseline=\(pollTime)s")
+        try store.repository.completeSession(now: now)
+        store.clock = { due.addingTimeInterval(1) }
         let studyStart = Date()
         try repo.start(mode: .review, now: due.addingTimeInterval(1))
         try repo.updateDraft(revealed: true, now: due.addingTimeInterval(1))

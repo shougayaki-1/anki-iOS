@@ -151,11 +151,7 @@ extension StudyRepository {
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let start = day.start, end = day.end
         let all = try queueCards(), scoped = try scopedQueueCards(selected, cards: all)
-        let noteIDs = Dictionary(uniqueKeysWithValues: all.compactMap { card in card.noteID.map { (card.id, $0) } })
-        let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
-            $0.reviewedAt >= start && $0.reviewedAt < end
-        }))
-        let today = rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID]) }
+        let today = try todayQueueLogs(cards: all, settings: settings, now: now)
         let builder = ReviewQueueBuilder(calendar: calendar)
         let global = builder.counts(cards: all, logs: today, settings: settings, now: now)
         var counts = builder.counts(cards: scoped, logs: today, settings: settings, now: now)
@@ -164,7 +160,8 @@ extension StudyRepository {
         let next = scoped.filter { !$0.suspended && ["learning", "relearning"].contains($0.state) && $0.due > now }.map(\.due).min()
         return HomeSnapshot(scope: selected, counts: counts, globalCounts: global,
                             newSlotsRemaining: max(0, settings.dailyNewLimit - used), nextShortDue: next,
-                            hasCards: !all.isEmpty, dayStart: start)
+                            hasCards: !all.isEmpty, dayStart: start,
+                            nextRefresh: min(end, all.filter { !$0.suspended && $0.state != "new" && $0.due > now }.map(\.due).min() ?? end))
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)

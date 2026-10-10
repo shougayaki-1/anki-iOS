@@ -44,6 +44,9 @@ struct HomeView: View {
         if store.review != nil { replacingWith = mode }
         else { store.start(mode) }
     }
+    private var refreshDeadline: Date? {
+        store.selectedTab == 0 && !store.showingReview && scenePhase == .active ? store.nextHomeRefresh : nil
+    }
     var body: some View {
         NavigationStack {
             List {
@@ -110,11 +113,13 @@ struct HomeView: View {
                 }
                 Button("キャンセル", role: .cancel) { replacingWith = nil }
             } message: { Text("未確定の回答下書きは破棄されます。確定済みの学習履歴は残ります。") }
-            .task {
-                while !Task.isCancelled {
-                    if store.selectedTab == 0 && !store.showingReview && scenePhase == .active { store.refreshHome() }
-                    try? await Task.sleep(for: .seconds(15))
-                }
+            .onAppear { store.refreshHome() }
+            .task(id: refreshDeadline) {
+                guard let deadline = refreshDeadline else { return }
+                do { try await Task.sleep(for: .seconds(max(0.01, deadline.timeIntervalSince(store.clock())))) }
+                catch { return }
+                guard !Task.isCancelled else { return }
+                store.refreshHome()
             }
         }
     }
