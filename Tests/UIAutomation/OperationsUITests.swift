@@ -17,8 +17,23 @@ final class OperationsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Backup question"].waitForExistence(timeout: 5))
     }
     func scrollTo(_ element: XCUIElement, in app: XCUIApplication) {
-        for _ in 0..<10 where !element.isHittable { app.swipeUp() }
-        XCTAssertTrue(element.isHittable)
+        func visible() -> Bool {
+            guard element.exists && element.isHittable else { return false }
+            let top = app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? app.frame.minY
+            return element.frame.minY >= top && element.frame.maxY <= app.frame.maxY - 16
+        }
+        if visible() { return }
+        for _ in 0..<6 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.3))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75)))
+            if visible() { return }
+        }
+        for _ in 0..<25 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.45)))
+            if visible() { return }
+        }
+        XCTAssertTrue(visible(), "Control must be visible outside the navigation bar")
     }
     func attach(_ app: XCUIApplication, name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name
@@ -147,7 +162,7 @@ final class OperationsUITests: XCTestCase {
         }
         XCTAssertTrue(backupFile.waitForExistence(timeout: 15))
         backupFile.tap()
-        let restore = app.buttons["restoreBackup"]; XCTAssertTrue(restore.waitForExistence(timeout: 10)); scrollTo(restore, in: app); restore.tap()
+        let restore = app.buttons["restoreBackup"]; scrollTo(restore, in: app); XCTAssertTrue(restore.exists); restore.tap()
         app.buttons["confirmRestoreBackup"].firstMatch.tap()
         XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("復元しました"))
         attach(app, name: "Phase4-backup-restored")

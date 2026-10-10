@@ -5,6 +5,10 @@ struct ReviewView: View {
     @FocusState private var typingFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var speechPlayer = StudySpeechPlayer()
+    @State private var lastSpeechEvent: SpeechPresentationKey?
+    @State private var autoSpeechPaused = false
     @State private var swipeGate = ReviewSwipeGate()
     @State private var swipePadFrame = CGRect.zero
     @GestureState private var swiping = false
@@ -30,6 +34,7 @@ struct ReviewView: View {
                                 Divider()
                             }
                             questionContent(item)
+                            speechControls(review, item: item)
                             reviewImage(review, item: item)
                             if !review.answerRevealed {
                                 StudyHintView(hint: item.content.hint).id(item.cardID)
@@ -104,10 +109,12 @@ struct ReviewView: View {
                         answerRevealed: review.answerRevealed,
                         isEnabled: imageAvailable(item),
                         onReveal: {
+                            speechPlayer.stop()
                             typingFocused = false
                             store.draft(revealed: true)
                         },
                         onGrade: { grade in
+                            speechPlayer.stop()
                             typingFocused = false
                             store.grade(grade)
                         }
@@ -136,12 +143,21 @@ struct ReviewView: View {
             .scrollDisabled(swiping)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
+            .onAppear { speechEventChanged(speechEvent) }
+            .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { speechPlayer.stop() } }
+            .onChange(of: voiceOver) { _, enabled in if enabled { speechPlayer.stop() } }
             .onChange(of: store.review?.answerRevealed) { _, revealed in
                 swipeGate.invalidate()
                 if revealed == true { typingFocused = false; readingFocus = .answer }
             }
             .onChange(of: store.review?.card?.cardID) { _, _ in swipeGate.invalidate(); readingFocus = .question }
-            .onDisappear { swipeGate.cancel() }
+            .onDisappear {
+                swipeGate.cancel()
+                speechPlayer.stop()
+                lastSpeechEvent = nil
+                autoSpeechPaused = false
+            }
             .onChange(of: store.review?.sessionProgress?.answered) { old, new in
                 if old != new, let progress = store.review?.sessionProgress, progress.isComplete {
                     UIAccessibility.post(notification: .announcement, argument: "今回の\(progress.limit)問を完了しました。")
@@ -151,13 +167,27 @@ struct ReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(store.review?.card == nil ? "閉じる" : "中断", action: store.pause)
+                    Button(store.review?.card == nil ? "閉じる" : "中断") {
+                        speechPlayer.stop()
+                        store.pause()
+                    }
                         .accessibilityIdentifier("pauseStudy")
                         .accessibilityHint("学習を中断し、セッションを保存してホームへ戻ります")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Undo", action: store.undo).disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
+                    Button("Undo") { speechPlayer.stop(); store.undo() }
+                        .disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
                         .accessibilityLabel("直前の評価を取り消す")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        autoSpeechPaused.toggle()
+                        if autoSpeechPaused { speechPlayer.stop() }
+                    } label: {
+                        Image(systemName: autoSpeechPaused ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    }
+                    .accessibilityLabel(autoSpeechPaused ? "自動読み上げを再開" : "このセッションの自動読み上げを停止")
+                    .accessibilityIdentifier("toggleAutoSpeech")
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { typingFocused = false } }
             }
@@ -172,6 +202,77 @@ struct ReviewView: View {
                 store.refreshQueue()
             }
         }.interactiveDismissDisabled()
+    }
+
+    private var speechEvent: SpeechPresentationKey? {
+        guard let item = store.review?.card else { return nil }
+        return SpeechPresentationKey(cardID: item.cardID, revealed: store.review?.answerRevealed == true)
+    }
+
+    /// Invoked only for a visible card-side transition, never for ordinary SwiftUI redraws.
+    private func speechEventChanged(_ event: SpeechPresentationKey?) {
+        speechPlayer.stop()
+        guard event != lastSpeechEvent else { return }
+        lastSpeechEvent = event
+        guard let event, scenePhase == .active, !autoSpeechPaused, !voiceOver,
+              let item = store.review?.card, item.cardID == event.cardID,
+              store.settings.speech.autoplay(deckID: item.deckID,
+                                             noteOverride: item.sourceContent.speechOverrides?[item.variantKey]).includes(event.side),
+              let text = SpeechReadout.text(kind: item.kind, displayed: item.content, side: event.side) else { return }
+        speechPlayer.play(text: text, settings: store.settings.speech)
+    }
+
+    private func playSpeech(_ side: SpeechSide, item: NoteItem) {
+        // An answer can be read manually only after it has been revealed.
+        guard side == .question || store.review?.answerRevealed == true,
+              let text = SpeechReadout.text(kind: item.kind, displayed: item.content, side: side) else { return }
+        speechPlayer.play(text: text, settings: store.settings.speech)
+    }
+
+    @ViewBuilder private func speechControls(_ review: ReviewPresentation, item: NoteItem) -> some View {
+        let hasQuestion = SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil
+        let hasAnswer = review.answerRevealed &&
+            SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil
+        if hasQuestion || hasAnswer {
+            VStack(alignment: .leading, spacing: 6) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { speechButtons(hasQuestion: hasQuestion, hasAnswer: hasAnswer, item: item) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        speechButtons(hasQuestion: hasQuestion, hasAnswer: hasAnswer, item: item)
+                    }
+                }
+                .buttonStyle(.borderless)
+                .font(.subheadline)
+                if let notice = speechPlayer.notice {
+                    Text(notice).font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("speechNotice")
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private func speechButtons(hasQuestion: Bool, hasAnswer: Bool, item: NoteItem) -> some View {
+        if hasQuestion {
+            Button { playSpeech(.question, item: item) } label: {
+                Label("問題を再生", systemImage: "speaker.wave.2")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityIdentifier("speakQuestion")
+        }
+        if hasAnswer {
+            Button { playSpeech(.answer, item: item) } label: {
+                Label("解答を再生", systemImage: "speaker.wave.2")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityIdentifier("speakAnswer")
+        }
+        if speechPlayer.playing {
+            Button { speechPlayer.stop() } label: {
+                Label("停止", systemImage: "stop.fill")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityIdentifier("stopSpeech")
+        }
     }
 
     private var contentFont: Font {

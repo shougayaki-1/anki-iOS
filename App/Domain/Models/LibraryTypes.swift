@@ -13,6 +13,7 @@ struct StudyOptions: Codable, Equatable {
     var hapticsMode: HapticsMode? = nil
     var homeScope: LearningScope? = nil
     var reviewAppearance: ReviewAppearance? = nil
+    var speech: SpeechPreferences? = nil
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil

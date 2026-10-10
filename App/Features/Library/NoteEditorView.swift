@@ -31,7 +31,10 @@ struct NoteEditorView: View {
                                                hint: item?.sourceContent.hint,
                                                responseMode: item?.responseMode ?? .mental, tagNames: item?.tagNames ?? [], reverseEnabled: item?.sourceContent.reverseEnabled ?? false,
                                                imageID: item?.sourceContent.imageID, masks: item?.sourceContent.masks ?? [],
-                                               hideAllMasks: item?.sourceContent.hideAllMasks ?? true))
+                                               hideAllMasks: item?.sourceContent.hideAllMasks ?? true,
+                                               speechOverrides: item?.sourceContent.speechOverrides ?? [:],
+                                               speechQuestion: item?.sourceContent.speechQuestion,
+                                               speechAnswer: item?.sourceContent.speechAnswer))
         do {
             if let saved = try store.repository.editorDraft(key: item.map { "edit:\($0.noteID.uuidString)" } ?? "new") {
                 _input = State(initialValue: saved)
@@ -76,6 +79,38 @@ struct NoteEditorView: View {
                 } header: { Text("ヒント（任意）") } footer: {
                     Text("解答前に手動で開く手がかりです。同じノートのカードで共通ですが、裏表反転の逆向きカードには表示しません。")
                 }
+                Section {
+                    Text("読み上げ設定を変更しても復習予定や回答履歴は変わりません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if let variants = speechVariants, !variants.isEmpty {
+                        ForEach(variants, id: \.self) { variant in
+                            Picker(variants.count == 1 ? "自動読み上げ" : "自動読み上げ（\(variant)）", selection: Binding(
+                                get: { input.speechOverrides?[variant] },
+                                set: { value in
+                                    var overrides = input.speechOverrides ?? [:]
+                                    overrides[variant] = value
+                                    input.speechOverrides = overrides.isEmpty ? nil : overrides
+                                }
+                            )) {
+                                Text("デッキに従う").tag(SpeechAutoplay?.none)
+                                ForEach(SpeechAutoplay.allCases) { mode in
+                                    Text(mode.title).tag(Optional(mode))
+                                }
+                            }
+                            .accessibilityIdentifier("noteSpeech-\(variant)")
+                        }
+                    }
+                    if input.kind != .cloze {
+                        TextField("問題面の読み上げ用英文（任意）", text: Binding(
+                            get: { input.speechQuestion ?? "" }, set: { input.speechQuestion = $0 }
+                        ), axis: .vertical).lineLimit(1...5).accessibilityIdentifier("speechQuestionInput")
+                        TextField("解答面の読み上げ用英文（任意）", text: Binding(
+                            get: { input.speechAnswer ?? "" }, set: { input.speechAnswer = $0 }
+                        ), axis: .vertical).lineLimit(1...5).accessibilityIdentifier("speechAnswerInput")
+                    }
+                    Text("日本語混在は自動検出では読みません。英文のみを指定すると日本語の問題でも読み上げできます。穴埋めの伏せ字は読み上げません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                } header: { Text("音声読み上げ") }
                 Section {
                     if !input.answer.isEmpty, let reason = OrderingAnswer.reason(kind: input.kind, answer: input.answer) {
                         Text(reason).font(.footnote).foregroundStyle(.secondary)
@@ -152,6 +187,12 @@ struct NoteEditorView: View {
         }
     }
 
+    private var speechVariants: [String]? {
+        let content = TextContent(question: input.question, answer: input.answer,
+                                  explanation: input.explanation, reverseEnabled: input.reverseEnabled,
+                                  imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks)
+        return try? CardGeneration.variants(kind: input.kind, content: content)
+    }
     private var canSave: Bool {
         !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

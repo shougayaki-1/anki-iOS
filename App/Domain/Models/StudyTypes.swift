@@ -54,6 +54,10 @@ struct TextContent: Codable, Equatable {
     var imageID: UUID? = nil
     var masks: [ImageMask]? = nil
     var hideAllMasks: Bool? = nil
+    /// Overrides are keyed by generated card variant, preserving reverse/cloze sibling independence.
+    var speechOverrides: [String: SpeechAutoplay]? = nil
+    var speechQuestion: String? = nil
+    var speechAnswer: String? = nil
 }
 
 struct NoteInput: Codable, Equatable {
@@ -69,6 +73,10 @@ struct NoteInput: Codable, Equatable {
     var imageID: UUID? = nil
     var masks: [ImageMask] = []
     var hideAllMasks = true
+    // Optional to decode editor drafts saved by older releases.
+    var speechOverrides: [String: SpeechAutoplay]? = nil
+    var speechQuestion: String? = nil
+    var speechAnswer: String? = nil
 }
 
 struct StudySettings: Equatable {
@@ -84,6 +92,7 @@ struct StudySettings: Equatable {
     var notification = NotificationOptions()
     var hapticsMode = HapticsMode.standard
     var reviewAppearance = ReviewAppearance()
+    var speech = SpeechPreferences()
 }
 
 enum NumericSettingsInput {
