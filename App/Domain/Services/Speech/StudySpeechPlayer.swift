@@ -125,6 +125,7 @@ final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDe
     func stop() {
         activeUtterance = nil
         playing = false
+        notice = nil
         synthesizer.stopSpeaking(at: .immediate)
     }
 

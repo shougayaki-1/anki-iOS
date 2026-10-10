@@ -212,24 +212,10 @@ struct ReviewView: View {
             SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil
         if hasQuestion || hasAnswer {
             VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 12) {
-                    if hasQuestion {
-                        Button { playSpeech(.question, item: item) } label: {
-                            Label("問題を再生", systemImage: "speaker.wave.2")
-                        }
-                        .accessibilityIdentifier("speakQuestion")
-                    }
-                    if hasAnswer {
-                        Button { playSpeech(.answer, item: item) } label: {
-                            Label("解答を再生", systemImage: "speaker.wave.2")
-                        }
-                        .accessibilityIdentifier("speakAnswer")
-                    }
-                    if speechPlayer.playing {
-                        Button { speechPlayer.stop() } label: {
-                            Label("停止", systemImage: "stop.fill")
-                        }
-                        .accessibilityIdentifier("stopSpeech")
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { speechButtons(hasQuestion: hasQuestion, hasAnswer: hasAnswer, item: item) }
+                    VStack(alignment: .leading, spacing: 8) {
+                        speechButtons(hasQuestion: hasQuestion, hasAnswer: hasAnswer, item: item)
                     }
                 }
                 .buttonStyle(.borderless)
@@ -239,6 +225,30 @@ struct ReviewView: View {
                         .accessibilityIdentifier("speechNotice")
                 }
             }
+        }
+    }
+
+    @ViewBuilder private func speechButtons(hasQuestion: Bool, hasAnswer: Bool, item: NoteItem) -> some View {
+        if hasQuestion {
+            Button { playSpeech(.question, item: item) } label: {
+                Label("問題を再生", systemImage: "speaker.wave.2")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityIdentifier("speakQuestion")
+        }
+        if hasAnswer {
+            Button { playSpeech(.answer, item: item) } label: {
+                Label("解答を再生", systemImage: "speaker.wave.2")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityIdentifier("speakAnswer")
+        }
+        if speechPlayer.playing {
+            Button { speechPlayer.stop() } label: {
+                Label("停止", systemImage: "stop.fill")
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .accessibilityIdentifier("stopSpeech")
         }
     }
 
