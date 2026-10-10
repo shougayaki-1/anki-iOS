@@ -140,7 +140,7 @@ final class StudyRepositoryTests: XCTestCase {
         try store.reload()
         XCTAssertFalse(store.canStart(.mixed)); XCTAssertNotNil(store.nextShortDue)
         XCTAssertEqual(store.counts.learnedToday, 1)
-        XCTAssertTrue(store.newAvailabilityMessage.contains("上限"))
+        XCTAssertTrue(store.newAvailabilityMessage.contains("短期復習"))
         date = try XCTUnwrap(store.nextShortDue)
         try store.reload()
         XCTAssertTrue(store.canStart(.review)); XCTAssertTrue(store.canStart(.mixed)); XCTAssertFalse(store.canStart(.new))
@@ -150,6 +150,61 @@ final class StudyRepositoryTests: XCTestCase {
         try store.reload()
         XCTAssertEqual(store.counts.learnedToday, 0); XCTAssertTrue(store.canStart(.new))
         store.homeFailure = "failure"; XCTAssertFalse(store.canStart(.mixed))
+    }
+
+    func testNewLimitChangesPreserveCardsAndSharedHistory() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        for _ in 0..<200 { try create(repo) }
+        for index in 0..<10 {
+            try repo.start(mode: index.isMultiple(of: 2) ? .new : .mixed, now: now)
+            try revealAndGrade(repo, grade: .easy, date: now)
+        }
+        try store.reload()
+        XCTAssertTrue(store.isNewLimitReached)
+        XCTAssertEqual(store.counts.totalNew, 190)
+        XCTAssertTrue(store.newLimitRemainingMessage.contains("190枚"))
+        XCTAssertTrue(store.newAvailabilityMessage.contains("10枚"))
+        let logs = try repo.logs().map(\.id)
+        let cards = try repo.cards().map(\.id)
+        var settings = store.settings
+        settings.dailyNewLimit = 30; settings.dailyGoal = 1
+        XCTAssertTrue(store.perform { try repo.updateSettings(settings) })
+        XCTAssertEqual(store.counts.newRemaining, 20)
+        XCTAssertTrue(store.canStart(.new))
+        settings.dailyNewLimit = 5
+        XCTAssertTrue(store.perform { try repo.updateSettings(settings) })
+        XCTAssertEqual(store.counts.newRemaining, 0)
+        XCTAssertEqual(try repo.logs().map(\.id), logs)
+        XCTAssertEqual(try repo.cards().map(\.id), cards)
+        let empty = try repo.createDeck(name: "Empty", now: now)
+        XCTAssertTrue(store.applyScope(LearningScope(deckID: empty)))
+        XCTAssertFalse(store.isNewLimitReached)
+        XCTAssertTrue(store.newAvailabilityMessage.contains("ほかの学習対象"))
+        XCTAssertTrue(store.applyScope(LearningScope()))
+        settings.dayStartHour = 16
+        XCTAssertTrue(store.perform { try repo.updateSettings(settings) })
+        XCTAssertEqual(store.studyDayBoundaryMessage, "学習日の切替：午後4時")
+    }
+
+    func testNewLimitDoesNotMaskBurySuspensionOrEmptyScope() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        store.newSlotsRemaining = 0
+        XCTAssertFalse(store.isNewLimitReached)
+        XCTAssertEqual(store.newAvailabilityMessage, "未学習カードはありません。")
+        store.counts = HomeCounts(totalNew: 2, eligibleNew: 0)
+        XCTAssertFalse(store.isNewLimitReached)
+        XCTAssertTrue(store.newAvailabilityMessage.contains("同日抑制"))
+        store.counts = HomeCounts(suspendedNew: 2)
+        XCTAssertFalse(store.isNewLimitReached)
+        XCTAssertTrue(store.newAvailabilityMessage.contains("停止中"))
+        store.counts = HomeCounts(totalNew: 2, eligibleNew: 1, suspendedNew: 3)
+        store.globalCounts = HomeCounts(totalNew: 10)
+        store.scope = LearningScope(deckID: UUID())
+        XCTAssertTrue(store.isNewLimitReached)
+        XCTAssertTrue(store.newLimitRemainingMessage.contains("全デッキ"))
+        XCTAssertTrue(store.newLimitRemainingMessage.contains("フィルター内は2枚"))
+        XCTAssertTrue(store.newLimitRemainingMessage.contains("うち1枚"))
     }
 
     func testCRUDMaintainsCardIdentityAndHistoryAndModes() throws {

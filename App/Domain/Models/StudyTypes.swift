@@ -103,6 +103,8 @@ struct HomeCounts: Equatable {
     var newRemaining = 0
     var learnedToday = 0
     var answerCount = 0
+    var eligibleNew = 0
+    var suspendedNew = 0
 }
 
 struct HomeSnapshot: Equatable {

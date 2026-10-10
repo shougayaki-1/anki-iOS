@@ -55,7 +55,8 @@ struct ReviewQueueBuilder {
         return HomeCounts(
             due: available.filter { $0.state != "new" && $0.due <= now }.count,
             totalNew: cards.filter { !$0.suspended && $0.state == "new" }.count, newRemaining: min(fresh, max(0, settings.dailyNewLimit - used)),
-            learnedToday: Set(today.map(\.cardID)).count, answerCount: today.count
+            learnedToday: Set(today.map(\.cardID)).count, answerCount: today.count, eligibleNew: fresh,
+            suspendedNew: cards.filter { $0.suspended && $0.state == "new" }.count
         )
     }
 

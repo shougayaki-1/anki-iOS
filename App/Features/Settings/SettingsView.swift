@@ -26,22 +26,7 @@ struct SettingsView: View {
                     Text("カードと学習履歴は端末内に保存します。機種変更の前にバックアップを書き出してください。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
-                Section {
-                    Stepper("1日の新規上限: \(store.settings.dailyNewLimit)枚", value: Binding(
-                        get: { store.settings.dailyNewLimit }, set: { value in update { $0.dailyNewLimit = value } }
-                    ), in: 0...500)
-                    Toggle("学習目標を有効にする", isOn: Binding(
-                        get: { store.settings.dailyGoal != nil }, set: { value in update { $0.dailyGoal = value ? 20 : nil } }
-                    ))
-                    if let goal = store.settings.dailyGoal {
-                        Stepper("目標: \(goal)枚", value: Binding(get: { store.settings.dailyGoal ?? 20 }, set: { value in
-                            update { $0.dailyGoal = value }
-                        }), in: 1...500)
-                    }
-                    Stepper("学習日切替: \(store.settings.dayStartHour)時", value: Binding(
-                        get: { store.settings.dayStartHour }, set: { value in update { $0.dayStartHour = value } }
-                    ), in: 0...23)
-                } header: { Text("学習").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+                StudySettingsSection(store: store)
                 Section {
                     Toggle("同じノートの兄弟カードを同日抑制", isOn: Binding(
                         get: { store.settings.siblingBuryEnabled }, set: { value in update { $0.siblingBuryEnabled = value } }
@@ -135,5 +120,43 @@ struct SettingsView: View {
     private func update(_ edit: (inout StudySettings) -> Void) {
         var settings = store.settings; edit(&settings)
         store.perform { try store.repository.updateSettings(settings) }
+    }
+}
+
+struct StudySettingsSection: View {
+    @Bindable var store: StudyStore
+    var body: some View {
+        Section {
+            Stepper("1日の新規上限: \(store.settings.dailyNewLimit)枚", value: Binding(
+                get: { store.settings.dailyNewLimit }, set: { value in update { $0.dailyNewLimit = value } }
+            ), in: 0...500).accessibilityIdentifier("dailyNewLimit")
+            Toggle("学習目標を有効にする", isOn: Binding(
+                get: { store.settings.dailyGoal != nil }, set: { value in update { $0.dailyGoal = value ? 20 : nil } }
+            ))
+            if let goal = store.settings.dailyGoal {
+                Stepper("目標: \(goal)枚", value: Binding(get: { store.settings.dailyGoal ?? 20 }, set: { value in
+                    update { $0.dailyGoal = value }
+                }), in: 1...500)
+            }
+            Stepper("学習日切替: \(store.settings.dayStartHour)時", value: Binding(
+                get: { store.settings.dayStartHour }, set: { value in update { $0.dayStartHour = value } }
+            ), in: 0...23)
+        } header: { Text("学習").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
+    }
+    private func update(_ edit: (inout StudySettings) -> Void) {
+        var settings = store.settings; edit(&settings)
+        store.perform { try store.repository.updateSettings(settings) }
+    }
+}
+
+struct StudySettingsView: View {
+    @Bindable var store: StudyStore
+    var body: some View {
+        Form {
+            StudySettingsSection(store: store)
+            Section {
+                Text("新規上限は全デッキ・全モード共通です。変更しても今日の学習履歴は保持します。学習目標の達成後も学習できます。")
+            }
+        }.navigationTitle("学習設定")
     }
 }
