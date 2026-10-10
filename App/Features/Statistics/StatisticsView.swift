@@ -227,8 +227,10 @@ struct StatisticsView: View {
                         .disabled(store.statisticsLoading)
                 }
             }
-            .task {
-                if store.statistics == nil && !store.statisticsLoading { store.refreshStatistics() }
+            .task(id: store.selectedTab) {
+                guard store.selectedTab == 2 else { return }
+                // TabView may retain this view across reloads and tab changes.
+                store.refreshStatistics()
             }
             .onChange(of: store.statisticsScope) { _, _ in store.refreshStatistics() }
         }

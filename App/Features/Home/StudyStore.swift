@@ -70,6 +70,12 @@ final class StudyStore {
             statisticsGeneration += 1
             statistics = nil
             statisticsLoading = false
+            statisticsError = nil
+            // A visible statistics tab must reload after grade/Undo, edits and restore.
+            // Off-screen reports remain lazy so review saves never await the history actor.
+            statisticsScope.deckID = statisticsScope.deckID.flatMap { id in decks.contains { $0.id == id } ? id : nil }
+            statisticsScope.tagIDs.removeAll { id in !tags.contains { $0.id == id } }
+            if selectedTab == 2 { refreshStatistics() }
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()

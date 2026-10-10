@@ -45,6 +45,43 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testDetailedStatisticsPeriodsAndCommittedAnswerUpdates() {
+        let app = app()
+        create(app, question: "Stats first", answer: "One")
+        create(app, question: "Stats second", answer: "Two")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        app.buttons["revealAnswer"].tap()
+        scrollTo(app.buttons["grade-4"], app: app)
+        app.buttons["grade-4"].tap()
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap()
+        let count = app.staticTexts["todayAnswerCount"]
+        XCTAssertTrue(count.waitForExistence(timeout: 10))
+        XCTAssertTrue(count.label.contains("1回"))
+        for period in ["週", "月", "日"] {
+            let button = app.segmentedControls.buttons[period]
+            scrollTo(button, app: app)
+            button.tap()
+            XCTAssertTrue(button.isSelected)
+        }
+        let numbers = app.buttons["期間ごとの数値を表示"]
+        scrollTo(numbers, app: app)
+        XCTAssertTrue(numbers.exists)
+        numbers.tap()
+        attach(app, "Issue9-accessible-period-values")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["resumeStudy"].tap()
+        app.buttons["revealAnswer"].tap()
+        scrollTo(app.buttons["grade-4"], app: app)
+        app.buttons["grade-4"].tap()
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap()
+        scrollTo(count, app: app)
+        XCTAssertTrue(count.waitForExistence(timeout: 10))
+        XCTAssertTrue(count.label.contains("2回"))
+    }
+
     func testSharedHintsAllFormatsReverseExceptionAndCardReset() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-hints"]

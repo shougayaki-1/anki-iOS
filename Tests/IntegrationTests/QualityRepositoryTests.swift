@@ -6,6 +6,55 @@ import UIKit
 
 @MainActor
 final class QualityRepositoryTests: XCTestCase {
+    func testVisibleStatisticsReloadAfterGradeUndoFiltersAndRestore() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Restored.store"))
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true),
+                                   clock: { self.now }, mediaStore: MediaStore(root: root.appendingPathComponent("Media")),
+                                   storageLocation: location)
+        let repo = store.repository, deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A"), now: now)
+        try store.reload()
+        XCTAssertNil(store.statistics) // Review/home path stays lazy.
+        store.selectedTab = 2
+        try store.reload()
+        try await awaitStatistics(store)
+        XCTAssertEqual(store.statistics?.days[0].answers, 0)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.easy, now: now)
+        try store.reload()
+        try await awaitStatistics(store)
+        XCTAssertEqual(store.statistics?.days[0].answers, 1)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "audit"))
+        store.updateStatisticsScope(LearningScope(deckID: UUID(), tagIDs: [UUID()]))
+        try store.reload() // Invalid selections are removed after edits/restore.
+        XCTAssertEqual(store.statisticsScope, LearningScope())
+        try await awaitStatistics(store)
+        try repo.undo(now: now)
+        try store.reload()
+        try await awaitStatistics(store)
+        XCTAssertEqual(store.statistics?.days[0].answers, 0)
+        try store.restoreBackup(backup)
+        try await awaitStatistics(store)
+        XCTAssertEqual(store.statistics?.days[0].answers, 1)
+        store.selectedTab = 0
+        try store.reload()
+        XCTAssertNil(store.statistics)
+        XCTAssertFalse(store.statisticsLoading)
+    }
+
+    private func awaitStatistics(_ store: StudyStore) async throws {
+        for _ in 0..<200 {
+            if !store.statisticsLoading { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(store.statisticsLoading)
+        XCTAssertNil(store.statisticsError)
+        XCTAssertNotNil(store.statistics)
+    }
+
     func testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications() async throws {
         var date = now
         let center = NotificationServiceTests.Center()

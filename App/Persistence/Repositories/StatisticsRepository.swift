@@ -10,6 +10,7 @@ actor StatisticsReader {
     init(container: ModelContainer) { self.container = container }
 
     func load(now: Date, calendar: Calendar, startHour: Int, scope: LearningScope) throws -> StudyStatistics {
+        try Task.checkCancellation()
         let context = ModelContext(container)
         let notes = try context.fetch(FetchDescriptor<Note>())
         let cards = try context.fetch(FetchDescriptor<StudyCard>())
@@ -36,7 +37,8 @@ actor StatisticsReader {
             return selected
         }
 
-        let logs = logRows.compactMap { row -> StatisticLog? in
+        let logs = try logRows.compactMap { row -> StatisticLog? in
+            try Task.checkCancellation()
             guard let grade = ReviewGrade(rawValue: row.grade) else { return nil }
             let note = noteIDByCardID[row.cardID].flatMap { notesByID[$0] }
             return StatisticLog(cardID: row.cardID, date: row.reviewedAt, grade: grade,
@@ -49,6 +51,7 @@ actor StatisticsReader {
 
         let scheduler = try ReviewScheduler()
         let retentionStates: [StatisticCardState] = try cards.map { card in
+            try Task.checkCancellation()
             let note = notesByID[card.noteID]
             let snapshot = try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
             let summary = try scheduler.summary(snapshot)
