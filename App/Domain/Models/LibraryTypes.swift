@@ -184,3 +184,51 @@ enum BulkEditError: LocalizedError {
         }
     }
 }
+
+
+// A deck-content operation never modifies Deck identity, parentID or the tree.
+enum DeckContentsScope: String, CaseIterable, Identifiable {
+    case direct
+    case includingDescendants
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .direct: return "このデッキ直下のみ"
+        case .includingDescendants: return "子デッキの中身も含める"
+        }
+    }
+}
+
+enum DeckContentsAction: Equatable {
+    case move(to: UUID)
+    case delete
+}
+
+struct DeckContentsPreview {
+    struct DeckState: Equatable {
+        let id: UUID
+        let name: String
+        let parentID: UUID?
+        let sortOrder: Int
+        let createdAt: Date
+        let updatedAt: Date
+    }
+
+    let sourceID: UUID
+    let scope: DeckContentsScope
+    let action: DeckContentsAction
+    let hierarchy: [DeckState]
+    let sourcePath: String
+    let destinationPath: String?
+    let includedChildPaths: [String]
+    let noteIDs: Set<UUID>
+    let cardIDs: Set<UUID>
+    // The actual mutation is delegated to the same snapshot/transaction as library bulk edits.
+    let bulk: BulkEditPreview?
+
+    var noteCount: Int { noteIDs.count }
+    var cardCount: Int { cardIDs.count }
+    var changedNoteCount: Int { bulk?.changedNotes.count ?? 0 }
+    var changedCardCount: Int { bulk?.changedCards.count ?? 0 }
+    var canCommit: Bool { changedNoteCount > 0 }
+}
