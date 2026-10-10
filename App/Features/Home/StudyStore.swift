@@ -16,6 +16,9 @@ final class StudyStore {
     var nextShortDue: Date?
     var newSlotsRemaining = 0
     var homeFailure: String?
+    var hasCards = false
+    @ObservationIgnored private var homeDayStart: Date?
+    @ObservationIgnored private var homeTimeZone: String?
     var settings = StudySettings()
     var review: ReviewPresentation?
     var failure: String?
@@ -40,25 +43,58 @@ final class StudyStore {
     }
 
     func reload() throws {
-        repository.calendar = .current
-        decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
-        scope = try repository.homeScope()
-        notes = try repository.noteItems()
-        tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
-        counts = try repository.scopedCounts(scope: scope, now: clock())
-        globalCounts = try repository.counts(now: clock())
-        let logs = try repository.queueLogs(), value = try repository.settings()
-        let day = StudyDay(calendar: repository.calendar, startHour: value.dayStartHour).interval(containing: clock())
-        let consumed = Set(logs.filter { $0.wasNew && $0.reviewedAt >= day.start && $0.reviewedAt < day.end }.map(\.cardID)).count
-        newSlotsRemaining = max(0, value.dailyNewLimit - consumed)
-        nextShortDue = try repository.scopedQueueCards(scope).filter {
-            !$0.suspended && ["learning", "relearning"].contains($0.state) && $0.due > clock()
-        }.map(\.due).min()
+        do {
+            repository.calendar = .current
+            let now = clock()
+            let snapshot = try repository.homeSnapshot(now: now)
+            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
+            let notes = try repository.noteItems()
+            let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
+            let settings = try repository.settings()
+            let review = try repository.presentation(now: now)
+            let statistics = try repository.statistics(now: now)
+            // Publish together only after all reads succeed.
+            self.decks = decks; self.notes = notes; self.tags = tags
+            self.settings = settings; self.review = review; self.statistics = statistics
+            applyHomeSnapshot(snapshot)
+            scheduleNotifications()
+        } catch { homeFailure = error.localizedDescription; throw error }
+    }
+    private func applyHomeSnapshot(_ snapshot: HomeSnapshot) {
+        if scope != snapshot.scope { scope = snapshot.scope }
+        if counts != snapshot.counts { counts = snapshot.counts }
+        if globalCounts != snapshot.globalCounts { globalCounts = snapshot.globalCounts }
+        if nextShortDue != snapshot.nextShortDue { nextShortDue = snapshot.nextShortDue }
+        if newSlotsRemaining != snapshot.newSlotsRemaining { newSlotsRemaining = snapshot.newSlotsRemaining }
+        if hasCards != snapshot.hasCards { hasCards = snapshot.hasCards }
+        homeDayStart = snapshot.dayStart; homeTimeZone = repository.calendar.timeZone.identifier
         homeFailure = nil
-        settings = try repository.settings()
-        review = try repository.presentation(now: clock())
-        statistics = try repository.statistics(now: clock())
-        scheduleNotifications()
+    }
+    func refreshHome(reconcileNotifications: Bool = false) {
+        do {
+            repository.calendar = .current
+            let snapshot = try repository.homeSnapshot(now: clock())
+            let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
+                || globalCounts.due != snapshot.globalCounts.due
+            applyHomeSnapshot(snapshot)
+            if reconcileNotifications || changed { scheduleNotifications() }
+        } catch { homeFailure = error.localizedDescription }
+    }
+    func refreshStatistics() {
+        do { statistics = try repository.statistics(now: clock()) }
+        catch { failure = error.localizedDescription }
+    }
+    func sceneChanged(active: Bool) {
+        do {
+            if let draft = try repository.session(), (draft.activeSince != nil) != (active && showingReview && draft.cardID != nil) {
+                try repository.setSessionActive(active && showingReview, now: clock())
+            }
+            if active {
+                refreshHome(reconcileNotifications: true)
+                if selectedTab == 2 { refreshStatistics() }
+                if showingReview { refreshQueue() }
+            }
+        } catch { failure = error.localizedDescription }
     }
 
     @discardableResult
