@@ -3,6 +3,18 @@ import AVFoundation
 @testable import AnkiIOS
 
 final class SpeechReadoutTests: XCTestCase {
+    func testLongEnglishReadoutRetainsFullTextAndClozeStillHidesTheAnswer() {
+        let longText = String(repeating: "This is a longer English passage. ", count: 150)
+        XCTAssertGreaterThan(longText.count, 3000)
+        let content = TextContent(question: longText, answer: "Unrevealed answer.", explanation: "")
+        XCTAssertEqual(SpeechReadout.text(kind: .basic, displayed: content, side: .question),
+                       longText.trimmingCharacters(in: .whitespacesAndNewlines))
+        let cloze = TextContent(question: longText + " [hidden answer]", answer: "hidden answer", explanation: "")
+        let readout = SpeechReadout.text(kind: .cloze, displayed: cloze, side: .question)
+        XCTAssertEqual(readout, longText.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertFalse(readout?.contains("hidden answer") ?? true)
+    }
+
     @MainActor
     func testInterruptionAndDisconnectedOutputDiscardSpeech() async throws {
         let player = StudySpeechPlayer()

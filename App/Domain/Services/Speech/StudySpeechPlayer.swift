@@ -65,7 +65,7 @@ enum SpeechReadout {
             ? source.replacingOccurrences(of: #"\[[^\]]*\]"#, with: " ", options: .regularExpression)
             : source
         let normalized = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !normalized.isEmpty, normalized.count <= 3000, !normalized.contains("{{c"),
+        guard !normalized.isEmpty, !normalized.contains("{{c"),
               !(kind == .cloze && side == .question && (normalized.contains("[") || normalized.contains("]"))),
               normalized.range(of: #"[A-Za-z]{2,}"#, options: .regularExpression) != nil,
               !normalized.unicodeScalars.contains(where: { scalar in
@@ -82,6 +82,14 @@ struct SpeechPresentationKey: Equatable {
     let cardID: UUID
     let revealed: Bool
     var side: SpeechSide { revealed ? .answer : .question }
+}
+
+// AVSpeechUtterance is mutable and non-Sendable. This wrapper only retains its
+// identity across delegate delivery; no utterance properties cross actors.
+private struct SpeechUtteranceIdentity: @unchecked Sendable {
+    private let utterance: AVSpeechUtterance
+    init(_ utterance: AVSpeechUtterance) { self.utterance = utterance }
+    @MainActor func matches(_ current: AVSpeechUtterance?) -> Bool { utterance === current }
 }
 
 /// Owns the speech queue for a single visible study screen, not a global audio player.
@@ -145,10 +153,20 @@ final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDe
         synthesizer.stopSpeaking(at: .immediate)
     }
 
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        if utterance === activeUtterance { activeUtterance = nil; playing = false }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        finishOnMainQueue(utterance)
     }
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        if utterance === activeUtterance { activeUtterance = nil; playing = false }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        finishOnMainQueue(utterance)
+    }
+    nonisolated private func finishOnMainQueue(_ utterance: AVSpeechUtterance) {
+        // Delegate delivery isn't actor-isolated. Retain the utterance until
+        // this identity-only comparison so an older callback can't clear new speech.
+        let identity = SpeechUtteranceIdentity(utterance)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, identity.matches(self.activeUtterance) else { return }
+            self.activeUtterance = nil
+            self.playing = false
+        }
     }
 }
