@@ -255,6 +255,20 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.deckPath(lesson), "英語 / 変更後 / Lesson4")
     }
 
+    func testDeepDeckTreeKeepsEveryLevelAndSameNamedDeckIdentity() {
+        var items: [DeckItem] = [], parent: UUID?
+        for depth in 0..<12 {
+            let id = UUID()
+            items.append(DeckItem(id: id, name: "Level \(depth)", shortName: "Same", parentID: parent))
+            parent = id
+        }
+        let roots = DeckTreeBuilder.roots(from: items)
+        let rows = DeckTreeBuilder.visibleRows(roots: roots, expanded: Set(items.map(\.id)))
+        XCTAssertEqual(rows.map(\.depth), Array(0..<12))
+        XCTAssertEqual(rows.map(\.id), items.map(\.id))
+        XCTAssertEqual(rows.last?.path.components(separatedBy: " / ").count, 12)
+    }
+
     func testDeckTreeInvalidLegacyParentsStillDisplayOnce() {
         let missing = UUID(), cycleA = UUID(), cycleB = UUID()
         let input = [
