@@ -62,6 +62,7 @@ struct StudySettings: Equatable {
     var siblingBuryEnabled = true
     var notification = NotificationOptions()
     var hapticsMode = HapticsMode.standard
+    var reviewAppearance = ReviewAppearance()
 }
 
 struct DeckItem: Identifiable {

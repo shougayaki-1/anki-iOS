@@ -42,6 +42,82 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testReviewAppearanceSelectionRestartAndAnswerOrder() {
+        let app = app()
+        create(app, question: "Appearance question", answer: "Appearance answer")
+        app.tabBars.buttons["設定"].tap()
+        let size = app.buttons["reviewTextSize"]
+        scrollTo(size, app: app); size.tap(); app.buttons["特大"].tap()
+        let image = app.buttons["reviewImageDisplay"]
+        scrollTo(image, app: app); image.tap(); app.buttons["非表示"].tap()
+        let order = app.switches["reviewAnswerFirst"]
+        scrollTo(order, app: app); order.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(order.value as? String, "1")
+        app.terminate(); app.launch()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        let q = app.staticTexts["reviewQuestion"], a = app.staticTexts["modelAnswer"]
+        XCTAssertTrue(q.waitForExistence(timeout: 5)); XCTAssertFalse(a.exists)
+        scrollTo(app.buttons["revealAnswer"], app: app); app.buttons["revealAnswer"].tap()
+        XCTAssertTrue(a.waitForExistence(timeout: 5)); XCTAssertLessThan(a.frame.minY, q.frame.minY)
+        attach(app, "Issue5-answer-first-extra-large")
+        app.buttons["pauseStudy"].tap(); app.terminate(); app.launch()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(a.waitForExistence(timeout: 5)); XCTAssertLessThan(a.frame.minY, q.frame.minY)
+        scrollTo(app.buttons["grade-4"], app: app); app.buttons["grade-4"].tap()
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+        app.buttons["undoReview"].tap(); XCTAssertEqual(q.label, "Appearance question")
+    }
+
+    func testReviewGesturesDefaultOffDirectionsUndoAndRestart() {
+        let app = app()
+        create(app, question: "Swipe question", answer: "Swipe answer")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.otherElements["reviewSwipePad"].exists)
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["設定"].tap()
+        let toggle = app.switches["reviewGesturesToggle"]
+        scrollTo(toggle, app: app); toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        let animations = app.switches["reviewAnimationsToggle"]
+        scrollTo(animations, app: app); animations.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(animations.value as? String, "0")
+        app.terminate(); app.launch()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap()
+        let pad = app.otherElements["reviewSwipePad"]
+        func visiblePad() {
+            for _ in 0..<3 {
+                if pad.exists && pad.frame.minY > 100 && pad.frame.maxY < app.frame.maxY - 10 { break }
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.8))
+                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.3)))
+            }
+            XCTAssertTrue(pad.isHittable)
+        }
+        func swipe(_ x: CGFloat, _ y: CGFloat) {
+            visiblePad()
+            pad.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+                .press(forDuration: 0.05, thenDragTo: pad.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)))
+        }
+        swipe(0.6, 0.5) // Short movements must not reveal.
+        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+        swipe(0.03, 0.5) // Wrong direction before the answer.
+        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+        swipe(0.97, 0.5)
+        guard app.staticTexts["modelAnswer"].waitForExistence(timeout: 5) else { attach(app, "swipe-reveal-failed"); XCTFail("Swipe reveal failed"); return }
+        for (x, y) in [(CGFloat(0.03), CGFloat(0.5)), (0.5, 0.97), (0.97, 0.5), (0.5, 0.03)] {
+            swipe(x, y)
+            XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+            app.buttons["undoReview"].tap()
+            XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Swipe question")
+            XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+            swipe(0.97, 0.5)
+            XCTAssertTrue(app.staticTexts["modelAnswer"].waitForExistence(timeout: 5))
+        }
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap()
+        XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("0回"))
+    }
+
     func testCreateLearnUndoRestartEditAndDelete() {
         let app = app()
         create(app, question: "Capital of Japan?", answer: "Tokyo")
