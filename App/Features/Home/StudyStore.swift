@@ -317,16 +317,17 @@ final class StudyStore {
     }
     func scheduleNotifications() {
         notificationJob?.cancel()
-        notificationJob = Task {
+        notificationJob = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(200))
+                guard let self, !Task.isCancelled else { return }
                 let permission = try await notifications.reconcile(cards: repository.queueCards(), options: settings.notification,
                                                                     calendar: repository.calendar, now: clock())
                 guard !Task.isCancelled else { return }
                 notificationPermission = permission; notificationFailure = nil
                 scheduledNotificationCount = notifications.scheduledCount
             } catch {
-                if !Task.isCancelled { notificationFailure = error.localizedDescription }
+                if !Task.isCancelled { self?.notificationFailure = error.localizedDescription }
             }
         }
     }

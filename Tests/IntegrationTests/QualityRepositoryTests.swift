@@ -6,6 +6,19 @@ import UIKit
 
 @MainActor
 final class QualityRepositoryTests: XCTestCase {
+    func testReleasedStoreDoesNotRunDeferredNotificationReads() async throws {
+        let center = NotificationServiceTests.Center()
+        var store: StudyStore? = try StudyStore(
+            container: PersistenceController.makeStudyContainer(inMemory: true),
+            notifications: NotificationService(center: center))
+        weak var releasedStore = store
+        store = nil
+        XCTAssertNil(releasedStore, "A pending notification debounce must not retain the store")
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(center.permissionReads, 0)
+        XCTAssertEqual(center.added, 0)
+    }
+
     func testVisibleStatisticsReloadAfterGradeUndoFiltersAndRestore() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
