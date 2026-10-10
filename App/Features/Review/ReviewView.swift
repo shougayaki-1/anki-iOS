@@ -191,7 +191,7 @@ struct ReviewView: View {
         speechPlayer.stop()
         guard event != lastSpeechEvent else { return }
         lastSpeechEvent = event
-        guard let event, !autoSpeechPaused, !voiceOver,
+        guard let event, scenePhase == .active, !autoSpeechPaused, !voiceOver,
               let item = store.review?.card, item.cardID == event.cardID,
               store.settings.speech.autoplay(deckID: item.deckID,
                                              noteOverride: item.sourceContent.speechOverrides?[item.variantKey]).includes(event.side),

@@ -91,10 +91,26 @@ final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDe
     @Published private(set) var notice: String?
     private let synthesizer = AVSpeechSynthesizer()
     private var activeUtterance: AVSpeechUtterance?
+    private var audioObservers = Set<AnyCancellable>()
 
     override init() {
         super.init()
         synthesizer.delegate = self
+        // Clear the queue on calls and output disconnection. Never resume an old
+        // card's speech when the interruption ends or headphones reconnect.
+        NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.stop() }
+            .store(in: &audioObservers)
+        NotificationCenter.default.publisher(for: AVAudioSession.routeChangeNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] notification in
+                if let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+                   AVAudioSession.RouteChangeReason(rawValue: reason) == .oldDeviceUnavailable {
+                    self?.stop()
+                }
+            }
+            .store(in: &audioObservers)
     }
 
     func play(text: String, settings: SpeechPreferences) {

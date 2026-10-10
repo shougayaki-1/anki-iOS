@@ -1,7 +1,25 @@
 import XCTest
+import AVFoundation
 @testable import AnkiIOS
 
 final class SpeechReadoutTests: XCTestCase {
+    @MainActor
+    func testInterruptionAndDisconnectedOutputDiscardSpeech() async throws {
+        let player = StudySpeechPlayer()
+        for notification in [
+            Notification(name: AVAudioSession.interruptionNotification,
+                         userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue]),
+            Notification(name: AVAudioSession.routeChangeNotification,
+                         userInfo: [AVAudioSessionRouteChangeReasonKey: AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue])
+        ] {
+            player.play(text: "A long sentence that must stop when audio is interrupted.", settings: SpeechPreferences())
+            NotificationCenter.default.post(notification)
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertFalse(player.playing)
+            XCTAssertNil(player.notice)
+        }
+    }
+
     func testOldNotesAndOptionsDefaultToSilence() throws {
         let note = try JSONDecoder().decode(TextContent.self, from: Data(#"{"schemaVersion":2,"question":"Hello!","answer":"Hi.","explanation":""}"#.utf8))
         XCTAssertNil(note.speechOverrides)
