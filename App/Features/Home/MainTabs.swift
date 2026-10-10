@@ -59,7 +59,7 @@ struct HomeView: View {
                             Text("今回の回答数")
                             Spacer()
                             Text(store.sessionAnswerLimit == 0 ? "すべて" : "\(store.sessionAnswerLimit)問")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Color("SecondaryText"))
                             Image(systemName: "chevron.down").font(.caption)
                         }
                     }
