@@ -42,6 +42,24 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testReviewHeroVisibleWithoutScrollingAndHomeAddCancel() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
+        app.launch()
+        let review = app.buttons["start-review"]
+        XCTAssertTrue(review.waitForExistence(timeout: 15)); XCTAssertTrue(review.isHittable)
+        XCTAssertLessThan(review.frame.maxY, app.tabBars.firstMatch.frame.minY)
+        XCTAssertTrue(app.staticTexts["dueCount"].label.contains("1枚"))
+        attach(app, "Issue29-review-first-home")
+        app.buttons["addHomeNote"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["questionInput"].waitForExistence(timeout: 5))
+        app.buttons["closeEditor"].tap()
+        XCTAssertTrue(review.waitForExistence(timeout: 5))
+        review.tap()
+        if app.buttons["復習するへ切り替える"].exists { app.buttons["復習するへ切り替える"].tap() }
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
+    }
+
     func testHomeFilterCancelApplyRestartResetPreservesInterruptedDraft() {
         let app = app()
         create(app, question: "Filter question", answer: "Filter answer")
