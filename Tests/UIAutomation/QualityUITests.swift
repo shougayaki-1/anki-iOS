@@ -98,7 +98,7 @@ final class QualityUITests: XCTestCase {
             var top = (app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? app.frame.minY) + 8
             let progress = app.progressIndicators["sessionProgressBar"]
             if progress.exists { top = max(top, progress.frame.maxY + 8) }
-            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer")
+            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer" || element.identifier == "confirmImport")
             if fixedControl && element.isHittable { return }
             var bottom = app.frame.maxY - 16
             if app.buttons["pauseStudy"].exists {
@@ -186,6 +186,10 @@ final class QualityUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15)); app.tabBars.buttons["ライブラリ"].tap()
         app.buttons["openImport"].tap(); app.buttons["selectImportFile"].tap()
         selectFile("UITest-\(id)", app: app)
+        // Wait for the document picker to finish dismissing and populate the form.
+        expectation(for: NSPredicate(format: "value CONTAINS %@", "CSV file question"),
+                    evaluatedWith: app.textViews["importText"])
+        waitForExpectations(timeout: 10)
         scrollTo(app.buttons["previewImport"], app: app)
         XCTAssertTrue(app.buttons["previewImport"].exists); app.buttons["previewImport"].tap()
         let confirm = app.buttons["confirmImport"]; scrollTo(confirm, app: app); confirm.tap()
@@ -251,7 +255,11 @@ final class QualityUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["modelAnswer"].label, "Tokyo")
         attach(app, name: "Phase5-dark-largest-type-answer")
         try app.performAccessibilityAudit(for: [.contrast, .sufficientElementDescription]) { issue in
-            guard let element = issue.element else { return false }
+            guard let element = issue.element else {
+                print("Review audit has no associated element: \(issue.auditType)")
+                return false
+            }
+            print("Review audit: \(issue.auditType), id=\(element.identifier), label=\(element.label), type=\(element.elementType), frame=\(element.frame)")
             if !element.exists || !element.isHittable { return true }
             let top = app.navigationBars.firstMatch.frame.maxY
             let viewport = CGRect(x: app.frame.minX, y: top, width: app.frame.width, height: app.frame.maxY - top)
