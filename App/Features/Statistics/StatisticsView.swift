@@ -167,7 +167,7 @@ struct StatisticsView: View {
                         LabeledContent("新規の回答", value: "\(today.newAnswers)回")
                         LabeledContent("復習の回答", value: "\(today.reviewAnswers)回")
                         LabeledContent("継続日数", value: "\(stats.streak)日")
-                        Text("学習日は午前\(store.settings.dayStartHour)時を境界とします（24時間表記）。今日の目標や、進行中セッションの残り回答数とは異なります。")
+                        Text("学習日は\(store.settings.dayStartHour)時を境界とします（24時間表記）。今日の目標や、進行中セッションの残り回答数とは異なります。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     Section("学習推移") {
