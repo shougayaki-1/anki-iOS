@@ -233,8 +233,14 @@ final class StudyRepository {
 
     func start(mode: StudyMode, scope: LearningScope = LearningScope(), now: Date) throws {
         try transaction {
+            let normalized = try normalizedScope(scope)
+            let available = try ReviewQueueBuilder(calendar: calendar).queue(
+                cards: scopedQueueCards(normalized), logs: queueLogs(), settings: settings(),
+                mode: mode, touched: [], reviewStreak: 0, now: now)
+            // Check before replacing an interrupted draft, even if home counts were stale.
+            guard !available.isEmpty else { throw StudyError.noAvailableCards }
             if let existing = try session() { context.delete(existing) }
-            try setScopeInTransaction(scope)
+            try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
             try selectNext(draft: draft, now: now)

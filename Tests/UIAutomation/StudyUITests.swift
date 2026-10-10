@@ -42,6 +42,31 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testHomeEmptyWaitingAndModeSwitchCancellation() {
+        let app = app()
+        XCTAssertTrue(app.buttons["addFirstHomeNote"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["start-new"].isEnabled); XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
+        create(app, question: "State question", answer: "State answer")
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertFalse(app.buttons["start-review"].isEnabled); XCTAssertTrue(app.buttons["start-new"].isEnabled)
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["pauseStudy"].tap(); app.buttons["start-mixed"].tap()
+        XCTAssertTrue(app.buttons["復習＋新規へ切り替える"].waitForExistence(timeout: 5))
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["キャンセル", "Cancel"])).firstMatch
+        if cancel.exists { cancel.tap() }
+        else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.1)).tap() }
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-1"].tap(); app.buttons["pauseStudy"].tap()
+        XCTAssertFalse(app.buttons["start-review"].isEnabled)
+        let waiting = app.staticTexts["nextShortReview"]
+        scrollTo(waiting, app: app); XCTAssertTrue(waiting.exists)
+        XCTAssertFalse(app.buttons["start-new"].isEnabled)
+        XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
+        attach(app, "Issue30-short-review-waiting")
+    }
+
     func testReviewHeroVisibleWithoutScrollingAndHomeAddCancel() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]

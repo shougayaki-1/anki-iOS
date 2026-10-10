@@ -38,7 +38,7 @@ struct HomeView: View {
     @State private var showingHelp = false
 
     private func start(_ mode: StudyMode) {
-        if store.review?.card != nil { replacingWith = mode }
+        if store.review != nil { replacingWith = mode }
         else { store.start(mode) }
     }
     var body: some View {
@@ -47,7 +47,22 @@ struct HomeView: View {
                 Section {
                     LearningScopeSelector(store: store) { editingScope = true }
                 }
-                ReviewHeroSection(count: store.counts.due) { start(.review) }
+                if let error = store.homeFailure {
+                    Section {
+                        Label("学習情報を読み込めません", systemImage: "exclamationmark.triangle")
+                        Text(error).font(.footnote)
+                        Button("再試行") { store.perform { } }.accessibilityIdentifier("retryHome")
+                    }
+                } else if store.notes.isEmpty {
+                    Section {
+                        Text("最初のカードを登録しましょう。")
+                        Button("カードを追加する", systemImage: "plus") { adding = true }
+                            .accessibilityIdentifier("addFirstHomeNote")
+                    }
+                } else {
+                    ReviewHeroSection(count: store.counts.due, enabled: store.canStart(.review),
+                                      elsewhere: store.globalCounts.due > 0) { start(.review) }
+                }
                 if let review = store.review {
                     Section {
                         Button { store.resume() } label: {
@@ -56,10 +71,23 @@ struct HomeView: View {
                         }.accessibilityIdentifier("resumeStudy")
                     }
                 }
-                OtherStudyModesSection(count: store.counts.newRemaining, start: start)
-                DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
-                if store.notes.isEmpty {
-                    Section { Text("右上の＋から最初のカードを登録しましょう。") }
+                if store.homeFailure == nil, let next = store.nextShortDue, store.counts.due == 0 {
+                    Section {
+                        Text("次の短期復習: \(next.formatted(date: .omitted, time: .shortened))")
+                            .accessibilityIdentifier("nextShortReview")
+                        Text("待機中のカードがあります。期限になると復習できます。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                if store.homeFailure == nil {
+                    OtherStudyModesSection(store: store, start: start)
+                    DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
+                }
+                if store.homeFailure == nil && !store.notes.isEmpty && !store.canStart(.mixed) {
+                    Section {
+                        Text("今はこの条件で学習できるカードがありません。")
+                        Button("学習対象を変更") { editingScope = true }
+                    }
                 }
             }
             .navigationTitle("ホーム")
@@ -125,6 +153,8 @@ struct LearningScopeSelector: View {
 
 struct ReviewHeroSection: View {
     let count: Int
+    let enabled: Bool
+    let elsewhere: Bool
     let start: () -> Void
     var body: some View {
         Section {
@@ -135,7 +165,11 @@ struct ReviewHeroSection: View {
                     Label(StudyMode.review.title, systemImage: "arrow.clockwise")
                         .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 12)
                 }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
-                    .accessibilityIdentifier("start-review")
+                    .accessibilityIdentifier("start-review").disabled(!enabled)
+                if count == 0 {
+                    Text("今は復習するカードがありません。")
+                    if elsewhere { Text("ほかの学習対象に復習があります。") }
+                }
                 Text(StudyMode.review.explanation).font(.footnote).foregroundStyle(.secondary)
             }.padding(.vertical, 4)
         }
@@ -143,7 +177,7 @@ struct ReviewHeroSection: View {
 }
 
 struct OtherStudyModesSection: View {
-    let count: Int
+    let store: StudyStore
     let start: (StudyMode) -> Void
     var body: some View {
         Section("ほかの学習") {
@@ -153,12 +187,14 @@ struct OtherStudyModesSection: View {
                         HStack {
                             Text(mode.title).font(.headline)
                             Spacer()
-                            if mode == .new { Text("\(count)枚").accessibilityIdentifier("newCount") }
+                            if mode == .new { Text("\(store.counts.newRemaining)枚").accessibilityIdentifier("newCount") }
                             Image(systemName: "chevron.right").font(.caption)
                         }
-                        Text(mode.explanation).font(.footnote).foregroundStyle(.secondary)
+                        Text(mode == .new ? mode.explanation : store.mixedAvailabilityMessage)
+                            .font(.footnote).foregroundStyle(.secondary)
                     }.padding(.vertical, 6)
-                }.accessibilityIdentifier("start-\(mode.rawValue)")
+                }.accessibilityIdentifier("start-\(mode.rawValue)").disabled(!store.canStart(mode))
+                if mode == .new { Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(.secondary) }
             }
         }
     }
