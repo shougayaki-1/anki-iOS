@@ -124,3 +124,58 @@ struct ReviewSwipeGate {
         return action
     }
 }
+
+
+enum BulkEditAction: Equatable {
+    case move(UUID), addTags([String]), removeTags(Set<UUID>), suspended(Bool), deleteNotes
+    var title: String {
+        switch self {
+        case .move: return "ノートをデッキ移動"
+        case .addTags: return "ノートにタグを追加"
+        case .removeTags: return "ノートからタグを除去"
+        case .suspended(let value): return value ? "選択カードを停止" : "選択カードを再開"
+        case .deleteNotes: return "ノートを削除"
+        }
+    }
+}
+
+struct BulkEditPreview {
+    struct NoteState: Equatable {
+        let id: UUID, deckID: UUID
+        let content: Data
+        let type: String, responseMode: String
+        let tags: [UUID]
+        let updated: Date
+    }
+    struct CardState: Equatable {
+        let id: UUID, noteID: UUID
+        let fsrs: Data
+        let due: Date, updated: Date
+        let suspended: Bool
+    }
+    struct DraftState: Equatable { let key: String; let payload: Data; let updated: Date }
+    struct Row: Identifiable, Equatable { let id: UUID; let question: String, deck: String; let cardCount: Int }
+    let selection: Set<UUID>
+    let action: BulkEditAction
+    let notes: [NoteState], cards: [CardState], drafts: [DraftState]
+    let rows: [Row]
+    let changedNotes: Set<UUID>, changedCards: Set<UUID>
+    let detail: String
+    var selectedCount: Int { selection.count }
+    var changedCount: Int { changedCards.count }
+}
+
+struct BulkEditResult {
+    let changedNotes: Int, changedCards: Int
+}
+
+enum BulkEditError: LocalizedError {
+    case emptySelection, staleSelection, invalidTags
+    var errorDescription: String? {
+        switch self {
+        case .emptySelection: return "カードを選択してください。"
+        case .staleSelection: return "対象が変更されたため確定できません。選択とプレビューを確認し直してください。"
+        case .invalidTags: return "追加・除去するタグを指定してください。"
+        }
+    }
+}

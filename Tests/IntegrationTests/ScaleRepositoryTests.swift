@@ -54,6 +54,23 @@ final class ScaleRepositoryTests: XCTestCase {
         try repo.undo(now: due.addingTimeInterval(3))
         XCTAssertEqual(try repo.logs().count, 10000)
         let studyTime = Date().timeIntervalSince(studyStart)
+        let bulkStart = Date()
+        let originalStates = Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) })
+        let selection = Set(originalStates.keys)
+        let destination = try repo.createDeck(name: "一括移動先", parentID: deck, now: now)
+        for action in [BulkEditAction.move(destination), .addTags(["Scale", "scale"]), .suspended(true), .suspended(false)] {
+            let preview = try repo.previewBulkEdit(cardIDs: selection, action: action)
+            XCTAssertEqual(preview.notes.count, 1000); XCTAssertEqual(preview.cards.count, 3000)
+            XCTAssertEqual(try repo.applyBulkEdit(preview, now: now).changedCards, 3000)
+        }
+        XCTAssertEqual(try repo.notes().count, 1000)
+        XCTAssertEqual(try repo.logs().count, 10000)
+        XCTAssertEqual(try repo.tags().count, 1)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) }), originalStates)
+        let bulkMetrics = "bulk: notes=1000 cards=3000 operations=move+add-tags+suspend+resume elapsed=\(Date().timeIntervalSince(bulkStart))s"
+        print(bulkMetrics)
+        let bulkAttachment = XCTAttachment(string: bulkMetrics); bulkAttachment.name = "Issue6-bulk-scale-measurement"
+        bulkAttachment.lifetime = .keepAlways; add(bulkAttachment)
         let backupStart = Date()
         let bytes = try await BackupService.export(repository: repo, now: due, appVersion: "scale-test")
         let backup = try BackupArchive.decode(bytes)
