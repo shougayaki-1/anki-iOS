@@ -51,7 +51,9 @@ struct ReviewView: View {
                             }
                             if review.responseMode == .ordering && !review.answerRevealed,
                                let draft = review.ordering, let problem = try? OrderingAnswer(kind: item.kind, answer: item.content.answer) {
-                                OrderingAnswerView(problem: problem, draft: draft, action: store.ordering)
+                                OrderingAnswerView(problem: problem, draft: draft,
+                                                   hapticsEnabled: store.settings.hapticsMode != .off,
+                                                   action: store.ordering)
                             }
                             if review.answerRevealed {
                                 Divider()
