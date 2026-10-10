@@ -31,7 +31,7 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.applyHomeScope(LearningScope(deckID: other))
         let reopened = StudyRepository(container: container)
         XCTAssertEqual(try reopened.homeScope().deckID, other)
-        XCTAssertEqual(try reopened.scope(), original)
+        XCTAssertEqual(try reopened.scope(), try reopened.normalizedScope(original))
         XCTAssertEqual(try reopened.session()?.typedDraft, "keep")
         XCTAssertEqual(try reopened.session()?.undoLogID, undo)
         XCTAssertEqual(try reopened.session()?.touchedCardIDs, touched)

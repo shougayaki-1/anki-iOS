@@ -22,6 +22,46 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testEmptyStartNeverCreatesOrReplacesSession() throws {
+        let repo = try fixture()
+        for mode in StudyMode.allCases {
+            XCTAssertThrowsError(try repo.start(mode: mode, now: now))
+            XCTAssertNil(try repo.session())
+        }
+        try create(repo); try repo.start(mode: .new, now: now)
+        try repo.updateDraft(mode: .typing, text: "keep", revealed: true, now: now)
+        let empty = try repo.createDeck(name: "Empty", now: now)
+        let before = try BackupData.capture(repo).canonical()
+        for mode in StudyMode.allCases {
+            XCTAssertThrowsError(try repo.start(mode: mode, scope: LearningScope(deckID: empty), now: now))
+            XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        }
+    }
+    func testHomeModeAvailabilityWaitingQuotaGoalAndDayBoundary() throws {
+        var date = now
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date })
+        let repo = store.repository
+        XCTAssertFalse(store.canStart(.mixed))
+        try create(repo); try store.reload()
+        XCTAssertFalse(store.canStart(.review)); XCTAssertTrue(store.canStart(.new)); XCTAssertTrue(store.canStart(.mixed))
+        var settings = try repo.settings(); settings.dailyNewLimit = 1; settings.dailyGoal = 1
+        try repo.updateSettings(settings)
+        try repo.start(mode: .new, now: date); try revealAndGrade(repo, grade: .again, date: date)
+        try store.reload()
+        XCTAssertFalse(store.canStart(.mixed)); XCTAssertNotNil(store.nextShortDue)
+        XCTAssertEqual(store.counts.learnedToday, 1)
+        XCTAssertTrue(store.newAvailabilityMessage.contains("上限"))
+        date = try XCTUnwrap(store.nextShortDue)
+        try store.reload()
+        XCTAssertTrue(store.canStart(.review)); XCTAssertTrue(store.canStart(.mixed)); XCTAssertFalse(store.canStart(.new))
+        XCTAssertEqual(store.mixedAvailabilityMessage, "今は復習カードを学習します。")
+        try create(repo)
+        date = StudyDay(calendar: repo.calendar, startHour: settings.dayStartHour).interval(containing: date).end
+        try store.reload()
+        XCTAssertEqual(store.counts.learnedToday, 0); XCTAssertTrue(store.canStart(.new))
+        store.homeFailure = "failure"; XCTAssertFalse(store.canStart(.mixed))
+    }
+
     func testCRUDMaintainsCardIdentityAndHistoryAndModes() throws {
         let repo = try fixture()
         let noteID = try create(repo)
@@ -125,7 +165,7 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.counts(now: now.addingTimeInterval(62)).learnedToday, 1)
         XCTAssertEqual(try repo.counts(now: now.addingTimeInterval(62)).answerCount, 2)
         for mode in StudyMode.allCases {
-            try repo.start(mode: mode, now: now.addingTimeInterval(63))
+            XCTAssertThrowsError(try repo.start(mode: mode, now: now.addingTimeInterval(63)))
             XCTAssertNil(try repo.presentation(now: now.addingTimeInterval(63))?.card)
         }
         try repo.start(mode: .new, now: now.addingTimeInterval(86400))
