@@ -19,8 +19,8 @@ struct LibraryView: View {
         NavigationStack {
             List {
                 if filtered.isEmpty {
-                    ContentUnavailableView("カードがありません", systemImage: "rectangle.on.rectangle",
-                                           description: Text("＋から一問一答・記述式カードを追加できます。"))
+                    ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
+                                           description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
                 }
                 ForEach(store.decks) { deck in
                     Section(deck.name) {
@@ -38,7 +38,7 @@ struct LibraryView: View {
                     }
                 }
             }
-            .searchable(text: $search, prompt: "問題・解答・デッキを検索")
+            .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
             .navigationTitle("ライブラリ")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }

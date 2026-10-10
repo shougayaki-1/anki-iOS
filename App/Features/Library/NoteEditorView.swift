@@ -57,6 +57,14 @@ struct NoteEditorView: View {
                     Text("例：日本の首都は {{c1::東京}}。番号ごとにカードを作ります。既存の番号を維持すると学習履歴も維持できます。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("問題") {
+                    TextField("問題文", text: $input.question, axis: .vertical).lineLimit(3...10)
+                        .accessibilityIdentifier("questionInput")
+                }
+                Section("解答") {
+                    TextField("解答・模範解答", text: $input.answer, axis: .vertical).lineLimit(3...10)
+                        .accessibilityIdentifier("answerInput")
+                }
                 Section {
                     Button("出題プレビュー") { preview = true }.accessibilityIdentifier("previewNote")
                     if item == nil { Button("保存して次へ") { requestSave(next: true) }.disabled(!canSave) }
@@ -80,14 +88,6 @@ struct NoteEditorView: View {
                         Button("画像を外す", role: .destructive) { input.imageID = nil; input.masks = [] }
                     } else if input.imageID != nil { Text("画像を読み込めません。写真を再選択してください。").foregroundStyle(.red) }
                 }
-                Section("問題") {
-                    TextField("問題文", text: $input.question, axis: .vertical).lineLimit(3...10)
-                        .accessibilityIdentifier("questionInput")
-                }
-                Section("解答") {
-                    TextField("解答・模範解答", text: $input.answer, axis: .vertical).lineLimit(3...10)
-                        .accessibilityIdentifier("answerInput")
-                }
                 Section {
                     Button("下書きを破棄して閉じる", role: .destructive) {
                         do { try store.repository.discardEditorDraft(key: draftKey); committed = true; dismiss() }
@@ -98,6 +98,7 @@ struct NoteEditorView: View {
                     TextField("解説", text: $input.explanation, axis: .vertical).lineLimit(2...8)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: tagText) { _, value in input.tagNames = value.components(separatedBy: ",") }
             .onChange(of: input) { _, _ in if !committed { persistDraft() } }
             .sheet(isPresented: $preview) { NotePreviewView(input: input, image: image) }
@@ -106,6 +107,10 @@ struct NoteEditorView: View {
             }
             .navigationTitle(item == nil ? "カード追加" : "カード編集")
             .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                }
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.accessibilityIdentifier("closeEditor").accessibilityHint("入力中の下書きを保持します") }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { requestSave(next: false) }.accessibilityIdentifier("saveNote")

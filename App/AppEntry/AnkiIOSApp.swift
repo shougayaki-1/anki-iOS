@@ -7,7 +7,7 @@ struct AnkiIOSApp: App {
     private let notificationDelegate = StudyNotificationDelegate()
     init() { UNUserNotificationCenter.current().delegate = notificationDelegate }
     var body: some Scene {
-        WindowGroup { AppRootView() }
+        WindowGroup { AppRootView().tint(Color("AccentColor")) }
     }
 }
 

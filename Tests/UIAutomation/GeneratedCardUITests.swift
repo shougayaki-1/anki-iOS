@@ -75,6 +75,7 @@ final class GeneratedCardUITests: XCTestCase {
         let app = launch()
         app.buttons["addNote"].tap()
         app.buttons["noteKindPicker"].tap(); app.buttons["画像マスク"].firstMatch.tap()
+        for _ in 0..<8 where !app.buttons["pickPhoto"].isHittable { scroll(app, up: true) }
         app.buttons["pickPhoto"].tap()
         guard selectTestPhoto(app) else { throw XCTSkip("写真ライブラリにテスト用画像がないため、写真を選ばず終了しました。") }
         let mask = app.buttons["addCenterMask"]

@@ -53,6 +53,11 @@ struct DeckEditorView: View {
         }
         .navigationTitle(deckID == nil ? "デッキ追加" : "デッキ編集")
         .toolbar {
+            if deckID == nil {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { dismiss() }.accessibilityIdentifier("cancelDeckEditor")
+                }
+            }
             ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }
         .task {
