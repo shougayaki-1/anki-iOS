@@ -16,6 +16,26 @@ final class StudyUITests: XCTestCase {
         app.launch()
         return app
     }
+    func testDeckLearningOverrideSavesAndSurvivesRelaunch() {
+        let app = app()
+        create(app, question: "Deck settings", answer: "A")
+        app.buttons["デッキ管理"].tap()
+        app.buttons["マイデッキを編集"].tap()
+        let limit = app.switches["新規上限を指定"]
+        scrollTo(limit, app: app); limit.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(limit.value as? String, "1")
+        let retention = app.switches["目標保持率を指定"]
+        scrollTo(retention, app: app); retention.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(retention.value as? String, "1")
+        app.buttons["保存"].tap()
+        app.terminate(); app.launch()
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["デッキ管理"].tap()
+        app.buttons["マイデッキを編集"].tap()
+        XCTAssertEqual(app.switches["新規上限を指定"].value as? String, "1")
+        XCTAssertEqual(app.switches["目標保持率を指定"].value as? String, "1")
+        XCTAssertTrue(app.staticTexts["新規上限：20枚／日"].exists)
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]

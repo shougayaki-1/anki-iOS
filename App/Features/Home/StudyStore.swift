@@ -218,7 +218,7 @@ final class StudyStore {
     }
 
     var isNewLimitReached: Bool {
-        homeFailure == nil && counts.eligibleNew > 0 && newSlotsRemaining == 0
+        homeFailure == nil && counts.eligibleNew > 0 && counts.newRemaining == 0
     }
     var studyDayBoundaryMessage: String {
         let hour = settings.dayStartHour
@@ -236,6 +236,7 @@ final class StudyStore {
             return "現在のフィルター内の未学習カードは兄弟カードの同日抑制で待機中です。\(studyDayBoundaryMessage)"
         }
         if isNewLimitReached {
+            if newSlotsRemaining > 0 { return "デッキまたは親デッキの新規上限に達しました。ライブラリ > デッキ管理 > デッキ編集で確認できます。\(studyDayBoundaryMessage)" }
             return "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。\(studyDayBoundaryMessage)"
         }
         return "今は新規カードを出題できません。"

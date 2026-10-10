@@ -17,6 +17,8 @@ struct StudyOptions: Codable, Equatable {
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil
+    var deckLearning: [DeckLearningOverride]? = nil
+    var deckNewUsage: [DeckNewUsage]? = nil
     var activeSessionProgress: StudySessionProgressSnapshot? = nil
 }
 
@@ -243,4 +245,19 @@ struct DeckContentsPreview {
     var changedNoteCount: Int { bulk?.changedNotes.count ?? 0 }
     var changedCardCount: Int { bulk?.changedCards.count ?? 0 }
     var canCommit: Bool { changedNoteCount > 0 }
+}
+
+struct DeckLearningOverride: Codable, Equatable {
+    var deckID: UUID
+    var newLimit: Int?
+    var retention: Double?
+    var isValid: Bool {
+        (newLimit.map { (0...500).contains($0) } ?? true) &&
+        (retention.map { $0.isFinite && (0.8...0.97).contains($0) } ?? true)
+    }
+}
+struct DeckNewUsage: Codable, Equatable {
+    var sequence: Int
+    var cardID: UUID
+    var quotaDeckIDs: [UUID]
 }

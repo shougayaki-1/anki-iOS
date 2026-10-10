@@ -119,6 +119,16 @@ struct BackupValidation {
         for row in data.options {
             let options = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
             guard row.key == "options", (1...2).contains(options.schemaVersion) else { throw BackupError.invalidData }
+            if let overrides = options.deckLearning {
+                guard Set(overrides.map(\.deckID)).count == overrides.count,
+                      overrides.allSatisfy({ $0.isValid && decks[$0.deckID] != nil }) else { throw BackupError.invalidData }
+            }
+            if let usage = options.deckNewUsage {
+                let logs = Dictionary(uniqueKeysWithValues: data.logs.map { ($0.sequence, $0) })
+                guard Set(usage.map(\.sequence)).count == usage.count,
+                      usage.allSatisfy({ item in logs[item.sequence].map { $0.cardID == item.cardID && $0.wasNew } ?? false })
+                else { throw BackupError.invalidData }
+            }
             if let limit = options.sessionAnswerLimit, !(0...500).contains(limit) {
                 throw BackupError.invalidData
             }

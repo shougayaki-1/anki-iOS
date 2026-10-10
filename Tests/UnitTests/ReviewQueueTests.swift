@@ -54,6 +54,28 @@ final class ReviewQueueTests: XCTestCase {
         QueueCard(id: UUID(), state: state, due: due, createdAt: due, suspended: suspended)
     }
 
+    func testDeckSharedCapsFourAMAndAllStudyModes() {
+        let before = date("2026-10-08T03:59:59+09:00"), after = date("2026-10-08T04:00:00+09:00")
+        let parent = UUID(), child = UUID()
+        var first = card("new", due: before), second = card("new", due: before)
+        first.deckLimits = [parent: 2, child: 1]; second.deckLimits = [parent: 2, child: 1]
+        let review = card("review", due: before)
+        let short = card("learning", due: before)
+        let cards = [first, second, review, short]
+        let logs = [QueueLog(cardID: UUID(), reviewedAt: before, wasNew: true, quotaDeckIDs: [parent, child])]
+        let builder = ReviewQueueBuilder(calendar: calendar())
+        let settings = StudySettings()
+        XCTAssertEqual(builder.counts(cards: cards, logs: logs, settings: settings, now: before).newRemaining, 0)
+        XCTAssertEqual(builder.counts(cards: cards, logs: logs, settings: settings, now: before).eligibleNew, 2)
+        XCTAssertEqual(builder.counts(cards: cards, logs: logs, settings: settings, now: after).newRemaining, 1)
+        for mode in StudyMode.allCases {
+            let ids = builder.queue(cards: cards, logs: logs, settings: settings, mode: mode, touched: [short.id], reviewStreak: 0, now: before)
+            XCTAssertFalse(ids.contains(first.id)); XCTAssertFalse(ids.contains(second.id))
+            XCTAssertTrue(ids.contains(short.id))
+            XCTAssertEqual(ids.contains(review.id), mode != .new)
+        }
+    }
+
     func testFourAMBoundaryAndUniqueGoalCount() {
         let before = date("2026-10-08T03:59:59+09:00"), after = date("2026-10-08T04:00:00+09:00")
         let fresh = card("new", due: before)

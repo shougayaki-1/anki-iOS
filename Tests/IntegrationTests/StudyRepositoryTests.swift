@@ -22,6 +22,67 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testDeckLimitsInheritanceUndoMoveDeleteAndBackup() async throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        let other = try repo.createDeck(name: "Other", now: now)
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: parent, newLimit: 1, retention: 0.85))
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: child, newLimit: 2, retention: 0.95))
+        XCTAssertEqual(try repo.deckRetention(child), 0.95)
+        XCTAssertEqual(try repo.deckRetention(other), try repo.settings().desiredRetention)
+        for n in 0..<3 {
+            try repo.createNote(NoteInput(deckID: child, question: "Q\(n)", answer: "A"), now: now)
+        }
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .good, date: now)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 0)
+        XCTAssertTrue(try repo.presentation(now: now)?.emptyState?.message.contains("デッキまたは親デッキ") == true)
+        let bytes = try repo.cards().map(\.fsrsPayload)
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: child, newLimit: 2, retention: nil))
+        XCTAssertEqual(try repo.cards().map(\.fsrsPayload), bytes)
+        XCTAssertEqual(try repo.deckRetention(child), 0.85)
+        let archive = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        XCTAssertEqual(try JSONDecoder().decode(StudyOptions.self, from: archive.data.options[0].payload).deckNewUsage?.count, 1)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let restoredContainer = try BackupService.restore(archive,
+            location: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")), mediaStore: media, now: now)
+        let restored = StudyRepository(container: restoredContainer, mediaStore: media)
+        try restored.initialize(now: now)
+        XCTAssertEqual(try restored.deckRetention(child), 0.85)
+        XCTAssertEqual(try restored.homeSnapshot(now: now).counts.newRemaining, 0)
+        try restored.undo(now: now)
+        XCTAssertEqual(try restored.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.moveDeck(id: child, name: "Moved", parentID: other, now: now)
+        XCTAssertEqual(try repo.deckRetention(child), try repo.settings().desiredRetention)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.deleteDeck(id: child, moveNotesTo: other, now: now)
+        XCTAssertFalse(try repo.options().deckLearning!.contains { $0.deckID == child })
+        XCTAssertEqual(try repo.options().deckNewUsage?.count, 1)
+        _ = try await BackupService.export(repository: repo, now: now, appVersion: "after-delete")
+    }
+
+    func testDeckSettingsSaveFailureIsAtomicAndLimitsRejectInvalidValues() throws {
+        let repo = try fixture(), id = try repo.decks()[0].id
+        let before = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.moveDeck(id: id, name: "Changed", parentID: nil,
+            learning: DeckLearningOverride(deckID: id, newLimit: 0, retention: 0.97), now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        repo.save = { try $0.save() }
+        XCTAssertThrowsError(try repo.saveDeckLearning(DeckLearningOverride(deckID: id, newLimit: -1)))
+        XCTAssertThrowsError(try repo.saveDeckLearning(DeckLearningOverride(deckID: id, retention: 0.99)))
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: id, newLimit: 0))
+        try create(repo)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 0)
+        XCTAssertThrowsError(try repo.start(mode: .new, now: now))
+    }
+
     func testAnotherSetUsesOriginalScopeAndLimitAndEmptyOrFailedStartKeepsUndo() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let other = try repo.createDeck(name: "Other", now: now)
