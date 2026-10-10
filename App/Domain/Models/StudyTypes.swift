@@ -110,7 +110,16 @@ enum NumericSettingsInput {
 
 struct DeckItem: Identifiable {
     let id: UUID
-    let name: String
+    let name: String              // Full path used by pickers and scope selection.
+    let shortName: String         // Local deck name used by the management tree.
+    let parentID: UUID?
+
+    init(id: UUID, name: String, shortName: String? = nil, parentID: UUID? = nil) {
+        self.id = id
+        self.name = name
+        self.shortName = shortName ?? name
+        self.parentID = parentID
+    }
 }
 
 struct NoteItem: Identifiable {

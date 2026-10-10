@@ -216,6 +216,58 @@ final class LibraryRepositoryTests: XCTestCase {
         _ = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "bulk-delete"))
     }
 
+    func testDeckManagerTreeFollowsRealParentIDsAndUpdatesAfterMoves() throws {
+        let repo = try fixture(), myDeck = try repo.decks()[0].id
+        let english = try repo.createDeck(name: "英語", now: now)
+        let finalDraft = try repo.createDeck(name: "Final Draft", parentID: english, now: now)
+        let lesson = try repo.createDeck(name: "Lesson4", parentID: finalDraft, now: now)
+        let otherEnglish = try repo.createDeck(name: "英語", now: now)
+        let anotherLesson = try repo.createDeck(name: "Lesson4", parentID: otherEnglish, now: now)
+
+        func snapshot() throws -> [DeckItem] {
+            try repo.decks().map {
+                DeckItem(id: $0.id, name: try repo.deckPath($0.id),
+                         shortName: $0.name, parentID: $0.parentID)
+            }
+        }
+        let items = try snapshot()
+        XCTAssertEqual(items.first { $0.id == lesson }?.name, "英語 / Final Draft / Lesson4")
+        XCTAssertEqual(items.first { $0.id == lesson }?.shortName, "Lesson4")
+        let roots = DeckTreeBuilder.roots(from: items)
+        XCTAssertEqual(Set(roots.map(\.id)), Set([myDeck, english, otherEnglish]))
+        XCTAssertTrue(roots.first { $0.id == myDeck }?.children.isEmpty == true)
+        XCTAssertEqual(roots.first { $0.id == english }?.children.first?.id, finalDraft)
+        XCTAssertEqual(roots.first { $0.id == english }?.children.first?.children.first?.id, lesson)
+        XCTAssertEqual(roots.first { $0.id == otherEnglish }?.children.first?.id, anotherLesson)
+        XCTAssertEqual(DeckTreeBuilder.visibleRows(roots: roots, expanded: []).count, 3)
+        let expanded = DeckTreeBuilder.visibleRows(roots: roots, expanded: [english, finalDraft])
+        XCTAssertEqual(Set(expanded.map(\.id)), Set([myDeck, english, otherEnglish, finalDraft, lesson]))
+        XCTAssertEqual(expanded.first { $0.id == lesson }?.depth, 2)
+        XCTAssertEqual(expanded.first { $0.id == lesson }?.name, "Lesson4")
+        XCTAssertEqual(expanded.first { $0.id == lesson }?.path, "英語 / Final Draft / Lesson4")
+
+        try repo.moveDeck(id: finalDraft, name: "変更後", parentID: otherEnglish, now: now)
+        let moved = DeckTreeBuilder.roots(from: try snapshot())
+        XCTAssertTrue(moved.first { $0.id == english }?.children.isEmpty == true)
+        XCTAssertTrue(moved.first { $0.id == otherEnglish }?.children.contains(where: { $0.id == finalDraft }) == true)
+        XCTAssertEqual(moved.first { $0.id == otherEnglish }?.children
+            .first(where: { $0.id == finalDraft })?.children.first?.id, lesson)
+        XCTAssertEqual(try repo.deckPath(lesson), "英語 / 変更後 / Lesson4")
+    }
+
+    func testDeckTreeInvalidLegacyParentsStillDisplayOnce() {
+        let missing = UUID(), cycleA = UUID(), cycleB = UUID()
+        let input = [
+            DeckItem(id: missing, name: "orphan", shortName: "orphan", parentID: UUID()),
+            DeckItem(id: cycleA, name: "A", shortName: "A", parentID: cycleB),
+            DeckItem(id: cycleB, name: "B", shortName: "B", parentID: cycleA)
+        ]
+        let roots = DeckTreeBuilder.roots(from: input)
+        let rows = DeckTreeBuilder.visibleRows(roots: roots, expanded: [cycleA, cycleB, missing])
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual(Set(rows.map(\.id)), Set([missing, cycleA, cycleB]))
+    }
+
     func testHierarchyScopeAndCyclePreventionPreserveCardIDs() throws {
         let repo = try fixture()
         let root = try repo.decks()[0].id
