@@ -33,6 +33,9 @@ struct ReviewView: View {
                         }
                         questionContent(item)
                         reviewImage(review, item: item)
+                        if !review.answerRevealed {
+                            StudyHintView(hint: item.content.hint).id(item.cardID)
+                        }
                         if typeSize.isAccessibilitySize { accessibleModePicker(review) }
                         else { modePicker(review).pickerStyle(.segmented).controlSize(.large) }
                         if review.responseMode == .typing && !review.answerRevealed {

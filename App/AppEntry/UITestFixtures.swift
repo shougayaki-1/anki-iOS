@@ -52,6 +52,27 @@ enum UITestFixtures {
         settings.notification.enabled = false
         try repository.updateSettings(settings)
     }
+    @MainActor static func populateHints(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let deck = try repository.decks()[0].id
+        let bytes = UIGraphicsImageRenderer(size: CGSize(width: 100, height: 100)).image { context in
+            UIColor.systemBlue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 100, height: 100))
+        }.pngData()!
+        let image = try repository.addImage(bytes, now: now)
+        for kind in NoteKind.allCases {
+            var input = NoteInput(deckID: deck, kind: kind,
+                                  question: kind == .cloze ? "{{c1::Tokyo::city}} and {{c2::Japan}}" : "Hint \(kind.rawValue)",
+                                  answer: "Reverse question", hint: "Shared \(kind.rawValue) hint", reverseEnabled: kind == .basic)
+            if kind == .imageOcclusion {
+                input.imageID = image
+                input.masks = [ImageMask(rect: MaskRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2), answer: "one"),
+                               ImageMask(rect: MaskRect(x: 0.5, y: 0.5, width: 0.2, height: 0.2), answer: "two")]
+            }
+            try repository.createNote(input, now: now)
+        }
+        var settings = try repository.settings(); settings.siblingBuryEnabled = false
+        try repository.updateSettings(settings)
+    }
     @MainActor static func populateHomeFilters(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let root = try repository.decks()[0].id

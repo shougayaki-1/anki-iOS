@@ -11,6 +11,65 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.initialize(now: now); return repo
     }
 
+    func testHintOnlyEditOfLegacyContentPreservesActiveSession() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        var input = NoteInput(deckID: deck, question: "Legacy Q", answer: "Legacy A")
+        let id = try repo.createNote(input, now: now)
+        try repo.transaction {
+            let note = try XCTUnwrap(repo.notes().first)
+            note.contentPayload = Data(#"{"schemaVersion":1,"question":"Legacy Q","answer":"Legacy A","explanation":""}"#.utf8)
+        }
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(mode: .typing, text: "keep legacy draft", now: now)
+        let card = try XCTUnwrap(repo.cards().first), payload = card.fsrsPayload, due = card.dueDate
+        let active = try repo.session()?.activeSince
+        input.hint = "new hint"
+        try repo.updateNote(id: id, input: input, now: now.addingTimeInterval(10))
+        XCTAssertEqual(try repo.session()?.activeSince, active)
+        XCTAssertEqual(try repo.session()?.typedDraft, "keep legacy draft")
+        XCTAssertEqual(try repo.cards().first?.fsrsPayload, payload)
+        XCTAssertEqual(try repo.cards().first?.dueDate, due)
+        XCTAssertEqual(try repo.noteItems().first?.content.hint, "new hint")
+    }
+    func testHintEditsDraftsAndImportsPreserveScheduleAndNewSlots() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        var input = NoteInput(deckID: deck, question: "Q", answer: "A", hint: "first", reverseEnabled: true)
+        let note = try repo.createNote(input, now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now.addingTimeInterval(1))
+        try repo.updateDraft(mode: .typing, text: "keep draft", now: now.addingTimeInterval(2))
+        let cards = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate, $0.updatedAt) }
+        let logs = try repo.logs().map(\.id), counts = try repo.counts(now: now)
+        let session = try XCTUnwrap(repo.session())
+        let activeSince = session.activeSince, elapsed = session.elapsedMs, undo = session.undoLogID
+        input.hint = "updated\nsecond line"
+        try repo.saveEditorDraft(key: "edit:\(note)", input: input, now: now)
+        XCTAssertEqual(try repo.editorDraft(key: "edit:\(note)")?.hint, input.hint)
+        try repo.updateNote(id: note, input: input, now: now.addingTimeInterval(3))
+        XCTAssertEqual(try repo.session()?.typedDraft, "keep draft")
+        XCTAssertEqual(try repo.session()?.activeSince, activeSince)
+        XCTAssertEqual(try repo.session()?.elapsedMs, elapsed)
+        XCTAssertEqual(try repo.session()?.undoLogID, undo)
+        XCTAssertEqual(try repo.noteItems().first { $0.variantKey == "basic:front" }?.content.hint, input.hint)
+        XCTAssertNil(try repo.noteItems().first { $0.variantKey == "basic:reverse" }?.content.hint)
+        for value in [String?.none, "replacement", ""] {
+            var row = ImportRow(line: 1, question: "Q", answer: "A"); row.hint = value
+            _ = try repo.importRows([row], deckID: deck, kind: .basic, tagNames: [], action: .update, source: "csv", now: now)
+            XCTAssertEqual(try repo.noteItems().first?.sourceContent.hint, value ?? input.hint)
+            XCTAssertEqual(try repo.noteItems().first?.sourceContent.reverseEnabled, true)
+            XCTAssertEqual(try repo.logs().map(\.id), logs)
+            XCTAssertEqual(try repo.counts(now: now), counts)
+            for (id, payload, due, updated) in cards {
+                let actual = try XCTUnwrap(repo.cards().first { $0.id == id })
+                XCTAssertEqual(actual.fsrsPayload, payload); XCTAssertEqual(actual.dueDate, due)
+                XCTAssertEqual(actual.updatedAt, updated)
+            }
+        }
+        input.hint = nil
+        try repo.updateNote(id: note, input: input, now: now)
+        XCTAssertNil(try repo.noteItems().first?.sourceContent.hint)
+    }
     func testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress() async throws {
         let container = try PersistenceController.makeStudyContainer(inMemory: true)
         let repo = StudyRepository(container: container)

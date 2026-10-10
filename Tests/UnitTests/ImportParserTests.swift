@@ -2,6 +2,24 @@ import XCTest
 @testable import AnkiIOS
 
 final class ImportParserTests: XCTestCase {
+    func testHintHeaderMappingExplicitBlankAndAbsentColumn() throws {
+        for (delimiter, header) in [(Character(","), " HINT "), (Character("\t"), "ヒント")] {
+            let text = ["question", "answer", header].joined(separator: String(delimiter)) + "\n" +
+                ["Q", "A", "手がかり"].joined(separator: String(delimiter)) + "\n" +
+                ["Q2", "A2", ""].joined(separator: String(delimiter))
+            let table = try ImportParser.table(text, delimiter: delimiter)
+            XCTAssertEqual(ImportParser.hintColumn(in: table), 2)
+            let rows = ImportParser.map(table, header: true, questionColumn: 0, answerColumn: 1,
+                                        hintColumn: ImportParser.hintColumn(in: table))
+            XCTAssertEqual(rows.map(\.hint), ["手がかり", ""])
+            XCTAssertTrue(ImportParser.map(table, header: true, questionColumn: 0, answerColumn: 1).allSatisfy { $0.hint == nil })
+        }
+        let old = try ImportParser.table("question,answer\nQ,A", delimiter: ",")
+        XCTAssertNil(ImportParser.hintColumn(in: old))
+        XCTAssertNil(try ImportParser.pasted("Q: Q\nA: A")[0].hint)
+        let multiline = try ImportParser.table("Q,A,\"line one\nline two\"", delimiter: ",")
+        XCTAssertEqual(ImportParser.map(multiline, header: false, questionColumn: 0, answerColumn: 1, hintColumn: 2)[0].hint, "line one\nline two")
+    }
     func testCSVQuotedCommasNewlinesQuotesAndHeaderMapping() throws {
         let text = "id,answer,question\r\n1,\"A, with \"\"quotes\"\"\",\"Q\nsecond line\"\r\n2,A2,Q2\r\n"
         let table = try ImportParser.table(text, delimiter: ",")

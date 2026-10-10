@@ -1,0 +1,381 @@
+{
+  "date": "2026-10-10",
+  "standard_device": "iPhone 17 Pro / iOS 26.5 Simulator",
+  "unique_tests": 90,
+  "passed": 89,
+  "skipped": 1,
+  "failed": 0,
+  "unit_integration_passed": 82,
+  "ui_passed": 7,
+  "skip_reason": "既存の実機通知診断テストは実機診断が指定されていないためスキップ",
+  "small_device": "iPhone SE (3rd generation) / iOS 26.5 Simulator",
+  "small_passed": 2,
+  "small_failed": 0,
+  "aggregation": "各テストの最新実行結果を集計。修正後の再実行で以前の失敗を置換。",
+  "latest_results": {
+    "AnkiIOSTests/BackupRepositoryTests/testFailedStagedSavePreservesActivePointerAndOriginalData": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/BackupRepositoryTests/testFullBackupRestoresAllModelsMediaAndUndoAfterReopening": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/BackupRepositoryTests/testHistoricalDeletedCardsAndLegacyOptionsRemainValid": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/BackupRepositoryTests/testLegacyBackupWithoutHintKeysRestoresNotesAndEditorDraft": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/BackupRepositoryTests/testRehashedMalformedDataIsRejectedBeforeRestore": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/CardGenerationTests/testClozeStableIDsRepeatedIDsHintsAndUnicode": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/CardGenerationTests/testHintCompatibilityAndSharedVariants": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/CardGenerationTests/testReverseCardHasStableVariantAndSwapsDisplay": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ClozeRepositoryTests/testPastedClozeGeneratesIndependentCardsAndBuriesSiblings": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ClozeRepositoryTests/testThreeClozeCardsRegenerateWithIDsAndFSRSHistoryIntact": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ImportParserTests/testCSVQuotedCommasNewlinesQuotesAndHeaderMapping": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ImportParserTests/testHintHeaderMappingExplicitBlankAndAbsentColumn": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ImportParserTests/testPasteQAAndPlainTextRemainEditable": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ImportParserTests/testTSVBlankFieldsAndInvalidCSV": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testBulkDeleteKeepsHistoryAndClearsOnlyAffectedSessionAndEditorReferences": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testBulkEmptyMissingStaleContentDraftAndNewSiblingRejectWithoutPartialSuccess": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testBulkMetadataExpandsSiblingsPreservesFSRSHistoryAndDraftText": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testBulkSaveFailureRollsBackMoveTagsSuspendAndDelete": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testBulkSuspensionChangesOnlySelectedCardAndNoopDoesNotSave": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testFailedImportLeavesNoNotesCardsTagsOrBatch": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testHierarchyScopeAndCyclePreventionPreserveCardIDs": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testHintEditsDraftsAndImportsPreserveScheduleAndNewSlots": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testHintOnlyEditOfLegacyContentPreservesActiveSession": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testHomeFilterSaveFailureAndInvalidReferences": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testImportSkipsDuplicatesWithinBatchAndKeepsHistory": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testMigrationFromPhase1DiskStorePreservesEveryExistingRecord": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/LibraryRepositoryTests/testSiblingBuryDoesNotModifyFSRSAndShortLearningIsExempt": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testDeletionRemovesEditDraftAndBrokenReferencesPreventCleanup": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testDirectoryURLsAndSymlinkEscapeAreHandledSafely": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testDraftCommitFailureAndOrphanCleanupProtectReferencedImages": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testFailedAssetSaveCleansFileAndInvalidPathsAreRejected": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testMasksAndImageReferenceSurviveRegenerationAndDiskReopen": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testNormalizedGeometryAndCrop": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testV2ToV3MigrationKeepsTagsScopeAndPreferences": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testVisionOCRRecognizesJapaneseLocalFixture": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/MediaRepositoryTests/testVisionOCRRecognizesLocalFixture": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationPlannerTests/testActualDueTimeAndOverdueAcrossThirtyDayHorizon": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationPlannerTests/testCompletionCancelsUndoReschedulesDeliveredNotRepeatedAndUnrelatedKept": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationPlannerTests/testDSTAndTimeZoneChangeReplaceTriggersUsingLocalCalendar": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationPlannerTests/testNewSuspendedDisabledAndDeniedHaveNoNotifications": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationPlannerTests/testTestNamespacesAreIsolatedAndIdentifiersUseGregorianDates": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationServiceTests/testOffForegroundDoesNotRequestPermissionAndEnableIsExplicit": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationServiceTests/testReconciliationIsIdempotentAndCompletionOffAndDenialCancel": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/NotificationServiceTests/testTurningOffDuringInFlightAddCannotLeaveStaleReservation": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/PersistenceTests/testDiskStoreReopensWithIdenticalIDStateAndHistory": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testAuthorizedNotificationDiagnosticsAndTestCleanup": {
+      "status": "skipped",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testDeletedDeckDraftFallbackAndInterruptedRestoreImageCleanup": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testExtremeBackupDatesCountersAndSessionDurationAreRejected": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testFailedSaveAndFailedDisplayAfterCommitReportDifferentOutcomes": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testHomePollingDoesNotSaveRegenerateContentOrReconcileUnchangedNotifications": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testIdentityAssetsAndPrimaryButtonContrast": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testLegacyReviewOptionsAndSettingsDiskRestartPreserveStudyState": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testTextPaletteContrastAgainstSystemSurfaces": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/QualityRepositoryTests/testTimeZoneChangeAfterDiskRestartOnlyChangesDailyAggregation": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testFourAMBoundaryAndUniqueGoalCount": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testHiddenImagesNeverHideImageOcclusionAndDefaultsStayCompatible": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testMixedRatioAndGoalDoesNotLimitReviews": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testOverdueAndShortStepsAcrossDays": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testSharedNewLimitAcrossAllModesAndSuspension": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testSwipeDirectionsThresholdDiagonalAndRetreat": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testSwipeGateRejectsChangedCardChangedRevealAndQuickRepeat": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewQueueTests/testTimeZoneAndDSTCalendarDays": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewSchedulerTests/testAllFourGradesAndShortTermAgain": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewSchedulerTests/testCompleteSnapshotRoundTripAndContinuation": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewSchedulerTests/testFSRS6InitializationAndReviewLifecycle": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ReviewSchedulerTests/testRetrievabilityUsesInjectedTimeAndRetentionBounds": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/ScaleRepositoryTests/testThousandNotesThreeThousandCardsTenThousandLogsAndBackup": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StatisticsTests/testFourAMUniqueCountsStreakRatingsAndRetention": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StatisticsTests/testStreakAcrossDSTAtNonexistentTwoAMBoundary": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StoredZIPTests/testStoredZIPRoundTripAndKnownCRC": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StoredZIPTests/testTraversalDuplicateIntegrityCompressionAndSymlinksRejected": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StoredZIPTests/testTruncationAndRandomInvalidBytesNeverEscapeBounds": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testCRUDMaintainsCardIdentityAndHistoryAndModes": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testDiskRestartRestoresDueHistoryAndUnscoredDraft": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testEmptyStartNeverCreatesOrReplacesSession": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testEveryGradePersistsFSRSAndLogWithExactTime": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testFailedGradeAndUndoRollbackEverything": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testHomeModeAvailabilityWaitingQuotaGoalAndDayBoundary": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testInvalidContentAndFailedCreationLeaveNoPartialRecords": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testNewQuotaPersistsAcrossModesAndDecksAndCountsRepeatedCardOnce": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSTests/StudyRepositoryTests/testUndoRestoresAllStateAndAllowsRegrade": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSUITests/ImportUITests/testCSVHintHeaderPreviewEditingAndLearning": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-csv-final.log"
+    },
+    "AnkiIOSUITests/ImportUITests/testLargeCSVCanConfirmWithoutScrollingThroughRows": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSUITests/ImportUITests/testPastePreviewConfirmDuplicatesAndErrorsThenLearn": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSUITests/QualityUITests/testDarkLargestDynamicTypeWrittenCardAndAccessibilityAudit": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-recheck.log"
+    },
+    "AnkiIOSUITests/StudyUITests/testHintEditorPreviewTypingPauseRestartUndoAndCardChange": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSUITests/StudyUITests/testReviewGesturesDefaultOffDirectionsUndoAndRestart": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    },
+    "AnkiIOSUITests/StudyUITests/testSharedHintsAllFormatsReverseExceptionAndCardReset": {
+      "status": "passed",
+      "source_log": "/private/tmp/anki-issue47-final.log"
+    }
+  },
+  "small_results": {
+    "AnkiIOSUITests/QualityUITests/testDarkLargestDynamicTypeWrittenCardAndAccessibilityAudit": "passed",
+    "AnkiIOSUITests/StudyUITests/testSharedHintsAllFormatsReverseExceptionAndCardReset": "passed"
+  }
+}

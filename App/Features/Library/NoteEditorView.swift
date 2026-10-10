@@ -27,6 +27,7 @@ struct NoteEditorView: View {
                                                question: item?.sourceContent.question ?? "",
                                                answer: item?.sourceContent.answer ?? "",
                                                explanation: item?.sourceContent.explanation ?? "",
+                                               hint: item?.sourceContent.hint,
                                                responseMode: item?.responseMode ?? .mental, tagNames: item?.tagNames ?? [], reverseEnabled: item?.sourceContent.reverseEnabled ?? false,
                                                imageID: item?.sourceContent.imageID, masks: item?.sourceContent.masks ?? [],
                                                hideAllMasks: item?.sourceContent.hideAllMasks ?? true))
@@ -64,6 +65,12 @@ struct NoteEditorView: View {
                 Section("解答") {
                     TextField("解答・模範解答", text: $input.answer, axis: .vertical).lineLimit(3...10)
                         .accessibilityIdentifier("answerInput")
+                }
+                Section {
+                    TextField("ヒント", text: Binding(get: { input.hint ?? "" }, set: { input.hint = $0 }), axis: .vertical)
+                        .lineLimit(2...8).accessibilityIdentifier("hintInput")
+                } header: { Text("ヒント（任意）") } footer: {
+                    Text("解答前に手動で開く手がかりです。同じノートのカードで共通ですが、裏表反転の逆向きカードには表示しません。")
                 }
                 Section {
                     Button("出題プレビュー") { preview = true }.accessibilityIdentifier("previewNote")

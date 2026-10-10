@@ -47,6 +47,7 @@ struct CardGeneration {
         var displayed = content
         if variant == "basic:reverse" {
             displayed.question = content.answer; displayed.answer = content.question
+            displayed.hint = nil
         } else if kind == .cloze {
             let id = String(variant.dropFirst("cloze:".count))
             let parts = try clozes(content.question)

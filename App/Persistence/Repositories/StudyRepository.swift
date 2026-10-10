@@ -109,7 +109,7 @@ final class StudyRepository {
               ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { throw StudyError.invalidContent }
         guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
         let content = TextContent(question: input.question, answer: input.answer,
-                                  explanation: input.explanation, reverseEnabled: input.reverseEnabled,
+                                  explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
                                   imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks)
         _ = try CardGeneration.variants(kind: input.kind, content: content)
         return try JSONEncoder().encode(content)
@@ -137,6 +137,12 @@ final class StudyRepository {
         let content = try validate(input)
         try transaction {
             guard let note = try notes().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
+            let previous = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            let changesSession = previous.question != input.question || previous.answer != input.answer ||
+                previous.explanation != input.explanation || previous.imageID != input.imageID ||
+                (previous.reverseEnabled ?? false) != input.reverseEnabled ||
+                (previous.masks ?? []) != input.masks || (previous.hideAllMasks ?? true) != input.hideAllMasks ||
+                note.type != input.kind.rawValue || note.defaultResponseMode != input.responseMode.rawValue || resetHistory
             note.deckID = input.deckID; note.type = input.kind.rawValue; note.contentPayload = content
             note.defaultResponseMode = input.responseMode.rawValue; note.updatedAt = now
             note.tagIDs = try tagIDs(for: input.tagNames)
@@ -157,7 +163,7 @@ final class StudyRepository {
             }
             // Historical logs remain even when a variant is removed.
             try removeEditorDraftInTransaction(key: key)
-            if let draft = try session(), let cardID = draft.cardID,
+            if changesSession, let draft = try session(), let cardID = draft.cardID,
                try cards().contains(where: { $0.id == cardID && $0.noteID == id }) {
                 draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = now; draft.elapsedMs = 0
                 draft.undoLogID = nil

@@ -39,13 +39,21 @@ struct ImportParser {
         return DelimitedTable(rows: rows, lines: lines)
     }
 
-    static func map(_ table: DelimitedTable, header: Bool, questionColumn: Int, answerColumn: Int) -> [ImportRow] {
+    static func map(_ table: DelimitedTable, header: Bool, questionColumn: Int, answerColumn: Int, hintColumn: Int? = nil) -> [ImportRow] {
         table.rows.enumerated().compactMap { index, row in
             if header && index == 0 { return nil }
             let question = row.indices.contains(questionColumn) ? row[questionColumn] : ""
             let answer = row.indices.contains(answerColumn) ? row[answerColumn] : ""
-            return ImportRow(line: table.lines[index], question: question, answer: answer,
+            var mapped = ImportRow(line: table.lines[index], question: question, answer: answer,
                              error: question.isEmpty || answer.isEmpty ? "問題または解答が未入力です。" : nil)
+            if let hintColumn { mapped.hint = row.indices.contains(hintColumn) ? row[hintColumn] : "" }
+            return mapped
+        }
+    }
+
+    static func hintColumn(in table: DelimitedTable) -> Int? {
+        table.rows.first?.firstIndex {
+            ["hint", "ヒント"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
         }
     }
 

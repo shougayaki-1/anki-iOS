@@ -184,7 +184,7 @@ extension StudyRepository {
         for row in rows {
             if !row.included { skipped += 1; continue }
             let input = NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer,
-                                  explanation: row.explanation, tagNames: tagNames)
+                                  explanation: row.explanation, hint: row.hint, tagNames: tagNames)
             do { valid.append((row, input, try validate(input))) }
             catch { errors.append("\(row.line)行: \(error.localizedDescription)") }
         }
@@ -196,7 +196,11 @@ extension StudyRepository {
                 if let existing = try duplicate(of: input) {
                     if action == .skip { skipped += 1; continue }
                     if action == .update {
-                        existing.contentPayload = content; existing.updatedAt = now
+                        var merged = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
+                        merged.question = input.question; merged.answer = input.answer
+                        merged.explanation = input.explanation
+                        if let hint = input.hint { merged.hint = hint }
+                        existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
                         existing.tagIDs = try tagIDs(for: tagNames)
                         if resetHistory {
                             for card in try cards().filter({ $0.noteID == existing.id }) {
