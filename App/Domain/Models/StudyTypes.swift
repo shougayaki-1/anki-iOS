@@ -115,7 +115,7 @@ struct ReviewPresentation {
 }
 
 enum StudyError: LocalizedError {
-    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession
+    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards
     var errorDescription: String? {
         switch self {
         case .invalidContent: return "問題文と解答を入力してください。"
@@ -123,6 +123,7 @@ enum StudyError: LocalizedError {
         case .unsupportedContent: return "このデータ形式はまだ編集できません。"
         case .newLimitReached: return "今日の新規カード上限に達しました。"
         case .cannotUndo: return "直前の評価後に状態が変わったため、取り消せません。"
+        case .noAvailableCards: return "今はこの条件で学習できるカードがありません。学習対象を確認してください。"
         case .noSession: return "学習セッションがありません。"
         }
     }
