@@ -13,8 +13,13 @@ enum NoteKind: String, Codable, CaseIterable {
 }
 
 enum ResponseMode: String, Codable, CaseIterable {
-    case mental, typing
-    var title: String { self == .mental ? "頭の中で回答" : "文字入力" }
+    case mental, typing, ordering
+    var title: String {
+        switch self { case .mental: return "頭の中で回答"; case .typing: return "文字入力"; case .ordering: return "並び替え" }
+    }
+    init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .mental
+    }
 }
 
 enum StudyMode: String, Codable, CaseIterable, Identifiable {
@@ -126,6 +131,8 @@ struct ReviewPresentation {
     let answerRevealed: Bool
     let canUndo: Bool
     let nextShortDue: Date?
+    var ordering: OrderingDraft? = nil
+    var orderingUnavailable: String? = nil
 }
 
 // Primary actions preserve the existing session; replacement is a secondary action.

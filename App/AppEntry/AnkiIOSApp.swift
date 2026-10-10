@@ -79,6 +79,10 @@ struct AppRootView: View {
                 #endif
                 store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications)
                 #if DEBUG
+                if studyURL != nil, args.contains("-study-test-ordering"), let store {
+                    try UITestFixtures.populateOrdering(store.repository, now: store.clock())
+                    try store.reload()
+                }
                 if studyURL != nil, args.contains("-study-test-hints"), let store {
                     try UITestFixtures.populateHints(store.repository, now: store.clock())
                     try store.reload()

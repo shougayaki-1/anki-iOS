@@ -176,13 +176,24 @@ final class StudyStore {
     }
     func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil) {
         do {
+            let wasRevealed = review?.answerRevealed == true
             try repository.updateDraft(mode: mode, text: text, revealed: revealed, now: clock())
-            if let old = review {
+            if mode != nil || revealed != nil {
+                review = try repository.presentation(now: clock())
+            } else if let old = review {
                 review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
-                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue)
-                if revealed == true && !old.answerRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
+                                           canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable)
             }
+            if revealed == true && !wasRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
+        } catch { failure = error.localizedDescription }
+    }
+    func ordering(_ action: OrderingAction) {
+        do {
+            let before = review?.answerRevealed == true
+            try repository.updateOrdering(action, now: clock())
+            review = try repository.presentation(now: clock())
+            if !before && review?.answerRevealed == true { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
     }
     func pause() {

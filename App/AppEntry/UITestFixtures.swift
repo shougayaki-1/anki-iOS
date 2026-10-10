@@ -53,6 +53,12 @@ enum UITestFixtures {
         settings.notification.enabled = false
         try repository.updateSettings(settings)
     }
+    @MainActor static func populateOrdering(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        try repository.createNote(NoteInput(deckID: repository.decks()[0].id, question: "私は毎日学校へ歩きます。",
+                                            answer: "I walk to school every day.", explanation: "現在の習慣を表す英文です。",
+                                            hint: "主語は I、動詞は walk", responseMode: .ordering), now: now)
+    }
     @MainActor static func populateHints(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let deck = try repository.decks()[0].id

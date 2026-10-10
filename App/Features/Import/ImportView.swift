@@ -11,6 +11,7 @@ struct ImportView: View {
     @State private var format = "Q/A"
     @State private var hasHeader = true
     @State private var questionColumn = 0
+    @State private var modeColumn = -2
     @State private var hintColumn = -2 // -2: header detection, -1: no hint column
     @State private var answerColumn = 1
     @State private var columnCount = 2
@@ -66,6 +67,13 @@ struct ImportView: View {
                                 Text("指定しない（既存ヒントを保持）").tag(-1)
                                 ForEach(0..<columnCount, id: \.self) { Text("列\($0 + 1)").tag($0) }
                             }.accessibilityIdentifier("importHintColumn")
+                            Picker("回答方式の列", selection: $modeColumn) {
+                                Text("ヘッダーから自動判定").tag(-2)
+                                Text("指定しない（既存方式を保持）").tag(-1)
+                                ForEach(0..<columnCount, id: \.self) { Text("列\($0 + 1)").tag($0) }
+                            }.accessibilityIdentifier("importModeColumn")
+                            Text("responseMode / 回答方式：mental・typing・ordering（並び替え）。未知の値・空欄・並び替え不可は頭の中で回答になります。")
+                                .font(.footnote).foregroundStyle(.secondary)
                             Text("hint / ヒントのヘッダーを認識します。指定したヒント列が空欄の場合、重複更新で既存ヒントを消去します。列を指定しない場合は保持します。")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
@@ -114,6 +122,16 @@ struct ImportView: View {
                             if row.hint != nil {
                                 Button("ヒントの変更を取り消し、既存を保持") { rows[index].hint = nil }
                                     .font(.footnote)
+                            }
+                            Picker("回答方式", selection: Binding(get: { rows[index].responseMode?.rawValue ?? "keep" }, set: {
+                                rows[index].responseMode = ResponseMode(rawValue: $0); rows[index].modeWarning = nil
+                            })) {
+                                Text("未指定（既存方式を保持）").tag("keep")
+                                ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0.rawValue) }
+                            }.accessibilityIdentifier("importMode-\(row.line)")
+                            if let warning = row.modeWarning { Text(warning).font(.footnote).foregroundStyle(.secondary) }
+                            if row.responseMode == .ordering, let reason = OrderingAnswer.reason(kind: kind, answer: row.answer) {
+                                Text("頭の中で回答として取り込みます。" + reason).font(.footnote).foregroundStyle(.secondary)
                             }
                             if incomplete(row) { Text("問題または解答を入力してください。確定時はエラーとして除外します。")
                                     .font(.footnote).foregroundStyle(.red) }
@@ -201,7 +219,9 @@ struct ImportView: View {
                 let selectedHint = hintColumn >= 0 ? hintColumn :
                     (hintColumn == -2 && hasHeader ? ImportParser.hintColumn(in: table) : nil)
                 rows = ImportParser.map(table, header: hasHeader, questionColumn: questionColumn,
-                                        answerColumn: answerColumn, hintColumn: selectedHint)
+                                        answerColumn: answerColumn, hintColumn: selectedHint,
+                                        modeColumn: modeColumn >= 0 ? modeColumn :
+                                            (modeColumn == -2 && hasHeader ? ImportParser.responseModeColumn(in: table) : nil))
             }
         } catch { failure = error.localizedDescription }
     }
@@ -211,6 +231,7 @@ struct ImportView: View {
         questionColumn = min(questionColumn, columnCount - 1)
         answerColumn = min(answerColumn, columnCount - 1)
         if hintColumn >= columnCount { hintColumn = -2 }
+        if modeColumn >= columnCount { modeColumn = -2 }
     }
     private func commit() {
         do {

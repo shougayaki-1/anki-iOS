@@ -91,7 +91,7 @@ extension StudyRepository {
                 let ids = Set(affected.map(\.id))
                 let removed = try cards().filter { ids.contains($0.noteID) }
                 if let draft = try session(), removed.contains(where: { $0.id == draft.cardID }) {
-                    draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil
+                    draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil
                 }
                 if let draft = try session(), let logID = draft.undoLogID,
                    try logs().contains(where: { $0.id == logID }) {
@@ -180,8 +180,10 @@ extension StudyRepository {
         var skipped = 0
         for row in rows {
             if !row.included { skipped += 1; continue }
+            let requestedMode = row.responseMode ?? .mental
+            let effectiveMode: ResponseMode = requestedMode == .ordering && OrderingAnswer.reason(kind: kind, answer: row.answer) != nil ? .mental : requestedMode
             let input = NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer,
-                                  explanation: row.explanation, hint: row.hint, tagNames: tagNames)
+                                  explanation: row.explanation, hint: row.hint, responseMode: effectiveMode, tagNames: tagNames)
             do { valid.append((row, input, try validate(input))) }
             catch { errors.append("\(row.line)行: \(error.localizedDescription)") }
         }
@@ -189,7 +191,7 @@ extension StudyRepository {
         let fresh = try JSONEncoder().encode(scheduler.newCard(now: now))
         return try transaction {
             var imported = 0
-            for (_, input, content) in valid {
+            for (row, input, content) in valid {
                 if let existing = try duplicate(of: input) {
                     if action == .skip { skipped += 1; continue }
                     if action == .update {
@@ -198,6 +200,7 @@ extension StudyRepository {
                         merged.explanation = input.explanation
                         if let hint = input.hint { merged.hint = hint }
                         existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
+                        if row.responseMode != nil { existing.defaultResponseMode = input.responseMode.rawValue }
                         existing.tagIDs = try tagIDs(for: tagNames)
                         if resetHistory {
                             for card in try cards().filter({ $0.noteID == existing.id }) {
@@ -330,13 +333,13 @@ extension StudyRepository {
             if case .deleteNotes = current.action {
                 if let draft = try session() {
                     if let id = draft.cardID, cardIDs.contains(id) {
-                        draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
+                        draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
                     }
                     if let undo = draft.undoLogID, try logs().contains(where: { $0.id == undo && cardIDs.contains($0.cardID) }) { draft.undoLogID = nil }
                     draft.touchedCardIDs.removeAll { cardIDs.contains($0) }
                 }
             } else if case .suspended(true) = current.action, let draft = try session(), let id = draft.cardID, cardIDs.contains(id) {
-                draft.cardID = nil; draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
+                draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
             }
             return BulkEditResult(changedNotes: noteIDs.count, changedCards: cardIDs.count)
         }

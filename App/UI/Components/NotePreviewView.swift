@@ -6,6 +6,8 @@ struct NotePreviewView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selected = ""
     @State private var revealed = false
+    @State private var ordering: OrderingDraft? = nil
+    @State private var previewCardID = UUID()
 
     private var content: TextContent {
         TextContent(question: input.question, answer: input.answer, explanation: input.explanation, hint: input.hint,
@@ -30,11 +32,28 @@ struct NotePreviewView: View {
                             if !revealed {
                                 StudyHintView(hint: shown.hint).id(selected)
                             }
+                            if input.responseMode == .ordering && !revealed {
+                                if let draft = ordering, let problem = try? OrderingAnswer(kind: input.kind, answer: shown.answer) {
+                                    OrderingAnswerView(problem: problem, draft: draft) { action in
+                                        do {
+                                            var updated = draft; try updated.apply(action, problem: problem)
+                                            ordering = updated
+                                            if updated.result == .correct { revealed = true }
+                                        } catch { }
+                                    }
+                                } else if let reason = OrderingAnswer.reason(kind: input.kind, answer: shown.answer) {
+                                    Text(reason).font(.footnote).foregroundStyle(.secondary)
+                                }
+                            }
                             if revealed {
+                                if input.responseMode == .ordering, ordering?.result == .correct { Label("正解", systemImage: "checkmark.circle") }
                                 Text(shown.answer).accessibilityIdentifier("previewAnswer")
                                 if !shown.explanation.isEmpty { Text(shown.explanation).foregroundStyle(.secondary) }
                             }
-                            Button(revealed ? "問題に戻る" : "答えを表示") { revealed.toggle() }
+                            Button(revealed ? "問題に戻る" : "答えを表示") {
+                                revealed.toggle()
+                                if !revealed { resetOrdering() }
+                            }
                                 .buttonStyle(.borderedProminent).accessibilityIdentifier("previewReveal")
                                 .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                         }
@@ -45,10 +64,16 @@ struct NotePreviewView: View {
                     }
                 }.padding()
             }
-            .onChange(of: selected) { _, _ in revealed = false }
+            .onChange(of: selected) { _, _ in revealed = false; resetOrdering() }
             .navigationTitle("出題プレビュー")
             .toolbar { Button("閉じる") { dismiss() }.accessibilityIdentifier("closePreview") }
         }
+    }
+    private func resetOrdering() {
+        guard input.responseMode == .ordering,
+              let shown = try? CardGeneration.displayed(kind: input.kind, content: content, variant: selected),
+              let problem = try? OrderingAnswer(kind: input.kind, answer: shown.answer) else { ordering = nil; return }
+        ordering = OrderingDraft(cardID: previewCardID, problem: problem)
     }
 }
 

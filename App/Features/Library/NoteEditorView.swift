@@ -50,8 +50,11 @@ struct NoteEditorView: View {
                         ForEach(NoteKind.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.accessibilityIdentifier("noteKindPicker")
                     Picker("標準の回答方法", selection: $input.responseMode) {
-                        ForEach(ResponseMode.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
+                        ForEach(ResponseMode.allCases, id: \.self) { mode in
+                            Text(mode.title).tag(mode)
+                                .disabled(mode == .ordering && OrderingAnswer.reason(kind: input.kind, answer: input.answer) != nil)
+                        }
+                    }.accessibilityIdentifier("noteResponseMode")
                 }
                 if input.kind == .basic { Toggle("裏表反転カードも作る", isOn: $input.reverseEnabled) }
                 if input.kind == .cloze {
@@ -73,6 +76,9 @@ struct NoteEditorView: View {
                     Text("解答前に手動で開く手がかりです。同じノートのカードで共通ですが、裏表反転の逆向きカードには表示しません。")
                 }
                 Section {
+                    if !input.answer.isEmpty, let reason = OrderingAnswer.reason(kind: input.kind, answer: input.answer) {
+                        Text(reason).font(.footnote).foregroundStyle(.secondary)
+                    }
                     Button("出題プレビュー") { preview = true }.accessibilityIdentifier("previewNote")
                     if item == nil { Button("保存して次へ") { requestSave(next: true) }.disabled(!canSave) }
                 }

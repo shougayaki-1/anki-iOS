@@ -32,6 +32,8 @@ struct ImportRow: Identifiable, Equatable {
     var explanation: String = ""
     // nil preserves an existing hint on import; an explicit empty string clears it.
     var hint: String? = nil
+    var responseMode: ResponseMode? = nil
+    var modeWarning: String? = nil
     var error: String?
     var included = true
     init(line: Int, question: String, answer: String, error: String? = nil) {

@@ -80,11 +80,14 @@ extension BackupData {
         for row in options { try row.insert(into: context) }
         for row in scopes { try row.insert(into: context) }
         for row in sessions { try row.insert(into: context) }
+        for row in orderingDrafts ?? [] { row.insert(into: context) }
         for row in imports { try row.insert(into: context) }
         for row in editorDrafts { try row.insert(into: context) }
     }
     func canonical() -> Self {
         var value = self
+        if value.orderingDrafts?.isEmpty == true { value.orderingDrafts = nil }
+        value.orderingDrafts?.sort { $0.key < $1.key }
         value.decks.sort { $0.id.uuidString < $1.id.uuidString }; value.notes.sort { $0.id.uuidString < $1.id.uuidString }
         value.cards.sort { $0.id.uuidString < $1.id.uuidString }; value.logs.sort { $0.sequence < $1.sequence }
         value.tags.sort { $0.id.uuidString < $1.id.uuidString }; value.media.sort { $0.id.uuidString < $1.id.uuidString }

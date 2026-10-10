@@ -97,6 +97,20 @@ struct BackupValidation {
                   session.undoLogID == nil || logIDs.contains(session.undoLogID!) else { throw BackupError.invalidData }
             if let date = session.activeSince { try dates(date) }
         }
+        let orderingRecords = data.orderingDrafts ?? []
+        guard orderingRecords.count <= 1 else { throw BackupError.invalidData }
+        for record in orderingRecords {
+            guard record.key == "active", record.payload.count <= 32_000,
+                  let state = try? JSONDecoder().decode(OrderingDraft.self, from: record.payload),
+                  data.sessions.first?.cardID == state.cardID,
+                  let card = data.cards.first(where: { $0.id == state.cardID }),
+                  let note = data.notes.first(where: { $0.id == card.noteID }),
+                  let kind = NoteKind(rawValue: note.type) else { throw BackupError.invalidData }
+            let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            let shown = try CardGeneration.displayed(kind: kind, content: content, variant: card.variantKey)
+            let problem = try OrderingAnswer(kind: kind, answer: shown.answer)
+            guard state.isValid(for: problem, cardID: state.cardID) else { throw BackupError.invalidData }
+        }
         for row in data.scopes {
             let scope = try JSONDecoder().decode(LearningScope.self, from: row.payload)
             guard row.key == "active", scope.schemaVersion == 1, scope.deckID == nil || decks[scope.deckID!] != nil,
