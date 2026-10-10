@@ -46,7 +46,11 @@ final class GeneratedCardUITests: XCTestCase {
         app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
         XCTAssertTrue(q.waitForExistence(timeout: 5))
         XCTAssertTrue((q.value as? String ?? "").contains("{{c1::Tokyo}}"))
-        scroll(app, up: false); app.buttons["previewNote"].tap()
+        let preview = app.buttons["previewNote"]
+        for _ in 0..<15 where !preview.exists || !preview.isHittable { scroll(app, up: true) }
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertTrue(preview.isHittable)
+        preview.tap()
         XCTAssertTrue(app.staticTexts["previewQuestion"].waitForExistence(timeout: 5))
         app.buttons["previewReveal"].tap()
         XCTAssertEqual(app.staticTexts["previewAnswer"].label, "Tokyo")
