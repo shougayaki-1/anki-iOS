@@ -116,6 +116,10 @@ struct AppRootView: View {
                     case "review": ShortcutNavigation.shared.submit(.study(.review))
                     case "new": ShortcutNavigation.shared.submit(.study(.new))
                     case "progress": ShortcutNavigation.shared.submit(.progress)
+                    case "deck:first":
+                        if let store, let first = try? store.repository.decks().first {
+                            ShortcutNavigation.shared.submit(.deck(first.id))
+                        }
                     default:
                         if args[index + 1].hasPrefix("deck:"),
                            let id = UUID(uuidString: String(args[index + 1].dropFirst(5))) {
