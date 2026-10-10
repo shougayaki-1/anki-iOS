@@ -108,8 +108,12 @@ final class OrderingRepositoryTests: XCTestCase {
         try repo.updateOrdering(.check, now: now)
         try repo.updateOrdering(.reset, now: now)
         let first = try state(repo).pool[0]
+        let second = try state(repo).pool[1]
         try repo.updateOrdering(.select(first), now: now)
-        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "49")
+        try repo.updateOrdering(.select(second), now: now)
+        try repo.updateOrdering(.move(second, to: 0), now: now)
+        XCTAssertEqual(try state(repo).selected, [second, first])
+        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "56")
         let backup = try BackupArchive.decode(bytes)
         XCTAssertEqual(backup.data.orderingDrafts?.count, 1)
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
