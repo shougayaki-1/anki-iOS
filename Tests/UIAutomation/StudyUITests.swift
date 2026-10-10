@@ -68,6 +68,87 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testDeckContentsMoveAndCancelledThenConfirmedDeleteKeepDecks() {
+        deckContentsScenario(accessibility: false)
+    }
+
+    func testDeckContentsLargestDynamicTypeMoveAndDeleteKeepsDecks() {
+        deckContentsScenario(accessibility: true)
+    }
+
+    private func deckContentsScenario(accessibility: Bool) {
+        let app = app()
+        if accessibility {
+            app.terminate()
+            app.launchArguments.append("-study-test-accessibility")
+            app.launch()
+            XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+            app.tabBars.buttons["ライブラリ"].tap()
+        }
+        create(app, question: "Bulk deck one", answer: "One")
+        create(app, question: "Bulk deck two", answer: "Two")
+        app.buttons["デッキ管理"].tap()
+        app.buttons["デッキ追加"].tap()
+        let name = app.textFields["deckNameInput"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap(); name.typeText("Destination")
+        app.buttons["保存"].tap()
+        let source = app.buttons["マイデッキを編集"]
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        source.tap()
+        scrollTo(app.buttons["moveDeckContents"], app: app)
+        app.buttons["moveDeckContents"].tap()
+        scrollTo(app.buttons["deckContentsDestination"], app: app)
+        app.buttons["deckContentsDestination"].tap()
+        app.buttons["Destination"].tap()
+        scrollTo(app.buttons["previewDeckContents"], app: app)
+        app.buttons["previewDeckContents"].tap()
+        scrollTo(app.staticTexts["deckContentsTargetCounts"], app: app)
+        XCTAssertTrue(app.staticTexts["deckContentsTargetCounts"].label.contains("2ノート"))
+        if accessibility { attach(app, "Issue41-largest-type-preview") }
+        scrollTo(app.buttons["commitDeckContents"], app: app)
+        app.buttons["commitDeckContents"].tap()
+        app.buttons["2ノート・2枚を移動"].tap()
+        scrollTo(app.staticTexts["deckContentsResult"], app: app)
+        XCTAssertTrue(app.staticTexts["deckContentsResult"].waitForExistence(timeout: 5))
+        scrollTo(app.buttons["戻る"], app: app)
+        app.buttons["戻る"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        let destination = app.buttons["Destinationを編集"]
+        XCTAssertTrue(destination.exists)
+        destination.tap()
+        scrollTo(app.buttons["deleteDeckContents"], app: app)
+        app.buttons["deleteDeckContents"].tap()
+        scrollTo(app.buttons["previewDeckContents"], app: app)
+        app.buttons["previewDeckContents"].tap()
+        scrollTo(app.staticTexts["deckContentsTargetCounts"], app: app)
+        XCTAssertTrue(app.staticTexts["deckContentsTargetCounts"].label.contains("2ノート"))
+        scrollTo(app.buttons["commitDeckContents"], app: app)
+        app.buttons["commitDeckContents"].tap()
+        if app.buttons["キャンセル"].exists {
+            app.buttons["キャンセル"].tap()
+        } else {
+            // Newer system popovers omit the cancel row; tapping the title
+            // outside the confirmation dismisses it without executing deletion.
+            app.navigationBars.firstMatch.staticTexts.firstMatch.tap()
+        }
+        XCTAssertFalse(app.staticTexts["deckContentsResult"].exists)
+        scrollTo(app.buttons["commitDeckContents"], app: app)
+        app.buttons["commitDeckContents"].tap()
+        app.buttons["2ノート・2枚を削除"].tap()
+        scrollTo(app.staticTexts["deckContentsResult"], app: app)
+        XCTAssertTrue(app.staticTexts["deckContentsResult"].waitForExistence(timeout: 5))
+        scrollTo(app.buttons["戻る"], app: app)
+        app.buttons["戻る"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(source.waitForExistence(timeout: 5))
+        XCTAssertTrue(destination.exists)
+        app.buttons["閉じる"].tap()
+        XCTAssertFalse(app.staticTexts["Bulk deck one"].exists)
+        XCTAssertFalse(app.staticTexts["Bulk deck two"].exists)
+    }
+
     func testSessionShowsRemainingAnswersInsteadOfDailyGoal() {
         let app = app()
         create(app, question: "Progress test question", answer: "Progress test answer")
