@@ -94,7 +94,7 @@ struct ReviewView: View {
                             .frame(maxWidth: .infinity, minHeight: 56)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.roundedRectangle)
+                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
                     .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
                     .accessibilityIdentifier("finishReview")
                     .padding(.horizontal, 24).padding(.vertical, 16)
