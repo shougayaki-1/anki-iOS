@@ -1,7 +1,7 @@
 import SwiftUI
 
 // An independent destination; DeckManagerView (#40) remains untouched.
-struct ShortcutDeckDestination: Identifiable, Equatable {
+struct ShortcutDeckDestination: Identifiable, Hashable {
     let id: UUID
 }
 

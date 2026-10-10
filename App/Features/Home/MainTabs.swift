@@ -53,7 +53,11 @@ struct MainTabs: View {
 
         // Follow the app's normal pause path when navigating away from study.
         if store.showingReview {
-            if case .study = request {} else { store.pause() }
+            if case .study = request {} else {
+                store.pause()
+                // Keep the study screen when pausing could not be saved/refreshed.
+                guard !store.showingReview else { return }
+            }
         }
 
         switch request {
