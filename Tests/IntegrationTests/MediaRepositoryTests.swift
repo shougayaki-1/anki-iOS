@@ -224,6 +224,16 @@ final class MediaRepositoryTests: XCTestCase {
                        2 * rect.frame(in: CGSize(width: 200, height: 100)).width)
     }
 
+    func testPNGRequiresCompleteChunksEndMarkerAndCorrectCRC() throws {
+        let image = imageData()
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(Data(image.dropLast(12))))
+        var badCRC = image
+        badCRC[29] ^= 1 // IHDR checksum; pixel dimensions are still decodable.
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(badCRC))
+        let valid = try ImageEncodingPolicy.prepare(image)
+        XCTAssertEqual(valid.data, image)
+    }
+
     func testLargeCorruptAndUnwritableMediaFailWithoutAssetCreation() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

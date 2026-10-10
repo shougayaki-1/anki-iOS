@@ -139,6 +139,10 @@ struct BackupValidation {
         }
         for asset in data.media {
             try dates(asset.createdAt)
+            if let bytes = media[asset.id], asset.mediaType == "image/png" {
+                do { try ImageEncodingPolicy.validateContainer(bytes, type: "public.png") }
+                catch { throw BackupError.invalidData }
+            }
             guard StoredZIP.validPath(asset.relativePath),
                   let imageType = ["image/jpeg": "public.jpeg", "image/png": "public.png"][asset.mediaType],
                   let bytes = media[asset.id], bytes.count <= ImageEncodingPolicy.maximumBytes,

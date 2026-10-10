@@ -17,6 +17,40 @@ enum ImageEncodingPolicy {
         var fileExtension: String { mediaType == "image/png" ? "png" : "jpg" }
     }
 
+    // ImageIO can recover pixels from incomplete PNGs and still report complete.
+    // Validate bounded chunk framing and CRCs before preserving original bytes.
+    static func validateContainer(_ input: Data, type: String?) throws {
+        guard type == "public.png" else { return }
+        let data = Data(input)
+        guard data.count >= 8, Array(data.prefix(8)) == [137, 80, 78, 71, 13, 10, 26, 10] else {
+            throw MediaError.invalidImage
+        }
+        func uint32(_ offset: Int) -> UInt32 {
+            (0..<4).reduce(UInt32(0)) { ($0 << 8) | UInt32(data[offset + $1]) }
+        }
+        var offset = 8, sawHeader = false, sawPixels = false
+        while offset <= data.count - 12 {
+            let length = Int(uint32(offset))
+            guard length <= data.count - offset - 12 else { throw MediaError.invalidImage }
+            let end = offset + 8 + length
+            let name = String(bytes: data[(offset + 4)..<(offset + 8)], encoding: .ascii)
+            guard StoredZIP.crc32(data.subdata(in: (offset + 4)..<end)) == uint32(end) else {
+                throw MediaError.invalidImage
+            }
+            if !sawHeader {
+                guard name == "IHDR", length == 13 else { throw MediaError.invalidImage }
+                sawHeader = true
+            } else if name == "IHDR" { throw MediaError.invalidImage }
+            if name == "IDAT" { sawPixels = true }
+            if name == "IEND" {
+                guard length == 0, sawPixels, end + 4 == data.count else { throw MediaError.invalidImage }
+                return
+            }
+            offset = end + 4
+        }
+        throw MediaError.invalidImage
+    }
+
     static func prepare(_ data: Data, crop: MaskRect? = nil) throws -> Result {
         guard data.count <= maximumBytes else { throw MediaError.tooLarge }
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
@@ -33,6 +67,7 @@ enum ImageEncodingPolicy {
         ) else { throw MediaError.invalidImage }
 
         let sourceType = CGImageSourceGetType(source) as String?
+        try validateContainer(data, type: sourceType)
         let png = sourceType == "public.png"
         let jpeg = sourceType == "public.jpeg"
         let orientation = properties[kCGImagePropertyOrientation] as? Int ?? 1
