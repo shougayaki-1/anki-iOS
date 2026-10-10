@@ -11,6 +11,7 @@
 ## コードで用意した検証（Xcode未実行）
 - SpeechReadoutTests: 英語判定・日本語混在・穴埋め・逆向き・版下互換・設定JSON roundtrip・デッキ/カード優先順位。
 - SpeechRepositoryTests: デッキ設定の永続化、カードvariant別音声設定、学習後に音声設定だけ変更してもFSRS/ReviewLogとカードUUIDは不変、バックアップに音声設定が含まれること、CSVで取り込んだ英文。
+- SpeechUITests: 手動「問題を再生」の表示、未公開の「解答を再生」の非表示、公開後の手動再生・停止、中断でホームに戻れること。
 - App/Unit/Integration の Xcode ビルドと XCTest は現環境で未実施。**パスしなければReady for Reviewに変更しない。**
 
 ## iOS Simulator / 実機で必要な検証
