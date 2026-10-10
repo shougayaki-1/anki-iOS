@@ -88,8 +88,19 @@ final class ImportUITests: XCTestCase {
         XCTAssertGreaterThanOrEqual(confirm.frame.height, 48)
         let previewImage = XCTAttachment(screenshot: app.screenshot())
         previewImage.name = "Large-CSV-pinned-confirm"; previewImage.lifetime = .keepAlways; add(previewImage)
-        let summary = app.staticTexts["importPageSummary"]
-        for _ in 0..<4 where !summary.isHittable { app.swipeUp() }
+        let summary = app.descendants(matching: .any)["importPageSummary"]
+        // A virtualized Form can start below its page header after preview.
+        // Return toward the top, then locate the header in small steps beside inputs.
+        for _ in 0..<6 {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.3))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75)))
+        }
+        for _ in 0..<20 {
+            if summary.exists && summary.isHittable && summary.frame.minY > app.navigationBars.firstMatch.frame.maxY { break }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.7))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.45)))
+        }
+        XCTAssertTrue(summary.waitForExistence(timeout: 5))
         XCTAssertTrue(summary.label.contains("1〜20 / 41行"))
         app.buttons["nextImportPage"].tap()
         XCTAssertTrue(summary.label.contains("21〜40 / 41行"))
