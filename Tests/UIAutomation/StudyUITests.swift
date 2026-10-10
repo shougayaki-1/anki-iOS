@@ -45,6 +45,31 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testNewLimitNavigationRefreshAndRelaunch() {
+        let app = app()
+        create(app, question: "Limit question", answer: "Limit answer")
+        app.tabBars.buttons["設定"].tap()
+        let limit = app.steppers["dailyNewLimit"]
+        XCTAssertTrue(limit.waitForExistence(timeout: 5))
+        for _ in 0..<10 { limit.buttons["dailyNewLimit-Decrement"].tap() }
+        app.tabBars.buttons["ホーム"].tap()
+        let change = app.buttons["changeNewLimit"]
+        scrollTo(change, app: app)
+        XCTAssertTrue(change.waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["newLimitRemaining"].label.contains("1枚"))
+        attach(app, "Issue36-limit-reached")
+        change.tap()
+        XCTAssertTrue(app.navigationBars["学習設定"].waitForExistence(timeout: 5))
+        app.steppers["dailyNewLimit"].buttons["dailyNewLimit-Increment"].tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["start-new"].isEnabled)
+        XCTAssertFalse(app.buttons["changeNewLimit"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["start-new"].isEnabled)
+    }
+
     func testInterruptedReviewPrimaryResumesRevealedDraftWithoutConfirmation() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
@@ -171,7 +196,9 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["completeStudy"].exists)
         let waiting = app.staticTexts["nextShortReview"]
         scrollTo(waiting, app: app); XCTAssertTrue(waiting.exists)
+        scrollTo(app.buttons["start-new"], app: app)
         XCTAssertFalse(app.buttons["start-new"].isEnabled)
+        scrollTo(app.buttons["start-mixed"], app: app)
         XCTAssertFalse(app.buttons["start-mixed"].isEnabled)
         attach(app, "Issue30-short-review-waiting")
         // Remain on Home without polling-triggering gestures or tab changes.
