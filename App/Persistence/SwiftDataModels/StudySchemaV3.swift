@@ -14,7 +14,7 @@ enum StudySchemaV3: VersionedSchema {
         var sha256: String
         var createdAt: Date
         init(image: StoredImage, now: Date) {
-            id = image.id; relativePath = image.relativePath; mediaType = "image/jpeg"
+            id = image.id; relativePath = image.relativePath; mediaType = image.mediaType
             width = image.width; height = image.height; sha256 = image.sha256; createdAt = now
         }
     }
