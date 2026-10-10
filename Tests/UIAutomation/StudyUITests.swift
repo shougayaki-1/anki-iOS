@@ -27,7 +27,7 @@ final class StudyUITests: XCTestCase {
         scrollTo(a, app: app)
         a.tap(); a.typeText(answer)
         app.buttons["saveNote"].tap()
-        XCTAssertTrue(app.staticTexts[question].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", question)).firstMatch.waitForExistence(timeout: 5))
     }
     func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
         if element.exists && [.textField, .textView].contains(element.elementType) { return }
@@ -537,10 +537,24 @@ final class StudyUITests: XCTestCase {
         app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap()
         let pad = app.otherElements["reviewSwipePad"]
         func visiblePad() {
-            for _ in 0..<3 {
-                if pad.exists && pad.frame.minY > 100 && pad.frame.maxY < app.frame.maxY - 10 { break }
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.8))
-                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.3)))
+            for _ in 0..<8 {
+                // safeAreaInset changes visible content, but XCTest still reports
+                // the ScrollView's frame as the whole screen. Use fixed controls
+                // to determine the actual viewport rather than that frame.
+                let progress = app.progressIndicators["sessionProgressBar"]
+                let top = max(app.navigationBars.firstMatch.frame.maxY,
+                              progress.exists ? progress.frame.maxY + 12 : 0)
+                let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+                let bottom = footer.frame.minY - 12
+                if pad.exists && pad.frame.minY >= top && pad.frame.maxY <= bottom { break }
+                // Scroll on ordinary text, outside the dedicated swipe pad.
+                // The pad intentionally reserves vertical drags for grading.
+                let towardTop = !pad.exists || pad.frame.minY >= top
+                let start = towardTop ? min(bottom - 20, pad.exists ? pad.frame.minY - 20 : bottom - 20)
+                    : max(top + 20, pad.frame.maxY + 20)
+                let end = towardTop ? top + 20 : bottom - 20
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: start / app.frame.height))
+                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: end / app.frame.height)))
             }
             XCTAssertTrue(pad.isHittable)
         }
@@ -617,7 +631,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
         XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の学習は完了しました")
+        XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回はここまで")
         XCTAssertEqual(app.buttons["pauseStudy"].label, "閉じる")
         XCTAssertGreaterThan(app.staticTexts["reviewEmptyTitle"].frame.minY, app.frame.height * 0.25)
         XCTAssertGreaterThanOrEqual(app.buttons["finishReview"].frame.height, 56)
@@ -751,6 +765,7 @@ final class StudyUITests: XCTestCase {
             XCTAssertTrue(button.isHittable)
             XCTAssertGreaterThanOrEqual(button.frame.height, 44)
         }
+        XCTAssertLessThan(abs(again.frame.height - hard.frame.height), 8, "Grade names should fit without breaking a word across lines")
         XCTAssertLessThan(abs(again.frame.midY - hard.frame.midY), 8)
         XCTAssertLessThan(abs(good.frame.midY - easy.frame.midY), 8)
         XCTAssertGreaterThan(good.frame.midY, again.frame.midY + 20)

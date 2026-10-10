@@ -6,6 +6,7 @@ struct ReviewView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @State private var swipeGate = ReviewSwipeGate()
+    @State private var swipePadFrame = CGRect.zero
     @GestureState private var swiping = false
     @Environment(\.dynamicTypeSize) private var typeSize
     enum ReadingFocus: Hashable { case question, answer }
@@ -94,6 +95,7 @@ struct ReviewView: View {
                     .padding(.horizontal, 24).padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .systemBackground))
+                    .background { ReviewFixedAreaGestureShield() }
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -113,10 +115,11 @@ struct ReviewView: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, typingFocused ? 6 : 10)
                     .background(Color(uiColor: .systemBackground))
+                    .background { ReviewFixedAreaGestureShield() }
                     .overlay(alignment: .top) { Divider() }
                 } else if let review = store.review, review.card == nil {
                     Button { store.completeSession() } label: {
-                        Text(review.emptyState?.reason == .waiting ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
+                        Text(review.emptyState?.reason == .waiting || review.sessionProgress.map { $0.limit > 0 && !$0.isComplete } == true ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
                             .font(.headline).multilineTextAlignment(.center)
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, minHeight: 56)
@@ -127,6 +130,7 @@ struct ReviewView: View {
                     .accessibilityIdentifier("finishReview")
                     .padding(.horizontal, 24).padding(.vertical, 16)
                     .background(Color(uiColor: .systemBackground))
+                    .background { ReviewFixedAreaGestureShield() }
                 }
             }
             .scrollDisabled(swiping)
@@ -230,17 +234,26 @@ struct ReviewView: View {
         }
         .padding(16).frame(maxWidth: .infinity, minHeight: 260)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(key: ReviewSwipePadFrameKey.self, value: proxy.frame(in: .global))
+            }
+        }
+        .onPreferenceChange(ReviewSwipePadFrameKey.self) { swipePadFrame = $0 }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore).accessibilityLabel("スワイプ操作領域")
         .accessibilityIdentifier("reviewSwipePad")
-        .highPriorityGesture(DragGesture(minimumDistance: 0)
-            .updating($swiping) { _, active, _ in active = true }
-            .onChanged { _ in
-                guard !voiceOver, imageAvailable(item) else { return }
+        .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .global)
+            .updating($swiping) { value, active, _ in
+                active = swipePadFrame.contains(value.startLocation)
+            }
+            .onChanged { value in
+                guard swipePadFrame.contains(value.startLocation), !voiceOver, imageAvailable(item) else { return }
                 swipeGate.begin(id: item.cardID, revealed: review.answerRevealed)
             }
             .onEnded { value in
-                guard !voiceOver, imageAvailable(item), let current = store.review, let card = current.card else {
+                guard swipePadFrame.contains(value.startLocation), !voiceOver, imageAvailable(item),
+                      let current = store.review, let card = current.card else {
                     swipeGate.cancel(); return
                 }
                 guard let action = swipeGate.finish(id: card.cardID, revealed: current.answerRevealed,
@@ -307,6 +320,21 @@ struct ReviewView: View {
 }
 
 
+
+private struct ReviewSwipePadFrameKey: PreferenceKey {
+    static let defaultValue = CGRect.zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
+}
+
+// Gaps and padding in fixed controls must not forward a drag to content
+// underneath them. The background receives those gestures; buttons stay above it.
+private struct ReviewFixedAreaGestureShield: View {
+    var body: some View {
+        Color.clear.contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { _ in })
+            .accessibilityHidden(true)
+    }
+}
 
 private struct ReviewActionBar: View {
     let answerRevealed: Bool
@@ -375,8 +403,7 @@ private struct ReviewActionBar: View {
                 .frame(maxWidth: .infinity, minHeight: 56)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.borderedProminent)
-        .tint(gradeColor(grade))
+        .buttonStyle(ReviewGradeButtonStyle(color: gradeColor(grade)))
         .foregroundStyle(.white)
         .frame(minWidth: compact ? 72 : 0)
         .accessibilityLabel(gradeTitle(grade))
@@ -419,6 +446,19 @@ private struct ReviewActionBar: View {
         case .good: return Color("GradeGood")
         case .easy: return Color("GradeEasy")
         }
+    }
+}
+
+// System prominent-button padding scales aggressively at accessibility sizes.
+// Explicit insets preserve full grade names and leave more space for the question.
+private struct ReviewGradeButtonStyle: ButtonStyle {
+    let color: Color
+    @Environment(\.isEnabled) private var isEnabled
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 6).padding(.vertical, 8)
+            .background(color.opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45),
+                        in: RoundedRectangle(cornerRadius: 14))
     }
 }
 
