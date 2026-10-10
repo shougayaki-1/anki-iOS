@@ -33,28 +33,16 @@ struct MainTabs: View {
 struct HomeView: View {
     @Bindable var store: StudyStore
     @State private var replacingWith: StudyMode?
+    @State private var editingScope = false
 
     var body: some View {
         NavigationStack {
             List {
                 Section("学習対象") {
-                    Picker("デッキ（子孫を含む）", selection: $store.scope.deckID) {
-                        Text("すべて").tag(UUID?.none)
-                        ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
-                    }.accessibilityIdentifier("studyDeckPicker")
-                    if !store.tags.isEmpty {
-                        DisclosureGroup("タグ（選択したすべてを含む）") {
-                            ForEach(store.tags) { tag in
-                                Toggle(tag.name, isOn: Binding(get: { store.scope.tagIDs.contains(tag.id) }, set: { selected in
-                                    if selected { store.scope.tagIDs.append(tag.id) }
-                                    else { store.scope.tagIDs.removeAll { $0 == tag.id } }
-                                    store.perform { }
-                                }))
-                            }
-                        }
-                    }
+                    Button("学習対象を変更") { editingScope = true }
+                        .accessibilityIdentifier("openStudyFilter")
                 }
-                Section("今日の学習") {
+                Section("今日の学習（全デッキ）") {
                     LabeledContent("復習待ち", value: "\(store.counts.due)枚").accessibilityIdentifier("dueCount")
                     LabeledContent("今日の新規残数", value: "\(store.counts.newRemaining)枚")
                         .accessibilityIdentifier("newCount")
@@ -88,7 +76,7 @@ struct HomeView: View {
                 }
             }
             .navigationTitle("ホーム")
-            .onChange(of: store.scope.deckID) { _, _ in store.perform { } }
+            .sheet(isPresented: $editingScope) { LearningScopeSheet(store: store, initial: store.scope) }
             .confirmationDialog("中断中の学習を新しいモードに切り替えますか？",
                                 isPresented: Binding(get: { replacingWith != nil }, set: { if !$0 { replacingWith = nil } })) {
                 if let mode = replacingWith {
@@ -100,6 +88,46 @@ struct HomeView: View {
                 while !Task.isCancelled {
                     store.perform { }
                     try? await Task.sleep(for: .seconds(15))
+                }
+            }
+        }
+    }
+}
+
+struct LearningScopeSheet: View {
+    @Bindable var store: StudyStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: LearningScope
+
+    init(store: StudyStore, initial: LearningScope) {
+        self.store = store; _draft = State(initialValue: initial)
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("デッキ（子孫を含む）") {
+                    Picker("デッキ", selection: $draft.deckID) {
+                        Text("すべて").tag(UUID?.none)
+                        ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
+                    }.accessibilityIdentifier("studyDeckPicker")
+                }
+                Section("タグ（選択したすべてを含む）") {
+                    ForEach(store.tags) { tag in
+                        Toggle(tag.name, isOn: Binding(get: { draft.tagIDs.contains(tag.id) }, set: { selected in
+                            if selected { draft.tagIDs.append(tag.id) }
+                            else { draft.tagIDs.removeAll { $0 == tag.id } }
+                        })).accessibilityIdentifier("studyTag-\(tag.name)")
+                    }
+                }
+                Button("リセット") { draft = LearningScope() }.accessibilityIdentifier("resetStudyFilter")
+            }
+            .navigationTitle("学習対象")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { dismiss() }.accessibilityIdentifier("cancelStudyFilter")
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("適用") { if store.applyScope(draft) { dismiss() } }.accessibilityIdentifier("applyStudyFilter")
                 }
             }
         }

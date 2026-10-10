@@ -31,14 +31,14 @@ final class StudyStore {
         self.storageLocation = storageLocation
         self.notifications = notifications ?? NotificationService()
         try repository.initialize(now: clock())
-        scope = try repository.scope()
+        scope = try repository.homeScope()
         try reload()
     }
 
     func reload() throws {
         repository.calendar = .current
         decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id)) }
-        if let id = scope.deckID, !decks.contains(where: { $0.id == id }) { scope.deckID = nil }
+        scope = try repository.homeScope()
         notes = try repository.noteItems()
         tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
         counts = try repository.scopedCounts(scope: scope, now: clock())
@@ -54,6 +54,10 @@ final class StudyStore {
         catch { failure = error.localizedDescription; return false }
         do { try reload(); return true }
         catch { failure = "処理は完了しましたが画面を更新できません。再表示してください。\n" + error.localizedDescription; return false }
+    }
+    @discardableResult
+    func applyScope(_ value: LearningScope) -> Bool {
+        perform { try repository.applyHomeScope(value) }
     }
     func start(_ mode: StudyMode) {
         if perform({ try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
@@ -97,7 +101,7 @@ final class StudyStore {
             let container = try BackupService.restore(backup, location: storageLocation, mediaStore: repository.mediaStore, now: clock())
             repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
             showingReview = false
-            do { scope = try repository.scope(); try reload() }
+            do { scope = try repository.homeScope(); try reload() }
             catch { failure = "復元は保存済みですが、画面の更新に失敗しました: " + error.localizedDescription }
         } catch { scheduleNotifications(); throw error }
     }

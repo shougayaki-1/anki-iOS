@@ -42,6 +42,37 @@ final class StudyUITests: XCTestCase {
         image.lifetime = .keepAlways; add(image)
     }
 
+    func testHomeFilterCancelApplyRestartResetPreservesInterruptedDraft() {
+        let app = app()
+        create(app, question: "Filter question", answer: "Filter answer")
+        app.buttons["デッキ管理"].tap(); app.buttons["デッキ追加"].tap()
+        app.textFields["deckNameInput"].tap(); app.textFields["deckNameInput"].typeText("Empty deck")
+        app.buttons["保存"].tap(); app.buttons["閉じる"].firstMatch.tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["文字入力"].tap()
+        let input = app.descendants(matching: .any)["typedAnswer"]
+        input.tap(); input.typeText("Preserved draft")
+        if app.keyboards.firstMatch.exists { app.buttons["完了"].firstMatch.tap() }
+        app.buttons["pauseStudy"].tap()
+        func selectEmpty() {
+            app.buttons["openStudyFilter"].tap()
+            app.buttons["studyDeckPicker"].tap(); app.buttons["Empty deck"].tap()
+        }
+        selectEmpty(); app.buttons["cancelStudyFilter"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        selectEmpty(); app.buttons["applyStudyFilter"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("0枚"))
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("0枚"))
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); XCTAssertEqual(input.value as? String, "Preserved draft")
+        app.buttons["pauseStudy"].tap(); app.buttons["openStudyFilter"].tap()
+        app.buttons["resetStudyFilter"].tap(); app.buttons["applyStudyFilter"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+    }
+
     func testCreateLearnUndoRestartEditAndDelete() {
         let app = app()
         create(app, question: "Capital of Japan?", answer: "Tokyo")

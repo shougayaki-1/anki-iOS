@@ -11,6 +11,53 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.initialize(now: now); return repo
     }
 
+    func testHomeFilterPersistsSeparatelyFromSessionAndGlobalProgress() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        let other = try repo.createDeck(name: "別", now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", tagNames: ["A", "B"]), now: now)
+        try repo.createNote(NoteInput(deckID: other, question: "Other", answer: "A"), now: now)
+        let tags = try repo.tags().map(\.id)
+        let original = LearningScope(deckID: root, tagIDs: tags)
+        try repo.applyHomeScope(original)
+        try repo.start(mode: .new, scope: original, now: now)
+        try repo.updateDraft(revealed: true, now: now); try repo.grade(.again, now: now)
+        try repo.updateDraft(mode: .typing, text: "keep", revealed: true, now: now)
+        let before = try XCTUnwrap(repo.session())
+        let undo = before.undoLogID, touched = before.touchedCardIDs
+        try repo.applyHomeScope(LearningScope(deckID: other))
+        let reopened = StudyRepository(container: container)
+        XCTAssertEqual(try reopened.homeScope().deckID, other)
+        XCTAssertEqual(try reopened.scope(), original)
+        XCTAssertEqual(try reopened.session()?.typedDraft, "keep")
+        XCTAssertEqual(try reopened.session()?.undoLogID, undo)
+        XCTAssertEqual(try reopened.session()?.touchedCardIDs, touched)
+        XCTAssertEqual(try reopened.scopedCounts(scope: LearningScope(deckID: other), now: now).learnedToday, 1)
+        var settings = try reopened.settings(); settings.dailyNewLimit = 1
+        try reopened.updateSettings(settings)
+        XCTAssertEqual(try reopened.scopedCounts(scope: LearningScope(deckID: other), now: now).newRemaining, 0)
+        try reopened.resume(now: now.addingTimeInterval(61))
+        XCTAssertEqual(try reopened.presentation(now: now.addingTimeInterval(61))?.card?.deckID, child)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: reopened, now: now, appVersion: "28"))
+        XCTAssertEqual(try JSONDecoder().decode(StudyOptions.self, from: backup.data.options[0].payload).homeScope?.deckID, other)
+    }
+    func testHomeFilterSaveFailureAndInvalidReferences() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        try repo.applyHomeScope(LearningScope(deckID: root))
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.applyHomeScope(LearningScope()))
+        XCTAssertEqual(try repo.homeScope().deckID, root)
+        repo.save = { try $0.save() }
+        try repo.applyHomeScope(LearningScope(deckID: UUID(), tagIDs: [UUID()]))
+        XCTAssertEqual(try repo.homeScope(), LearningScope())
+        try repo.applyHomeScope(LearningScope(deckID: root))
+        try repo.deleteDeck(id: root, moveNotesTo: nil, now: now)
+        XCTAssertEqual(try repo.homeScope(), LearningScope())
+    }
+
     func testHierarchyScopeAndCyclePreventionPreserveCardIDs() throws {
         let repo = try fixture()
         let root = try repo.decks()[0].id
