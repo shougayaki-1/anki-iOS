@@ -154,7 +154,7 @@ extension BackupExtraPreferences {
 
 extension BackupMediaAsset {
     @MainActor func insert(into context: ModelContext) throws {
-        let model = MediaAsset(image: StoredImage(id: id, relativePath: relativePath, width: width, height: height, sha256: sha256), now: createdAt)
+        let model = MediaAsset(image: StoredImage(id: id, relativePath: relativePath, mediaType: mediaType, width: width, height: height, sha256: sha256), now: createdAt)
         model.id = id
         model.relativePath = relativePath
         model.mediaType = mediaType

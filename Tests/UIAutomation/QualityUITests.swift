@@ -1,6 +1,60 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testDeckManagerShowsFolderTreeAndSupportsChildCreation() {
+        deckTreeScenario(accessibility: false)
+    }
+
+    func testDeckManagerTreeLargestDynamicTypeKeepsDisclosureAndEditingSeparate() {
+        deckTreeScenario(accessibility: true)
+    }
+
+    private func deckTreeScenario(accessibility: Bool) {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        if accessibility { app.launchArguments.append("-study-test-accessibility") }
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["デッキ管理"].tap()
+
+        // Toolbar plus always creates a root, independent of the selected row.
+        app.buttons["デッキ追加"].tap()
+        let name = app.textFields["deckNameInput"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap(); name.typeText("英語")
+        app.buttons["保存"].tap()
+        let root = app.buttons.matching(NSPredicate(format: "label == %@", "英語を編集")).firstMatch
+        XCTAssertTrue(root.waitForExistence(timeout: 5))
+        root.press(forDuration: 1.1)
+        let addChild = app.buttons["子デッキを追加"]
+        XCTAssertTrue(addChild.waitForExistence(timeout: 5))
+        addChild.tap()
+        let childName = app.textFields["deckNameInput"]
+        XCTAssertTrue(childName.waitForExistence(timeout: 5))
+        childName.tap(); childName.typeText("Final Draft")
+        app.buttons["保存"].tap()
+
+        let child = app.buttons.matching(NSPredicate(format: "label == %@", "英語 / Final Draftを編集")).firstMatch
+        let collapse = app.buttons.matching(NSPredicate(format: "label == %@", "英語を折りたたむ")).firstMatch
+        XCTAssertTrue(collapse.waitForExistence(timeout: 5))
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
+        scrollTo(collapse, app: app)
+        XCTAssertGreaterThanOrEqual(collapse.frame.width, 44)
+        XCTAssertGreaterThanOrEqual(collapse.frame.height, 44)
+        collapse.tap()
+        XCTAssertFalse(child.exists)
+        let expand = app.buttons.matching(NSPredicate(format: "label == %@", "英語を展開する")).firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5))
+        expand.tap()
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
+        scrollTo(child, app: app)
+        if accessibility { attach(app, name: "Issue40-largest-type-tree") }
+        child.tap()
+        XCTAssertTrue(app.textFields["deckNameInput"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textFields["deckNameInput"].value as? String, "Final Draft")
+    }
+
     func testNativeIdentityDeckCancellationAndEmptySearch() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]
@@ -93,11 +147,31 @@ final class QualityUITests: XCTestCase {
         // Form text fields scroll themselves into view when tapped, including
         // when the keyboard covers part of a large Dynamic Type form.
         if element.exists && [.textField, .textView].contains(element.elementType) { return }
-        for _ in 0..<10 where !element.isHittable {
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.75))
-                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.02, dy: 0.25)))
+        var missingSearches = 0
+        for _ in 0..<35 {
+            var top = (app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? app.frame.minY) + 8
+            let progress = app.progressIndicators["sessionProgressBar"]
+            if progress.exists { top = max(top, progress.frame.maxY + 8) }
+            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer" || element.identifier == "confirmImport")
+            if fixedControl && element.isHittable { return }
+            var bottom = app.frame.maxY - 16
+            if app.buttons["pauseStudy"].exists {
+                let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+                if footer.exists { bottom = min(bottom, footer.frame.minY - 8) }
+            } else if app.tabBars.firstMatch.exists && app.tabBars.firstMatch.isHittable {
+                bottom = min(bottom, app.tabBars.firstMatch.frame.minY - 8)
+            }
+            if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom { return }
+            let down = element.exists ? element.frame.minY < top : missingSearches < 6
+            if !element.exists { missingSearches += 1 }
+            let low = top + 0.2 * max(40, bottom - top)
+            let high = top + 0.8 * max(40, bottom - top)
+            let start = (down ? low : high) / app.frame.height
+            let end = (down ? high : low) / app.frame.height
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: start))
+                .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: end)))
         }
-        XCTAssertTrue(element.exists)
+        XCTAssertTrue(element.exists && element.isHittable, "Required control must be visible")
     }
     func attach(_ app: XCUIApplication, name: String) {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name
@@ -166,7 +240,12 @@ final class QualityUITests: XCTestCase {
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15)); app.tabBars.buttons["ライブラリ"].tap()
         app.buttons["openImport"].tap(); app.buttons["selectImportFile"].tap()
         selectFile("UITest-\(id)", app: app)
-        XCTAssertTrue(app.buttons["previewImport"].waitForExistence(timeout: 10)); app.buttons["previewImport"].tap()
+        // Wait for the document picker to finish dismissing and populate the form.
+        expectation(for: NSPredicate(format: "value CONTAINS %@", "CSV file question"),
+                    evaluatedWith: app.textViews["importText"])
+        waitForExpectations(timeout: 10)
+        scrollTo(app.buttons["previewImport"], app: app)
+        XCTAssertTrue(app.buttons["previewImport"].exists); app.buttons["previewImport"].tap()
         let confirm = app.buttons["confirmImport"]; scrollTo(confirm, app: app); confirm.tap()
         app.buttons["commitImport"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
@@ -230,15 +309,27 @@ final class QualityUITests: XCTestCase {
         XCTAssertEqual(app.staticTexts["modelAnswer"].label, "Tokyo")
         attach(app, name: "Phase5-dark-largest-type-answer")
         try app.performAccessibilityAudit(for: [.contrast, .sufficientElementDescription]) { issue in
-            guard let element = issue.element else { return false }
+            guard let element = issue.element else {
+                print("Review audit has no associated element: \(issue.auditType)")
+                return false
+            }
+            print("Review audit: \(issue.auditType), id=\(element.identifier), label=\(element.label), type=\(element.elementType), frame=\(element.frame)")
             if !element.exists || !element.isHittable { return true }
-            let top = app.navigationBars.firstMatch.frame.maxY
-            let viewport = CGRect(x: app.frame.minX, y: top, width: app.frame.width, height: app.frame.maxY - top)
-            // ScrollView keeps nodes scrolled behind the translucent navigation bar.
+            var top = app.navigationBars.firstMatch.frame.maxY
+            let progress = app.progressIndicators["sessionProgressBar"]
+            if progress.exists { top = max(top, progress.frame.maxY) }
+            let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+            let bottom = footer.exists ? footer.frame.minY : app.frame.maxY
+            let isFixedAction = element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer"
+            if isFixedAction { return false }
+            let viewport = CGRect(x: app.frame.minX, y: top, width: app.frame.width, height: max(0, bottom - top))
+            // ScrollView retains nodes hidden beneath the fixed progress and action bars.
+            // Audit fixed actions themselves, but exclude occluded body content.
             return !viewport.contains(element.frame)
         }
         let grade = app.buttons["grade-3"]; scrollTo(grade, app: app); grade.tap()
         app.buttons["pauseStudy"].tap(); app.tabBars.buttons["記録"].tap()
+        scrollTo(app.staticTexts["todayAnswerCount"], app: app)
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
     }
 }

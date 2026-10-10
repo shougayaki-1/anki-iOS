@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import ImageIO
 import SwiftData
 @testable import AnkiIOS
 
@@ -184,5 +185,154 @@ final class MediaRepositoryTests: XCTestCase {
         try repo.discardEditorDraft(key: "new")
         XCTAssertTrue(try repo.assets().isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+    func testPNGAndJPEGOriginalBytesStayUntouched() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MediaStore(root: dir)
+        let png = imageData()
+        let image = try XCTUnwrap(UIImage(data: png))
+        let jpg = try XCTUnwrap(image.jpegData(compressionQuality: 0.97))
+        for (bytes, kind, ext) in [(png, "image/png", "png"), (jpg, "image/jpeg", "jpg")] {
+            let stored = try store.store(bytes)
+            XCTAssertEqual(stored.mediaType, kind)
+            XCTAssertEqual(URL(fileURLWithPath: stored.relativePath).pathExtension, ext)
+            XCTAssertEqual(try Data(contentsOf: store.url(for: stored.relativePath)), bytes)
+            XCTAssertEqual(stored.sha256, BackupArchive.hash(bytes))
+        }
+    }
+
+    func testExifJPEGKeepsBytesAndWorksWithCropOCRAndBackup() async throws {
+        func jpeg(_ image: UIImage, orientation: Int) throws -> Data {
+            let data = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, try XCTUnwrap(image.cgImage),
+                                      [kCGImagePropertyOrientation: orientation,
+                                       kCGImageDestinationLossyCompressionQuality: 0.97] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            return data as Data
+        }
+        let original = try XCTUnwrap(UIImage(data: imageData()))
+        for orientation in 1...8 {
+            let bytes = try jpeg(original, orientation: orientation)
+            let prepared = try ImageEncodingPolicy.prepare(bytes)
+            XCTAssertEqual(prepared.data, bytes, "EXIF orientation must not cause JPEG recompression")
+            XCTAssertEqual(prepared.width, 800)
+            XCTAssertEqual(prepared.height, 400)
+        }
+        // Rotate encoded pixels counterclockwise, then attach EXIF right rotation.
+        // The displayed text is upright, just as with a portrait camera JPEG.
+        let sideways = UIImage(cgImage: try XCTUnwrap(original.cgImage), scale: 1, orientation: .left)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let encodedPixels = UIGraphicsImageRenderer(size: CGSize(width: 400, height: 800), format: format).image { _ in
+            sideways.draw(in: CGRect(x: 0, y: 0, width: 400, height: 800))
+        }
+        let bytes = try jpeg(encodedPixels, orientation: 6)
+        XCTAssertEqual(UIImage(data: bytes)?.imageOrientation, .right)
+        let cropped = try ImageEncodingPolicy.prepare(bytes, crop: MaskRect(x: 0, y: 0, width: 0.5, height: 0.5))
+        XCTAssertEqual(cropped.width, 400)
+        XCTAssertEqual(cropped.height, 200)
+        XCTAssertEqual(UIImage(data: cropped.data)?.imageOrientation, .up)
+        let recognized = try await OCRService.recognize(bytes)
+        XCTAssertTrue(recognized.text.contains("TOKYO"), recognized.text)
+        XCTAssertTrue(recognized.text.contains("CAPITAL"), recognized.text)
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: media)
+        try repo.initialize(now: now)
+        let assetID = try repo.addImage(bytes, now: now)
+        let mask = ImageMask(rect: MaskRect(x: 0.1, y: 0.1, width: 0.5, height: 0.25))
+        try repo.createNote(NoteInput(deckID: try repo.decks()[0].id, kind: .imageOcclusion,
+                                      question: "Rotated image", answer: "Tokyo", imageID: assetID, masks: [mask]), now: now)
+        let before = try repo.noteItems()
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "audit"))
+        let container = try BackupService.restore(backup, location: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")), mediaStore: media, now: now)
+        let restored = StudyRepository(container: container, mediaStore: media)
+        XCTAssertEqual(try Data(contentsOf: restored.assetURL(id: assetID)), bytes)
+        XCTAssertEqual(try restored.assets()[0].width, 400)
+        XCTAssertEqual(try restored.assets()[0].height, 800)
+        XCTAssertEqual(Set(try restored.noteItems().map(\.cardID)), Set(before.map(\.cardID)))
+        XCTAssertEqual(try restored.noteItems()[0].sourceContent.masks, [mask])
+    }
+
+    func testTransparentPNGRemainsLosslessAndCroppedPNGIsStillPNG() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100), format: format).image { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 50, y: 25, width: 100, height: 50))
+        }
+        let bytes = try XCTUnwrap(image.pngData())
+        let result = try ImageEncodingPolicy.prepare(bytes)
+        XCTAssertEqual(result.mediaType, "image/png")
+        XCTAssertEqual(result.data, bytes)
+        let rect = MaskRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
+        let cropped = try ImageEncodingPolicy.prepare(bytes, crop: rect)
+        XCTAssertEqual(cropped.mediaType, "image/png")
+        XCTAssertEqual(cropped.width, 100)
+        XCTAssertEqual(cropped.height, 50)
+        XCTAssertNotNil(UIImage(data: cropped.data)?.cgImage)
+        // Mask coordinates stay proportional after resampling/cropping.
+        XCTAssertEqual(rect.frame(in: CGSize(width: 400, height: 200)).width,
+                       2 * rect.frame(in: CGSize(width: 200, height: 100)).width)
+    }
+
+    func testPNGRequiresCompleteChunksEndMarkerAndCorrectCRC() throws {
+        let image = imageData()
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(Data(image.dropLast(12))))
+        var badCRC = image
+        badCRC[29] ^= 1 // IHDR checksum; pixel dimensions are still decodable.
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(badCRC))
+        let valid = try ImageEncodingPolicy.prepare(image)
+        XCTAssertEqual(valid.data, image)
+    }
+
+    func testLargeCorruptAndUnwritableMediaFailWithoutAssetCreation() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = imageData()
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(Data(repeating: 0, count: 20_000_001))) { error in
+            guard case MediaError.tooLarge = error else { return XCTFail("Expected size limit") }
+        }
+        XCTAssertThrowsError(try ImageEncodingPolicy.prepare(Data(image.prefix(image.count / 2))))
+        let store = MediaStore(root: root)
+        try FileManager.default.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("blocked".utf8).write(to: root)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: store)
+        try repo.initialize(now: now)
+        XCTAssertThrowsError(try repo.addImage(image, now: now)) { error in
+            guard case MediaError.saveFailed = error else { return XCTFail("Expected save failure") }
+        }
+        XCTAssertTrue(try repo.assets().isEmpty)
+    }
+
+    func testReferencedPNGSurvivesOrphanCleanup() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = MediaStore(root: dir)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: store)
+        try repo.initialize(now: now)
+        let id = try repo.addImage(imageData(), now: now)
+        let deck = try XCTUnwrap(repo.decks().first).id
+        try repo.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "Draft", imageID: id), now: now)
+        let orphan = try store.store(imageData())
+        try repo.cleanupUnusedMedia()
+        XCTAssertEqual(try repo.assets().first?.mediaType, "image/png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try repo.assetURL(id: id).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: try store.url(for: orphan.relativePath).path))
+    }
+    func testStoredTextScreenshotOCRMatchesOriginal() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let image = imageData()
+        let expected = try await OCRService.recognize(image)
+        let result = try MediaStore(root: root).store(image)
+        let bytes = try Data(contentsOf: MediaStore(root: root).url(for: result.relativePath))
+        let recognized = try await OCRService.recognize(bytes)
+        XCTAssertEqual(recognized.text, expected.text)
+        XCTAssertTrue(recognized.text.uppercased().contains("TOKYO"))
     }
 }

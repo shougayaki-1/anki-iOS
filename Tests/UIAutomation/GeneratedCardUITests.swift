@@ -46,7 +46,11 @@ final class GeneratedCardUITests: XCTestCase {
         app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
         XCTAssertTrue(q.waitForExistence(timeout: 5))
         XCTAssertTrue((q.value as? String ?? "").contains("{{c1::Tokyo}}"))
-        scroll(app, up: false); app.buttons["previewNote"].tap()
+        let preview = app.buttons["previewNote"]
+        for _ in 0..<15 where !preview.exists || !preview.isHittable { scroll(app, up: true) }
+        XCTAssertTrue(preview.waitForExistence(timeout: 5))
+        XCTAssertTrue(preview.isHittable)
+        preview.tap()
         XCTAssertTrue(app.staticTexts["previewQuestion"].waitForExistence(timeout: 5))
         app.buttons["previewReveal"].tap()
         XCTAssertEqual(app.staticTexts["previewAnswer"].label, "Tokyo")
@@ -60,7 +64,7 @@ final class GeneratedCardUITests: XCTestCase {
         app.buttons["grade-4"].tap(); app.buttons["undoReview"].tap()
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.terminate(); app.launch()
-        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["completeStudy"].waitForExistence(timeout: 15))
         app.tabBars.buttons["記録"].tap()
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
         app.tabBars.buttons["ライブラリ"].tap()
@@ -165,7 +169,9 @@ final class GeneratedCardUITests: XCTestCase {
         for _ in 0..<4 where !app.buttons["grade-4"].isHittable { scroll(app, up: true) }
         app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.terminate(); app.launch()
-        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        // The single mask has already been graded Easy: its saved session is
+        // complete, rather than resumable with another available card.
+        XCTAssertTrue(app.buttons["completeStudy"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ライブラリ"].tap()
         app.staticTexts["画像の隠した部分を答えてください"].tap()
         XCTAssertTrue(app.images["対象のマスクを開いた画像"].waitForExistence(timeout: 5))

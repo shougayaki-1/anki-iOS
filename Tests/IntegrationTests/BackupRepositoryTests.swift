@@ -167,4 +167,36 @@ final class BackupRepositoryTests: XCTestCase {
         XCTAssertThrowsError(try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore))
         XCTAssertEqual(try repo.logs().count, 1)
     }
+    func testLegacyJPEGAndNewPNGMixedBackupRestore() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let canvas = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40)).image { context in
+            UIColor.blue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+        }
+        let png = try XCTUnwrap(canvas.pngData())
+        let jpg = try XCTUnwrap(canvas.jpegData(compressionQuality: 0.9))
+        let a = try source.addImage(png, now: now)
+        let b = try source.addImage(jpg, now: now)
+        let deck = try XCTUnwrap(source.decks().first).id
+        try source.saveEditorDraft(key: "new", input: NoteInput(deckID: deck, question: "PNG", imageID: a), now: now)
+        try source.createNote(NoteInput(deckID: deck, question: "JPEG", answer: "A", imageID: b), now: now)
+        let zip = try await BackupService.export(repository: source, now: now, appVersion: "test")
+        let decoded = try BackupArchive.decode(zip)
+        XCTAssertEqual(decoded.media[a], png)
+        XCTAssertEqual(decoded.media[b], jpg)
+        XCTAssertEqual(Set(decoded.data.media.map(\.mediaType)), Set(["image/png", "image/jpeg"]))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(decoded, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: a)), png)
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: b)), jpg)
+        XCTAssertTrue(try reopened.assets().contains { $0.relativePath.hasSuffix(".png") })
+        XCTAssertTrue(try reopened.assets().contains { $0.relativePath.hasSuffix(".jpg") })
+        try reopened.cleanupUnusedMedia()
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: a)), png)
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: b)), jpg)
+    }
 }

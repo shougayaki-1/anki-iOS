@@ -72,7 +72,8 @@ final class StudyRepository {
         return StudySettings(desiredRetention: p.desiredRetention, dailyNewLimit: p.dailyNewLimit,
                              dailyGoal: p.dailyGoal, dayStartHour: p.dayStartHour, siblingBuryEnabled: options.siblingBuryEnabled,
                              notification: options.notification ?? NotificationOptions(), hapticsMode: options.hapticsMode ?? .standard,
-                             reviewAppearance: options.reviewAppearance ?? ReviewAppearance())
+                             reviewAppearance: options.reviewAppearance ?? ReviewAppearance(),
+                             speech: options.speech ?? SpeechPreferences())
     }
     func updateSettings(_ value: StudySettings) throws {
         guard (0.8...0.97).contains(value.desiredRetention), StudySettings.newLimitRange.contains(value.dailyNewLimit),
@@ -86,6 +87,7 @@ final class StudyRepository {
             var options = try options(); options.schemaVersion = 2; options.siblingBuryEnabled = value.siblingBuryEnabled
             options.notification = value.notification; options.hapticsMode = value.hapticsMode
             options.reviewAppearance = value.reviewAppearance
+            options.speech = value.speech
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(options)
             } else { context.insert(try ExtraPreferences(options: options)) }
@@ -110,9 +112,13 @@ final class StudyRepository {
         guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
         let content = TextContent(question: input.question, answer: input.answer,
                                   explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
-                                  imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks)
-        _ = try CardGeneration.variants(kind: input.kind, content: content)
-        return try JSONEncoder().encode(content)
+                                  imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks,
+                                  speechOverrides: input.speechOverrides, speechQuestion: input.speechQuestion,
+                                  speechAnswer: input.speechAnswer)
+        let variants = Set(try CardGeneration.variants(kind: input.kind, content: content))
+        var sanitized = content
+        sanitized.speechOverrides = input.speechOverrides?.filter { variants.contains($0.key) }
+        return try JSONEncoder().encode(sanitized)
     }
 
     @discardableResult
@@ -249,7 +255,23 @@ final class StudyRepository {
                                                         settings: settings(), now: now)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), now: Date) throws {
+    // A fixed number of confirmed answers provides an honest end to each study set.
+    // Unlike the dynamic FSRS due queue, this count cannot grow from short-term repeats.
+    private func lastReviewSequence() throws -> Int {
+        var descriptor = FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first?.sequence ?? 0
+    }
+
+    func sessionProgress() throws -> SessionAnswerProgress? {
+        guard try session() != nil, let saved = try options().activeSessionProgress else { return nil }
+        let startSequence = saved.startSequence
+        let answered = try context.fetchCount(FetchDescriptor<StudyReviewLog>(
+            predicate: #Predicate { $0.sequence > startSequence }))
+        return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
+    }
+
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, now: Date) throws {
         try transaction {
             let normalized = try normalizedScope(scope)
             let available = try ReviewQueueBuilder(calendar: calendar).queue(
@@ -261,9 +283,27 @@ final class StudyRepository {
             try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
+            var saved = try options()
+            let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
+            guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
+            saved.activeSessionProgress = StudySessionProgressSnapshot(
+                startSequence: try lastReviewSequence(), answerLimit: limit)
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+                row.payload = try JSONEncoder().encode(saved)
+            } else { context.insert(try ExtraPreferences(options: saved)) }
             try selectNext(draft: draft, now: now)
         }
     }
+    func startAnotherSession(now: Date) throws {
+        guard let draft = try session(), draft.cardID == nil,
+              let mode = StudyMode(rawValue: draft.mode) else { throw StudyError.noSession }
+        let originalScope = try scope()
+        let limit = try options().activeSessionProgress?.answerLimit
+        // start validates candidates before replacing anything and rolls back a
+        // failed save, so an empty/failed restart retains the final Undo.
+        try start(mode: mode, scope: originalScope, answerLimit: limit, now: now)
+    }
+
     func completeSession(now: Date) throws {
         try transaction {
             guard let draft = try session(), draft.cardID == nil else { throw StudyError.noSession }
@@ -272,6 +312,11 @@ final class StudyRepository {
             guard draft.cardID == nil else { throw StudyError.noAvailableCards }
             context.delete(draft)
             for row in try context.fetch(FetchDescriptor<SessionScope>()) { context.delete(row) }
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+                var saved = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
+                saved.activeSessionProgress = nil
+                row.payload = try JSONEncoder().encode(saved)
+            }
         }
     }
     func resume(now: Date) throws {
@@ -294,6 +339,7 @@ final class StudyRepository {
         return true
     }
     private func nextCardIDs(draft: SessionDraft, now: Date) throws -> [UUID] {
+        if let progress = try sessionProgress(), progress.isComplete { return [] }
         let cards = try queueCards(), settings = try settings()
         return try ReviewQueueBuilder(calendar: calendar).queue(
             cards: scopedQueueCards(scope(), cards: cards), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
@@ -342,6 +388,7 @@ final class StudyRepository {
                   let card = try cards().first(where: { $0.id == cardID && !$0.isSuspended }) else {
                 throw StudyError.noSession
             }
+            let progressBefore = try sessionProgress()
             let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
@@ -355,7 +402,7 @@ final class StudyRepository {
             let log = StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
                                      mode: responseMode,
                                      durationMs: duration, wasNew: summary.state == "new",
-                                     sequence: (try logs().map(\.sequence).max() ?? 0) + 1)
+                                     sequence: try lastReviewSequence() + 1)
             context.insert(log)
             card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
             card.updatedAt = now
@@ -363,7 +410,13 @@ final class StudyRepository {
             if !draft.touchedCardIDs.contains(card.id) { draft.touchedCardIDs.append(card.id) }
             if summary.state == "new" { draft.reviewStreak = 0 }
             else if summary.state == "review" { draft.reviewStreak += 1 }
-            try selectNext(draft: draft, now: now)
+            if let progress = progressBefore, progress.limit > 0,
+               progress.answered + 1 >= progress.limit {
+                // Keep the final evaluation undoable until the user confirms completion.
+                try selectCard(nil, draft: draft, now: now)
+            } else {
+                try selectNext(draft: draft, now: now)
+            }
         }
     }
 
@@ -405,9 +458,15 @@ final class StudyRepository {
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
                                   canUndo: draft.undoLogID != nil, nextShortDue: short,
                                   ordering: ordering, orderingUnavailable: reason,
-                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil)
+                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil,
+                                  sessionProgress: try sessionProgress())
     }
     private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date) throws -> ReviewEmptyState {
+        let sessionCount = try sessionProgress()
+        if let progress = sessionCount, progress.isComplete {
+            return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
+                                    message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
+        }
         let cards = try scopedQueueCards(scope()), logs = try queueLogs(), settings = try settings()
         let builder = ReviewQueueBuilder(calendar: calendar)
         let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
@@ -482,6 +541,10 @@ final class StudyRepository {
             return ReviewEmptyState(reason: .modeExcluded, title: "このモードの学習対象にカードがありません",
                                     message: mode == .review ? "未学習カードは「新しく覚える」から学習できます。" : "復習カードは「復習する」から学習できます。新規学習で続ける短期復習は、このセッションで学んだカードだけです。",
                                     suggestsScopeChange: true)
+        }
+        if let progress = sessionCount, progress.limit > 0, !progress.isComplete {
+            return ReviewEmptyState(reason: .complete, title: "今回はここまで",
+                                    message: "\(progress.answered) / \(progress.limit)問回答しました。現在、この条件で追加出題できるカードはありません。次回の復習は期限到来後に始められます。")
         }
         return ReviewEmptyState(reason: .complete, title: "今回の学習は完了しました",
                                 message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")

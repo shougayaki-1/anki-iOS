@@ -216,6 +216,72 @@ final class LibraryRepositoryTests: XCTestCase {
         _ = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "bulk-delete"))
     }
 
+    func testDeckManagerTreeFollowsRealParentIDsAndUpdatesAfterMoves() throws {
+        let repo = try fixture(), myDeck = try repo.decks()[0].id
+        let english = try repo.createDeck(name: "英語", now: now)
+        let finalDraft = try repo.createDeck(name: "Final Draft", parentID: english, now: now)
+        let lesson = try repo.createDeck(name: "Lesson4", parentID: finalDraft, now: now)
+        let otherEnglish = try repo.createDeck(name: "英語", now: now)
+        let anotherLesson = try repo.createDeck(name: "Lesson4", parentID: otherEnglish, now: now)
+
+        func snapshot() throws -> [DeckItem] {
+            try repo.decks().map {
+                DeckItem(id: $0.id, name: try repo.deckPath($0.id),
+                         shortName: $0.name, parentID: $0.parentID)
+            }
+        }
+        let items = try snapshot()
+        XCTAssertEqual(items.first { $0.id == lesson }?.name, "英語 / Final Draft / Lesson4")
+        XCTAssertEqual(items.first { $0.id == lesson }?.shortName, "Lesson4")
+        let roots = DeckTreeBuilder.roots(from: items)
+        XCTAssertEqual(Set(roots.map(\.id)), Set([myDeck, english, otherEnglish]))
+        XCTAssertTrue(roots.first { $0.id == myDeck }?.children.isEmpty == true)
+        XCTAssertEqual(roots.first { $0.id == english }?.children.first?.id, finalDraft)
+        XCTAssertEqual(roots.first { $0.id == english }?.children.first?.children.first?.id, lesson)
+        XCTAssertEqual(roots.first { $0.id == otherEnglish }?.children.first?.id, anotherLesson)
+        XCTAssertEqual(DeckTreeBuilder.visibleRows(roots: roots, expanded: []).count, 3)
+        let expanded = DeckTreeBuilder.visibleRows(roots: roots, expanded: [english, finalDraft])
+        XCTAssertEqual(Set(expanded.map(\.id)), Set([myDeck, english, otherEnglish, finalDraft, lesson]))
+        XCTAssertEqual(expanded.first { $0.id == lesson }?.depth, 2)
+        XCTAssertEqual(expanded.first { $0.id == lesson }?.name, "Lesson4")
+        XCTAssertEqual(expanded.first { $0.id == lesson }?.path, "英語 / Final Draft / Lesson4")
+
+        try repo.moveDeck(id: finalDraft, name: "変更後", parentID: otherEnglish, now: now)
+        let moved = DeckTreeBuilder.roots(from: try snapshot())
+        XCTAssertTrue(moved.first { $0.id == english }?.children.isEmpty == true)
+        XCTAssertTrue(moved.first { $0.id == otherEnglish }?.children.contains(where: { $0.id == finalDraft }) == true)
+        XCTAssertEqual(moved.first { $0.id == otherEnglish }?.children
+            .first(where: { $0.id == finalDraft })?.children.first?.id, lesson)
+        XCTAssertEqual(try repo.deckPath(lesson), "英語 / 変更後 / Lesson4")
+    }
+
+    func testDeepDeckTreeKeepsEveryLevelAndSameNamedDeckIdentity() {
+        var items: [DeckItem] = [], parent: UUID?
+        for depth in 0..<12 {
+            let id = UUID()
+            items.append(DeckItem(id: id, name: "Level \(depth)", shortName: "Same", parentID: parent))
+            parent = id
+        }
+        let roots = DeckTreeBuilder.roots(from: items)
+        let rows = DeckTreeBuilder.visibleRows(roots: roots, expanded: Set(items.map(\.id)))
+        XCTAssertEqual(rows.map(\.depth), Array(0..<12))
+        XCTAssertEqual(rows.map(\.id), items.map(\.id))
+        XCTAssertEqual(rows.last?.path.components(separatedBy: " / ").count, 12)
+    }
+
+    func testDeckTreeInvalidLegacyParentsStillDisplayOnce() {
+        let missing = UUID(), cycleA = UUID(), cycleB = UUID()
+        let input = [
+            DeckItem(id: missing, name: "orphan", shortName: "orphan", parentID: UUID()),
+            DeckItem(id: cycleA, name: "A", shortName: "A", parentID: cycleB),
+            DeckItem(id: cycleB, name: "B", shortName: "B", parentID: cycleA)
+        ]
+        let roots = DeckTreeBuilder.roots(from: input)
+        let rows = DeckTreeBuilder.visibleRows(roots: roots, expanded: [cycleA, cycleB, missing])
+        XCTAssertEqual(rows.count, 3)
+        XCTAssertEqual(Set(rows.map(\.id)), Set([missing, cycleA, cycleB]))
+    }
+
     func testHierarchyScopeAndCyclePreventionPreserveCardIDs() throws {
         let repo = try fixture()
         let root = try repo.decks()[0].id
@@ -320,4 +386,153 @@ final class LibraryRepositoryTests: XCTestCase {
         context.insert(draft); context.insert(StudyPreferences()); try context.save()
         return (card.id, after)
     }
+
+    func testDeckContentsDirectAndDescendantMoveKeepsTreeCardsAndDraft() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        let grandchild = try repo.createDeck(name: "孫", parentID: child, now: now)
+        let destination = try repo.createDeck(name: "移動先", now: now)
+        let first = try repo.createNote(NoteInput(deckID: root, question: "両面", answer: "答え", reverseEnabled: true), now: now)
+        _ = try repo.createNote(NoteInput(deckID: root, question: "単面", answer: "答え"), now: now)
+        _ = try repo.createNote(NoteInput(deckID: child, question: "子の問題", answer: "答え"), now: now)
+        _ = try repo.createNote(NoteInput(deckID: grandchild, question: "孫の問題", answer: "答え"), now: now)
+        try repo.saveEditorDraft(key: "edit:\(first.uuidString)",
+                                 input: NoteInput(deckID: root, question: "下書きは残す", answer: "答え"), now: now)
+        try repo.start(mode: .new, scope: LearningScope(deckID: root), now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now.addingTimeInterval(1))
+        let beforeLogs = try repo.logs().map(\.id)
+        let before = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate, $0.isSuspended) }
+        let originalDecks = try repo.decks().map { ($0.id, $0.parentID) }
+        let direct = try repo.previewDeckContents(deckID: root, scope: .direct, action: .move(to: destination))
+        XCTAssertEqual(direct.noteCount, 2)
+        XCTAssertEqual(direct.cardCount, 3)
+        XCTAssertEqual(direct.changedCardCount, 3)
+        XCTAssertTrue(direct.includedChildPaths.isEmpty)
+        let all = try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .move(to: destination))
+        XCTAssertEqual(all.noteCount, 4)
+        XCTAssertEqual(all.cardCount, 5)
+        XCTAssertEqual(all.includedChildPaths.count, 2)
+        XCTAssertThrowsError(try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .move(to: child)))
+        XCTAssertThrowsError(try repo.previewDeckContents(deckID: root, scope: .direct, action: .move(to: root)))
+
+        let result = try repo.applyDeckContents(direct, now: now.addingTimeInterval(1))
+        XCTAssertEqual(result.changedNotes, 2)
+        XCTAssertEqual(result.changedCards, 3)
+        XCTAssertFalse(try repo.notes().contains { $0.deckID == root })
+        XCTAssertEqual(try repo.notes().filter { $0.deckID == destination }.count, 2)
+        XCTAssertEqual(try repo.notes().filter { $0.deckID == child || $0.deckID == grandchild }.count, 2)
+        XCTAssertEqual(try repo.editorDraft(key: "edit:\(first.uuidString)")?.deckID, destination)
+        XCTAssertEqual(try repo.editorDraft(key: "edit:\(first.uuidString)")?.question, "下書きは残す")
+        XCTAssertEqual(try repo.logs().map(\.id), beforeLogs)
+        for (id, payload, due, suspended) in before {
+            let actual = try XCTUnwrap(repo.cards().first { $0.id == id })
+            XCTAssertEqual(actual.fsrsPayload, payload)
+            XCTAssertEqual(actual.dueDate, due)
+            XCTAssertEqual(actual.isSuspended, suspended)
+        }
+        for (id, parentID) in originalDecks {
+            let actual = try XCTUnwrap(repo.decks().first { $0.id == id })
+            XCTAssertEqual(actual.parentID, parentID)
+        }
+        let remaining = try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .delete)
+        XCTAssertEqual(remaining.noteCount, 2)
+        XCTAssertEqual(remaining.cardCount, 2)
+        _ = try repo.applyDeckContents(remaining, now: now.addingTimeInterval(2))
+        XCTAssertEqual(try repo.decks().count, 4)
+        XCTAssertEqual(try repo.notes().count, 2)
+        XCTAssertEqual(try repo.cards().count, 3)
+    }
+
+    func testThousandNoteDeckContentsPreviewMoveAndDeletePreservesDecksAndCardState() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        let destination = try repo.createDeck(name: "移動先", now: now)
+        let payload = try JSONEncoder().encode(ReviewScheduler().newCard(now: now))
+        var originalCards: Set<UUID> = []
+        for index in 0..<1000 {
+            let input = NoteInput(deckID: index.isMultiple(of: 2) ? root : child,
+                                  question: "Question \(index)", answer: "Answer")
+            let content = try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: ""))
+            let note = Note(input: input, content: content, now: now)
+            let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now)
+            repo.context.insert(note); repo.context.insert(card)
+            originalCards.insert(card.id)
+        }
+        try repo.context.save()
+        let started = Date()
+        let direct = try repo.previewDeckContents(deckID: root, scope: .direct, action: .move(to: destination))
+        XCTAssertEqual(direct.noteCount, 500)
+        let all = try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .move(to: destination))
+        XCTAssertEqual(all.noteCount, 1000)
+        XCTAssertEqual(all.cardCount, 1000)
+        let result = try repo.applyDeckContents(all, now: now)
+        XCTAssertEqual(result.changedNotes, 1000)
+        XCTAssertEqual(Set(try repo.cards().map(\.id)), originalCards)
+        XCTAssertTrue(try repo.cards().allSatisfy { $0.fsrsPayload == payload })
+        XCTAssertTrue(try repo.notes().allSatisfy { $0.deckID == destination })
+        let deletion = try repo.previewDeckContents(deckID: destination, scope: .direct, action: .delete)
+        _ = try repo.applyDeckContents(deletion, now: now)
+        XCTAssertTrue(try repo.notes().isEmpty)
+        XCTAssertTrue(try repo.cards().isEmpty)
+        XCTAssertEqual(Set(try repo.decks().map(\.id)), [root, child, destination])
+        XCTAssertEqual(try repo.decks().first { $0.id == child }?.parentID, root)
+        print("1000-note deck contents preview/move/delete: \(Date().timeIntervalSince(started))s")
+    }
+
+    func testDeckContentsStalePreviewRejectsMembershipAndParentChanges() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        let other = try repo.createDeck(name: "別", now: now)
+        _ = try repo.createNote(NoteInput(deckID: root, question: "Q", answer: "A"), now: now)
+        let preview = try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .move(to: other))
+        _ = try repo.createNote(NoteInput(deckID: child, question: "新しいノート", answer: "A"), now: now)
+        XCTAssertThrowsError(try repo.applyDeckContents(preview, now: now))
+        XCTAssertEqual(try repo.notes().filter { $0.deckID == other }.count, 0)
+        let fresh = try repo.previewDeckContents(deckID: root, scope: .includingDescendants, action: .move(to: other))
+        try repo.moveDeck(id: child, name: "別の親に移動", parentID: nil, now: now.addingTimeInterval(1))
+        XCTAssertThrowsError(try repo.applyDeckContents(fresh, now: now))
+        XCTAssertEqual(try repo.notes().filter { $0.deckID == other }.count, 0)
+        XCTAssertFalse(try repo.previewDeckContents(deckID: root, scope: .direct, action: .delete).noteIDs.isEmpty)
+    }
+
+    func testDeckContentsDeleteRollsBackAndPreservesHistoryAndOtherDecks() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "別", now: now)
+        let doomed = try repo.createNote(NoteInput(deckID: root, question: "削除", answer: "A"), now: now)
+        let safe = try repo.createNote(NoteInput(deckID: other, question: "残す", answer: "A"), now: now)
+        try repo.saveEditorDraft(key: "edit:\(doomed.uuidString)",
+                                 input: NoteInput(deckID: root, question: "保存前", answer: "A"), now: now)
+        try repo.start(mode: .new, scope: LearningScope(deckID: root), now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now.addingTimeInterval(1))
+        let oldLogs = try repo.logs().map(\.id)
+        let originalDecks = Set(try repo.decks().map(\.id))
+        let preview = try repo.previewDeckContents(deckID: root, scope: .direct, action: .delete)
+        XCTAssertEqual(preview.noteCount, 1)
+        XCTAssertEqual(preview.cardCount, 1)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.applyDeckContents(preview, now: now.addingTimeInterval(2)))
+        XCTAssertTrue(try repo.notes().contains { $0.id == doomed })
+        XCTAssertEqual(try repo.cards().count, 2)
+        XCTAssertNotNil(try repo.editorDraft(key: "edit:\(doomed.uuidString)"))
+        repo.save = { try $0.save() }
+
+        // A fresh preview is required after a rollback.
+        let retry = try repo.previewDeckContents(deckID: root, scope: .direct, action: .delete)
+        _ = try repo.applyDeckContents(retry, now: now.addingTimeInterval(3))
+        XCTAssertEqual(Set(try repo.decks().map(\.id)), originalDecks)
+        XCTAssertEqual(try repo.notes().map(\.id), [safe])
+        XCTAssertEqual(try repo.cards().count, 1)
+        XCTAssertNil(try repo.editorDraft(key: "edit:\(doomed.uuidString)"))
+        XCTAssertEqual(try repo.logs().map(\.id), oldLogs)
+        XCTAssertNil(try repo.session()?.undoLogID)
+        let empty = try repo.previewDeckContents(deckID: root, scope: .direct, action: .delete)
+        XCTAssertEqual(empty.cardCount, 0)
+        XCTAssertFalse(empty.canCommit)
+        XCTAssertThrowsError(try repo.applyDeckContents(empty, now: now))
+        _ = try repo.createNote(NoteInput(deckID: root, question: "再登録", answer: "A"), now: now)
+        XCTAssertEqual(try repo.notes().count, 2)
+    }
+
 }
