@@ -246,6 +246,16 @@ enum HomePrimaryAction: Equatable {
 }
 
 enum HomeStudyPresentation {
+    static func sessionSummary(answerLimit: Int, responseMode: SessionResponseMode) -> String {
+        let limit = answerLimit == 0 ? "回答上限なし" : "最大\(answerLimit)回答"
+        return "1回の学習：\(limit)・\(responseMode.title)"
+    }
+
+    static func dailyProgress(count: Int, goal: Int?) -> String {
+        guard let goal, goal > 0 else { return "\(count)枚" }
+        return count >= goal ? "\(count)枚・目標\(goal)枚 達成" : "\(count) / \(goal)枚"
+    }
+
     static func startTitle(mode: StudyMode, answerLimit: Int) -> String {
         let limit = answerLimit == 0 ? "上限なし" : "最大\(answerLimit)問"
         return "\(mode.title)・\(limit)"
