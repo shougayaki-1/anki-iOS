@@ -200,3 +200,64 @@ final class BackupRepositoryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: b)), jpg)
     }
 }
+
+extension BackupRepositoryTests {
+    func testAudioBackupRestoresBothFacesDraftAndUndoAndRejectsWrongMediaRole() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let prepared = try AudioEncodingPolicy.prepare(SpeechReadoutTests.silence())
+        let audio = try source.addAudio(prepared, now: now)
+        XCTAssertEqual(try source.addAudio(prepared, now: now), audio)
+        var input = NoteInput(deckID: try source.decks()[0].id, question: "Question", answer: "Answer", reverseEnabled: true, questionAudioID: audio, answerAudioID: audio)
+        let note = try source.createNote(input, now: now)
+        try source.saveEditorDraft(key: "new", input: input, now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(revealed: true, now: now)
+        try source.grade(.good, now: now.addingTimeInterval(1))
+        let before = try source.cards().map { ($0.id, $0.fsrsPayload) }
+        let logs = try source.logs().map(\.id)
+        input.answerAudioID = nil
+        try source.updateNote(id: note, input: input, now: now.addingTimeInterval(2))
+        XCTAssertEqual(try source.cards().map(\.id), before.map(\.0))
+        XCTAssertEqual(try source.cards().map(\.fsrsPayload), before.map(\.1))
+        XCTAssertEqual(try source.logs().map(\.id), logs)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        XCTAssertEqual(backup.manifest.schemaVersion, 2)
+        XCTAssertEqual(backup.media[audio], prepared.data)
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.noteItems().first?.sourceContent.questionAudioID, audio)
+        XCTAssertEqual(try reopened.editorDraft(key: "new")?.answerAudioID, audio)
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: audio)), prepared.data)
+        try reopened.undo(now: now.addingTimeInterval(5))
+        XCTAssertTrue(try reopened.logs().isEmpty)
+        input.imageID = audio
+        XCTAssertThrowsError(try source.updateNote(id: note, input: input, now: now))
+        var files = try StoredZIP.read(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        var manifest = backup.manifest; manifest.schemaVersion = 1
+        files["manifest.json"] = try JSONEncoder().encode(manifest)
+        XCTAssertThrowsError(try BackupArchive.decode(StoredZIP.write(files)))
+    }
+}
+
+extension BackupRepositoryTests {
+    func testAudioDraftPreventsCleanupAndFailedSaveRemovesNewFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root)
+        let prepared = try AudioEncodingPolicy.prepare(SpeechReadoutTests.silence())
+        let id = try repo.addAudio(prepared, now: now), url = try repo.assetURL(id: id)
+        let input = NoteInput(deckID: try repo.decks()[0].id, question: "Q", answer: "A", questionAudioID: id)
+        try repo.saveEditorDraft(key: "new", input: input, now: now)
+        try repo.cleanupUnusedMedia(); XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        try repo.discardEditorDraft(key: "new")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path)); XCTAssertTrue(try repo.assets().isEmpty)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.addAudio(prepared, now: now))
+        XCTAssertTrue(try repo.assets().isEmpty)
+        let folder = try repo.mediaStore.url(for: "audio")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+    }
+}

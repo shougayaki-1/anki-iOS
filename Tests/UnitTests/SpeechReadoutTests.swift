@@ -101,3 +101,71 @@ final class SpeechReadoutTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(TextContent.self, from: JSONEncoder().encode(content)), content)
     }
 }
+
+extension SpeechReadoutTests {
+    static func silence(seconds: Int = 1) -> Data {
+        var data = Data()
+        func text(_ value: String) { data.append(contentsOf: value.utf8) }
+        func number<T: FixedWidthInteger>(_ value: T) { var little = value.littleEndian; withUnsafeBytes(of: &little) { data.append(contentsOf: $0) } }
+        let size = UInt32(seconds * 8000 * 2)
+        text("RIFF"); number(size + 36); text("WAVEfmt "); number(UInt32(16))
+        number(UInt16(1)); number(UInt16(1)); number(UInt32(8000)); number(UInt32(16000))
+        number(UInt16(2)); number(UInt16(16)); text("data"); number(size)
+        data.append(Data(count: Int(size)))
+        return data
+    }
+    func testAudioSelectionFullyDecodesAndRejectsTruncatedOversizedAndLongFiles() throws {
+        let bytes = Self.silence()
+        let audio = try AudioEncodingPolicy.prepare(bytes)
+        XCTAssertEqual(audio.data, bytes); XCTAssertEqual(audio.mediaType, "audio/wav")
+        XCTAssertEqual(audio.duration, 1, accuracy: 0.001)
+        XCTAssertThrowsError(try AudioEncodingPolicy.prepare(Data("not audio".utf8)))
+        XCTAssertThrowsError(try AudioEncodingPolicy.prepare(Data(count: 20_000_001)))
+        XCTAssertThrowsError(try AudioEncodingPolicy.prepare(Self.silence(seconds: 601)))
+        XCTAssertThrowsError(try AudioEncodingPolicy.prepare(bytes.dropLast()))
+        var truncated = Data(bytes.dropLast(2))
+        let declared = UInt32(truncated.count - 8)
+        for index in 0..<4 { truncated[4 + index] = UInt8(truncatingIfNeeded: declared >> (index * 8)) }
+        XCTAssertThrowsError(try AudioEncodingPolicy.prepare(truncated))
+    }
+    func testM4AAudioDecodesWithoutConvertingOriginalBytes() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("m4a")
+        defer { try? FileManager.default.removeItem(at: url) }
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: [AVFormatIDKey: kAudioFormatMPEG4AAC, AVSampleRateKey: 8000, AVNumberOfChannelsKey: 1])
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: 8000))
+            buffer.frameLength = 8000
+            memset(buffer.floatChannelData![0], 0, 8000 * MemoryLayout<Float>.size)
+            try file.write(from: buffer)
+        }
+        let bytes = try Data(contentsOf: url)
+        let prepared = try AudioEncodingPolicy.prepare(bytes)
+        XCTAssertEqual(prepared.mediaType, "audio/mp4"); XCTAssertEqual(prepared.data, bytes)
+    }
+    func testReverseSwapsAudioAndLegacyPayloadDefaultsToNoAudio() throws {
+        let q = UUID(), a = UUID()
+        let content = TextContent(question: "Q", answer: "A", explanation: "", reverseEnabled: true, questionAudioID: q, answerAudioID: a)
+        let reverse = try CardGeneration.displayed(kind: .basic, content: content, variant: "basic:reverse")
+        XCTAssertEqual(reverse.questionAudioID, a); XCTAssertEqual(reverse.answerAudioID, q)
+        let old = try JSONDecoder().decode(TextContent.self, from: Data(#"{"schemaVersion":2,"question":"Q","answer":"A","explanation":""}"#.utf8))
+        XCTAssertTrue(old.audioIDs.isEmpty)
+    }
+    @MainActor
+    func testAttachedPlaybackStopsOnPauseInterruptionAndMissingFile() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try Self.silence(seconds: 10).write(to: url)
+        let player = StudySpeechPlayer()
+        player.playAttached(url: url)
+        XCTAssertTrue(player.playing)
+        player.stop(); XCTAssertFalse(player.playing)
+        player.playAttached(url: url)
+        NotificationCenter.default.post(name: AVAudioSession.interruptionNotification, object: nil,
+            userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(player.playing)
+        try FileManager.default.removeItem(at: url)
+        player.playAttached(url: url)
+        XCTAssertFalse(player.playing); XCTAssertNotNil(player.notice)
+    }
+}

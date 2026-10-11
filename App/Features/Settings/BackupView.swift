@@ -35,7 +35,7 @@ struct BackupView: View {
                         .disabled(working).accessibilityIdentifier("importBackup")
                     if working { ProgressView("データを処理しています") }
                     if let result { Text(result).accessibilityIdentifier("backupResult") }
-                } footer: { Text("デッキ、タグ、全カード・FSRS状態、回答履歴、画像、設定、下書きを1つの.studybackupファイルに保存します。書き出し先は自分で選択してください。") }
+                } footer: { Text("デッキ、タグ、全カード・FSRS状態、回答履歴、画像・音声、設定、下書きを1つの.studybackupファイルに保存します。書き出し先は自分で選択してください。") }
                 if let selected {
                     Section {
                         LabeledContent("作成日時", value: selected.manifest.createdAt.formatted())
@@ -44,7 +44,7 @@ struct BackupView: View {
                         LabeledContent("ノート", value: "\(selected.data.notes.count)")
                         LabeledContent("カード", value: "\(selected.data.cards.count)")
                         LabeledContent("回答履歴", value: "\(selected.data.logs.count)")
-                        LabeledContent("画像", value: "\(selected.data.media.count)")
+                        LabeledContent("メディア（画像・音声）", value: "\(selected.data.media.count)")
                         Button("このバックアップで置換して復元", role: .destructive) { confirmation = true }
                             .disabled(working).accessibilityIdentifier("restoreBackup")
                     } header: { Text("検証済みのバックアップ") } footer: { Text("現在のデータ全体を置き換えます。ZIP構造・サイズ・チェックサム・参照関係は検証済みです。必要なら先に現在のデータを書き出してください。") }

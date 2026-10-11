@@ -40,7 +40,7 @@ struct BackupService {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for index in snapshot.media.indices {
                 let assetID = snapshot.media[index].id
-                let ext = snapshot.media[index].mediaType == "image/png" ? "png" : "jpg"
+                let ext = AudioEncodingPolicy.extensions[snapshot.media[index].mediaType] ?? (snapshot.media[index].mediaType == "image/png" ? "png" : "jpg")
                 let path = "\(mediaPrefix)/\(assetID.uuidString).\(ext)"
                 let file = try mediaStore.url(for: path)
                 try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)

@@ -35,6 +35,7 @@ struct BackupValidation {
         try unique(data.cards.map(\.identityKey)); try unique(data.logs.map(\.id)); try unique(data.logs.map(\.sequence))
         try unique(data.tags.map(\.id)); try unique(data.tags.map(\.normalizedName)); try unique(data.media.map(\.id))
         try unique(data.media.map(\.relativePath)); try unique(data.imports.map(\.id)); try unique(data.editorDrafts.map(\.key))
+        let mediaTypes = Dictionary(uniqueKeysWithValues: data.media.map { ($0.id, $0.mediaType) })
         let decks = Dictionary(uniqueKeysWithValues: data.decks.map { ($0.id, $0) })
         let noteIDs = Set(data.notes.map(\.id)), cardIDs = Set(data.cards.map(\.id))
         let tagIDs = Set(data.tags.map(\.id)), mediaIDs = Set(data.media.map(\.id)), logIDs = Set(data.logs.map(\.id))
@@ -68,7 +69,8 @@ struct BackupValidation {
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
             guard (1...2).contains(content.schemaVersion), !ImportParser.normalized(content.question).isEmpty,
                   [.cloze, .imageOcclusion].contains(kind) || !ImportParser.normalized(content.answer).isEmpty else { throw BackupError.invalidData }
-            if let id = content.imageID, !mediaIDs.contains(id) { throw BackupError.invalidData }
+            if let id = content.imageID, mediaTypes[id]?.hasPrefix("image/") != true { throw BackupError.invalidData }
+            for id in content.audioIDs { guard mediaTypes[id].flatMap { AudioEncodingPolicy.extensions[$0] } != nil else { throw BackupError.invalidData } }
             expectedVariants[note.id] = Set(try CardGeneration.variants(kind: kind, content: content))
         }
         var variants: [UUID: Set<String>] = [:]
@@ -142,11 +144,19 @@ struct BackupValidation {
         for draft in data.editorDrafts {
             try dates(draft.updatedAt)
             let input = try JSONDecoder().decode(NoteInput.self, from: draft.payload)
-            if let image = input.imageID, !mediaIDs.contains(image) { throw BackupError.invalidData }
+            if let image = input.imageID, mediaTypes[image]?.hasPrefix("image/") != true { throw BackupError.invalidData }
+            for id in input.audioIDs { guard mediaTypes[id].flatMap { AudioEncodingPolicy.extensions[$0] } != nil else { throw BackupError.invalidData } }
             guard draft.key == "new" || (draft.key.hasPrefix("edit:") && UUID(uuidString: String(draft.key.dropFirst(5))) != nil) else { throw BackupError.invalidData }
         }
         for asset in data.media {
             try dates(asset.createdAt)
+            if AudioEncodingPolicy.extensions[asset.mediaType] != nil {
+                guard StoredZIP.validPath(asset.relativePath), asset.width == 0, asset.height == 0,
+                      let bytes = media[asset.id], BackupArchive.hash(bytes) == asset.sha256 else { throw BackupError.invalidData }
+                do { guard try AudioEncodingPolicy.prepare(bytes).mediaType == asset.mediaType else { throw BackupError.invalidData } }
+                catch { throw BackupError.invalidData }
+                continue
+            }
             if let bytes = media[asset.id], asset.mediaType == "image/png" {
                 do { try ImageEncodingPolicy.validateContainer(bytes, type: "public.png") }
                 catch { throw BackupError.invalidData }

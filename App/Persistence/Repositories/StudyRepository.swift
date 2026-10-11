@@ -106,7 +106,11 @@ final class StudyRepository {
     }
 
     func validate(_ input: NoteInput) throws -> Data {
-        if let imageID = input.imageID { guard try assets().contains(where: { $0.id == imageID }) else { throw StudyError.missingRecord } }
+        let media = try assets()
+        if let imageID = input.imageID { guard media.contains(where: { $0.id == imageID && $0.mediaType.hasPrefix("image/") }) else { throw StudyError.missingRecord } }
+        for id in input.audioIDs {
+            guard media.contains(where: { $0.id == id && AudioEncodingPolicy.extensions[$0.mediaType] != nil }) else { throw AttachedAudioError.missing }
+        }
         guard !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { throw StudyError.invalidContent }
         guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
@@ -114,7 +118,7 @@ final class StudyRepository {
                                   explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
                                   imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks,
                                   speechOverrides: input.speechOverrides, speechQuestion: input.speechQuestion,
-                                  speechAnswer: input.speechAnswer)
+                                  speechAnswer: input.speechAnswer, questionAudioID: input.questionAudioID, answerAudioID: input.answerAudioID)
         let variants = Set(try CardGeneration.variants(kind: input.kind, content: content))
         var sanitized = content
         sanitized.speechOverrides = input.speechOverrides?.filter { variants.contains($0.key) }

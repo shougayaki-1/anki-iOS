@@ -42,9 +42,15 @@ extension StudyRepository {
         try cleanupUnusedMedia()
     }
     func cleanupUnusedMedia() throws {
-        let noteImages = try notes().compactMap { try JSONDecoder().decode(TextContent.self, from: $0.contentPayload).imageID }
+        let noteImages = try notes().flatMap { note -> [UUID] in
+            let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            return [content.imageID].compactMap { $0 } + content.audioIDs
+        }
         let drafts = try context.fetch(FetchDescriptor<EditorDraft>())
-        let draftImages = try drafts.compactMap { try JSONDecoder().decode(NoteInput.self, from: $0.payload).imageID }
+        let draftImages = try drafts.flatMap { draft -> [UUID] in
+            let input = try JSONDecoder().decode(NoteInput.self, from: draft.payload)
+            return [input.imageID].compactMap { $0 } + input.audioIDs
+        }
         let used = Set(noteImages + draftImages)
         let all = try assets()
         guard used.isSubset(of: Set(all.map(\.id))) else { throw StudyError.missingRecord }
@@ -55,16 +61,18 @@ extension StudyRepository {
         try transaction { for asset in unused { context.delete(asset) } }
         for path in paths { try mediaStore.remove(path) }
         // A process can terminate between writing a file and inserting its row.
-        // Scan only the managed images directory, preserving every live asset.
+        // Scan only managed media directories, preserving every live asset.
         let retained = Set(try assets().map(\.relativePath))
-        let directory = try mediaStore.url(for: "images")
-        if FileManager.default.fileExists(atPath: directory.path) {
-            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-                let path = "images/" + file.lastPathComponent
-                _ = try mediaStore.url(for: path)
-                let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true {
-                    try mediaStore.remove(path)
+        for directoryName in ["images", "audio"] {
+            let directory = try mediaStore.url(for: directoryName)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+                    let path = directoryName + "/" + file.lastPathComponent
+                    _ = try mediaStore.url(for: path)
+                    let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true {
+                        try mediaStore.remove(path)
+                    }
                 }
             }
         }
@@ -74,7 +82,7 @@ extension StudyRepository {
                 let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard UUID(uuidString: folder.lastPathComponent) != nil, attributes.isDirectory == true, attributes.isSymbolicLink != true else { continue }
                 for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-                    guard ["jpg", "png"].contains(file.pathExtension.lowercased()),
+                    guard (["jpg", "png"] + Array(AudioEncodingPolicy.extensions.values)).contains(file.pathExtension.lowercased()),
                           UUID(uuidString: file.deletingPathExtension().lastPathComponent) != nil else { continue }
                     let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                     let path = "restored/\(folder.lastPathComponent)/\(file.lastPathComponent)"
@@ -83,5 +91,19 @@ extension StudyRepository {
                 if try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty { try FileManager.default.removeItem(at: folder) }
             }
         }
+    }
+}
+
+
+extension StudyRepository {
+    func addAudio(_ prepared: AudioEncodingPolicy.Prepared, now: Date) throws -> UUID {
+        let hash = BackupArchive.hash(prepared.data)
+        if let existing = try assets().first(where: { $0.sha256 == hash && $0.mediaType == prepared.mediaType }),
+           let url = try? assetURL(id: existing.id),
+           let current = try? Data(contentsOf: url), current == prepared.data { return existing.id }
+        let asset = try mediaStore.storeAudio(prepared)
+        do {
+            return try transaction { context.insert(MediaAsset(image: asset, now: now)); return asset.id }
+        } catch { try? mediaStore.remove(asset.relativePath); throw error }
     }
 }

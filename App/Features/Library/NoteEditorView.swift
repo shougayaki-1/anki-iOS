@@ -1,8 +1,10 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct NoteEditorView: View {
     @Bindable var store: StudyStore
     let item: NoteItem?
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @FocusedValue(\.numericSettingEditing) private var numericSettingEditing
     @State private var input: NoteInput
@@ -19,6 +21,11 @@ struct NoteEditorView: View {
     @State private var preview = false
     @State private var saveFailure = false
     @State private var saveNext = false
+    @State private var audioSelecting = false
+    @State private var audioSide = SpeechSide.question
+    @State private var audioWorking = false
+    @State private var audioImport: Task<Void, Never>?
+    @StateObject private var audioPreview = StudySpeechPlayer()
 
     init(store: StudyStore, item: NoteItem?) {
         self.store = store; self.item = item
@@ -34,7 +41,8 @@ struct NoteEditorView: View {
                                                hideAllMasks: item?.sourceContent.hideAllMasks ?? true,
                                                speechOverrides: item?.sourceContent.speechOverrides ?? [:],
                                                speechQuestion: item?.sourceContent.speechQuestion,
-                                               speechAnswer: item?.sourceContent.speechAnswer))
+                                               speechAnswer: item?.sourceContent.speechAnswer, questionAudioID: item?.sourceContent.questionAudioID,
+                                               answerAudioID: item?.sourceContent.answerAudioID))
         do {
             if let saved = try store.repository.editorDraft(key: item.map { "edit:\($0.noteID.uuidString)" } ?? "new") {
                 _input = State(initialValue: saved)
@@ -111,6 +119,14 @@ struct NoteEditorView: View {
                     Text("日本語混在は自動検出では読みません。英文のみを指定すると日本語の問題でも読み上げできます。穴埋めの伏せ字は読み上げません。")
                         .font(.footnote).foregroundStyle(.secondary)
                 } header: { Text("音声読み上げ") }
+                Section("添付音声（任意）") {
+                    audioRow(.question)
+                    audioRow(.answer)
+                    if audioWorking { ProgressView("音声を確認しています…") }
+                    if let notice = audioPreview.notice { Text(notice).font(.footnote).foregroundStyle(.red) }
+                    Text("WAV・M4A・MP3・AAC・CAF、20MB・10分以内。添付音声を優先し、TTSは学習中に手動で選べます。自動再生は上の設定を使用します。穴埋め・画像マスクの問題音声には答えを含めないでください。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
                     if !input.answer.isEmpty, let reason = OrderingAnswer.reason(kind: input.kind, answer: input.answer) {
                         Text(reason).font(.footnote).foregroundStyle(.secondary)
@@ -148,6 +164,25 @@ struct NoteEditorView: View {
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .onDisappear { audioPreview.stop(); audioImport?.cancel() }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { audioPreview.stop() } }
+            .fileImporter(isPresented: $audioSelecting, allowedContentTypes: [.audio]) { result in
+                switch result {
+                case .failure(let error): failure = error.localizedDescription
+                case .success(let url):
+                    let side = audioSide
+                    audioWorking = true
+                    audioImport = Task {
+                        defer { audioWorking = false }
+                        do {
+                            let prepared = try await AudioEncodingPolicy.read(url)
+                            try Task.checkCancellation()
+                            let id = try store.repository.addAudio(prepared, now: store.clock())
+                            if side == .question { input.questionAudioID = id } else { input.answerAudioID = id }
+                        } catch is CancellationError {} catch { failure = error.localizedDescription }
+                    }
+                }
+            }
             .onChange(of: tagText) { _, value in input.tagNames = value.components(separatedBy: ",") }
             .onChange(of: input) { _, _ in if !committed { persistDraft() } }
             .sheet(isPresented: $preview) { NotePreviewView(input: input, image: image) }
@@ -187,6 +222,30 @@ struct NoteEditorView: View {
         }
     }
 
+    @ViewBuilder private func audioRow(_ side: SpeechSide) -> some View {
+        let question = side == .question
+        let id = question ? input.questionAudioID : input.answerAudioID
+        VStack(alignment: .leading) {
+            Button(question ? "問題音声を選択" : "解答音声を選択") {
+                audioPreview.stop(); audioSide = side; audioSelecting = true
+            }.disabled(audioWorking).accessibilityIdentifier(question ? "selectQuestionAudio" : "selectAnswerAudio")
+            if let id {
+                Text(question ? "問題音声を添付済み" : "解答音声を添付済み")
+                HStack {
+                    Button("試聴") {
+                        if let url = try? store.repository.assetURL(id: id) { audioPreview.playAttached(url: url) }
+                        else { audioPreview.missingAttachment() }
+                    }.accessibilityIdentifier(question ? "previewQuestionAudio" : "previewAnswerAudio")
+                    Button("停止") { audioPreview.stop() }
+                    Button("外す", role: .destructive) {
+                        audioPreview.stop()
+                        if question { input.questionAudioID = nil } else { input.answerAudioID = nil }
+                    }.accessibilityIdentifier(question ? "removeQuestionAudio" : "removeAnswerAudio")
+                }.buttonStyle(.borderless)
+            }
+        }
+    }
+
     private var speechVariants: [String]? {
         let content = TextContent(question: input.question, answer: input.answer,
                                   explanation: input.explanation, reverseEnabled: input.reverseEnabled,
@@ -194,7 +253,7 @@ struct NoteEditorView: View {
         return try? CardGeneration.variants(kind: input.kind, content: content)
     }
     private var canSave: Bool {
-        !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !audioWorking && !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
     private func requestSave(next: Bool) {
