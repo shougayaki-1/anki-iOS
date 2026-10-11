@@ -336,3 +336,131 @@ final class MediaRepositoryTests: XCTestCase {
         XCTAssertTrue(recognized.text.uppercased().contains("TOKYO"))
     }
 }
+
+extension MediaRepositoryTests {
+    func imagePackage(count: Int = 1) throws -> ImageImportPackage {
+        let csv = "question,answer,image,explanation,tags,deck\n" + (0..<count).map { ",答え\($0),images/test.png,解説,日本;地理,教材/図版" }.joined(separator: "\n")
+        return try ImageImportPackage.read(StoredZIP.write(["cards.csv": Data(csv.utf8), "images/test.png": imageData()]))
+    }
+    func testImageZIP300RowsDeduplicatedImagesAndUpdatePreserveSchedules() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: MediaStore(root: dir))
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, package = try imagePackage(count: 300)
+        XCTAssertEqual(try repo.assets().count, 0) // Preview has no side effects.
+        XCTAssertEqual(try repo.importImagePackage(package, deckID: deck, action: .skip, now: now).imported, 300)
+        XCTAssertEqual(try repo.assets().count, 1)
+        XCTAssertEqual(try repo.cards().count, 300)
+        XCTAssertEqual(try repo.tags().count, 2)
+        XCTAssertTrue(try repo.notes().allSatisfy { (try? JSONDecoder().decode(TextContent.self, from: $0.contentPayload).question) == "画像を見て答えてください" })
+        XCTAssertEqual(try repo.importImagePackage(package, deckID: deck, action: .skip, now: now).skipped, 300)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now); try repo.grade(.good, now: now)
+        let schedules = Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) })
+        let logs = try repo.logs().map(\.id)
+        var changed = package
+        changed.rows = Array(changed.rows.prefix(1)); changed.rows[0].explanation = "更新した解説"
+        XCTAssertEqual(try repo.importImagePackage(changed, deckID: deck, action: .update, now: now).imported, 1)
+        XCTAssertEqual(try repo.logs().map(\.id), logs)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) }), schedules)
+    }
+    func testImageZIPSaveFailureRollsBackDecksCardsAndFiles() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: MediaStore(root: dir))
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, count = try repo.decks().count
+        try repo.createNote(NoteInput(deckID: deck, question: "既存", answer: "履歴保持"), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.good, now: now)
+        let before = try BackupData.capture(repo)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importImagePackage(imagePackage(), deckID: deck, action: .add, now: now))
+        XCTAssertTrue(try repo.assets().isEmpty); XCTAssertEqual(try repo.notes().count, 1)
+        XCTAssertEqual(try BackupData.capture(repo), before); XCTAssertEqual(try repo.decks().count, count)
+        let images = dir.appendingPathComponent("images")
+        XCTAssertTrue((try? FileManager.default.contentsOfDirectory(atPath: images.path).isEmpty) ?? true)
+    }
+    func testImageZIPRowErrorsAndExcludedRows() throws {
+        let csv = "answer,image\n答え,images/missing.png\n答え,../test.png\n答え,images/broken.png\n,images/test.png\n答え,images/test.png"
+        var package = try ImageImportPackage.read(StoredZIP.write(["cards.csv": Data(csv.utf8), "images/broken.png": Data([1,2]), "images/test.png": imageData()]))
+        XCTAssertEqual(package.rows.filter { $0.error != nil }.count, 4)
+        package.rows[4].included = false
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        try repo.initialize(now: now)
+        let result = try repo.importImagePackage(package, deckID: repo.decks()[0].id, action: .skip, now: now)
+        XCTAssertEqual(result.imported, 0); XCTAssertEqual(result.errors.count, 4); XCTAssertEqual(result.skipped, 1)
+        XCTAssertTrue(try repo.assets().isEmpty)
+    }
+    func testImageZIPRejectsAmbiguousPathsCorruptionAndMultipleTables() throws {
+        let image = imageData()
+        XCTAssertThrowsError(try ImageImportZIP.read(StoredZIP.write(["images/A.png": image, "images/a.png": image])))
+        XCTAssertThrowsError(try ImageImportPackage.read(StoredZIP.write(["cards.csv": Data(), "cards.tsv": Data()])))
+        var corrupt = try StoredZIP.write(["cards.csv": Data("answer,image\nA,images/a.png".utf8), "images/a.png": image])
+        corrupt[40] ^= 1
+        XCTAssertThrowsError(try ImageImportZIP.read(corrupt))
+        XCTAssertThrowsError(try ImageImportZIP.read(Data([1,2,3])))
+    }
+}
+
+extension MediaRepositoryTests {
+    func testImageZIPReadsStandardDeflateDirectoriesAndComment() throws {
+        let archive = Data(base64Encoded: "UEsDBBQAAAAIAINJS10d1e5AGAAAABsAAAAJAAAAY2FyZHMuY3N2S8wrLk8t0snMTUxP5XKE0MX6iXoFeekAUEsDBBQAAAAIAINJS10AAAAAAgAAAAAAAAAHAAAAaW1hZ2VzLwMAUEsBAhQDFAAAAAgAg0lLXR3V7kAYAAAAGwAAAAkAAAAAAAAAAAAAAIABAAAAAGNhcmRzLmNzdlBLAQIUAxQAAAAIAINJS10AAAAAAgAAAAAAAAAHAAAAAAAAAAAAEAD9QT8AAABpbWFnZXMvUEsFBgAAAAACAAIAbAAAAGYAAAAHAGZpeHR1cmU=")!
+        let files = try ImageImportZIP.read(archive)
+        XCTAssertEqual(String(data: files["cards.csv"]!, encoding: .utf8), "answer,image\nA,images/a.png")
+        XCTAssertNil(files["images/"])
+        XCTAssertThrowsError(try StoredZIP.read(archive)) // Backup profile remains strict.
+    }
+}
+
+extension MediaRepositoryTests {
+    func testImageZIPDescriptorsBombAndSymlink() throws {
+        let descriptor = Data(base64Encoded: "UEsDBBQACAAIAA9KS10AAAAAAAAAAAAAAAAJAAAAY2FyZHMuY3N2S8wrLk8t0snMTUxP5XKE0MX6iXoFeekAUEsHCB3V7kAYAAAAGwAAAFBLAQIUAxQACAAIAA9KS10d1e5AGAAAABsAAAAJAAAAAAAAAAAAAACAAQAAAABjYXJkcy5jc3ZQSwUGAAAAAAEAAQA3AAAATwAAAAAA")!
+        XCTAssertEqual(try ImageImportZIP.read(descriptor)["cards.csv"], Data("answer,image\nA,images/a.png".utf8))
+        let bomb = Data(base64Encoded: "UEsDBBQAAAAIAA9KS10bEJrYJQAAACBOAAAJAAAAY2FyZHMuY3N27cExAQAAAMKgbOtfyhoeQAEAAAAAAAAAAAAAAAAAAAAAAADwYFBLAQIUAxQAAAAIAA9KS10bEJrYJQAAACBOAAAJAAAAAAAAAAAAAACAAQAAAABjYXJkcy5jc3ZQSwUGAAAAAAEAAQA3AAAATAAAAAAA")!
+        XCTAssertThrowsError(try ImageImportZIP.read(bomb))
+        let link = Data(base64Encoded: "UEsDBBQAAAAAAAAAIQCgveGDDAAAAAwAAAAPAAAAaW1hZ2VzL2xpbmsucG5nL3RtcC9vdXRzaWRlUEsBAhQDFAAAAAAAAAAhAKC94YMMAAAADAAAAA8AAAAAAAAAAAAAAP+hAAAAAGltYWdlcy9saW5rLnBuZ1BLBQYAAAAAAQABAD0AAAA5AAAAAAA=")!
+        XCTAssertThrowsError(try ImageImportZIP.read(link))
+        var traversal = try StoredZIP.write(["images/a.png": Data([0])])
+        let original = Data("images/a.png".utf8), replacement = Data("../evilx.png".utf8)
+        while let range = traversal.range(of: original) { traversal.replaceSubrange(range, with: replacement) }
+        XCTAssertThrowsError(try ImageImportZIP.read(traversal))
+    }
+}
+
+extension MediaRepositoryTests {
+    func testImageZIPRejectsDisguisedGIFAndDetectsTSVBOM() throws {
+        let gif = Data(base64Encoded: "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")!
+        let table = "\u{feff}answer\timage\n名称\timages/fake.png"
+        let package = try ImageImportPackage.read(StoredZIP.write(["cards.tsv": Data(table.utf8), "images/fake.png": gif]))
+        XCTAssertEqual(package.rows[0].answer, "名称")
+        XCTAssertNotNil(package.rows[0].error)
+        XCTAssertTrue(package.images.isEmpty)
+    }
+}
+
+extension MediaRepositoryTests {
+    func testRegistrationCountsMatchBasicReverseClozeAndMasksAndZIPUpdates() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: MediaStore(root: root))
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, image = try repo.addImage(imageData(), now: now)
+        try repo.createNote(NoteInput(deckID: deck, question: "Normal", answer: "A"), now: now)
+        try repo.createNote(NoteInput(deckID: deck, question: "Reverse", answer: "A", reverseEnabled: true), now: now)
+        try repo.createNote(NoteInput(deckID: deck, kind: .cloze, question: "{{c1::one}} {{c2::two}}"), now: now)
+        let masks = [ImageMask(rect: MaskRect(x: 0, y: 0, width: 0.3, height: 0.3), answer: "one"), ImageMask(rect: MaskRect(x: 0.5, y: 0.5, width: 0.3, height: 0.3), answer: "two")]
+        try repo.createNote(NoteInput(deckID: deck, kind: .imageOcclusion, question: "Masks", imageID: image, masks: masks), now: now)
+        let items = try repo.noteItems()
+        XCTAssertEqual(Set(items.map(\.noteID)).count, 4); XCTAssertEqual(items.count, 7)
+        XCTAssertEqual(Dictionary(grouping: items, by: \.noteID).values.map(\.count).sorted(), [1,2,2,2])
+        let package = try imagePackage(count: 2)
+        let created = try repo.importImagePackage(package, deckID: deck, action: .skip, now: now)
+        XCTAssertEqual(created.createdNotes, 2); XCTAssertEqual(created.createdCards, 2)
+        var repeated = package; repeated.rows = [package.rows[0], package.rows[0]]
+        let updated = try repo.importImagePackage(repeated, deckID: deck, action: .update, now: now)
+        XCTAssertEqual(updated.imported, 2); XCTAssertEqual(updated.updatedNotes, 1); XCTAssertEqual(updated.maintainedCards, 1)
+        let skipped = try repo.importImagePackage(package, deckID: deck, action: .skip, now: now)
+        XCTAssertEqual(skipped.duplicateRows, 2); XCTAssertEqual(skipped.createdCards + skipped.maintainedCards, 0)
+    }
+}

@@ -202,6 +202,67 @@ final class BackupRepositoryTests: XCTestCase {
 }
 
 extension BackupRepositoryTests {
+    func testTypedAnswersRestoreWithIDsTextPolicyAndUndoAndRejectBadLogLink() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        try source.createNote(NoteInput(deckID: source.decks()[0].id, question: "保存対象", answer: "模範解答", responseMode: .typing), now: now)
+        try source.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 90), now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(text: "自分の回答\n複数行", revealed: true, now: now); try source.grade(.good, now: now)
+        let expected = try source.savedTypedAnswers(now: now)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.savedTypedAnswers(now: now), expected)
+        XCTAssertEqual(try reopened.options().typedAnswerPolicy, TypedAnswerPolicy(enabled: true, retentionDays: 90))
+        try reopened.undo(now: now)
+        XCTAssertTrue(try reopened.savedTypedAnswers(now: now).isEmpty); XCTAssertTrue(try reopened.logs().isEmpty)
+        var invalid = backup.data
+        let value = expected[0]
+        invalid.typedAnswers = [TypedAnswerRecord(id: UUID(), cardID: value.cardID, reviewedAt: value.reviewedAt, grade: value.grade,
+                                                question: value.question, answer: value.answer, modelAnswer: value.modelAnswer)]
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: backup.media))
+        invalid.typedAnswers = [value, value]
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: backup.media))
+        var legacy = backup.data; legacy.typedAnswers = nil
+        let decoded = try BackupArchive.decode(BackupArchive.create(data: legacy, media: backup.media, now: now, appVersion: "legacy"))
+        XCTAssertNil(decoded.data.typedAnswers)
+        let expired = try BackupArchive.decode(await BackupService.export(repository: source, now: now.addingTimeInterval(91 * 86400), appVersion: "test"))
+        XCTAssertNil(expired.data.typedAnswers); XCTAssertEqual(expired.data.logs.count, 1)
+        XCTAssertEqual(expired.data.cards.first?.id, backup.data.cards.first?.id)
+        XCTAssertEqual(expired.data.cards.first?.fsrsPayload, backup.data.cards.first?.fsrsPayload)
+    }
+    func testImageZIPBackupRestoreAndCleanup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let bytes = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { context in
+            UIColor.blue.setStroke(); context.cgContext.strokeEllipse(in: CGRect(x: 5, y: 5, width: 30, height: 30))
+        }.pngData()!
+        let csv = "answer,image\n名称,images/a.png"
+        let package = try ImageImportPackage.read(StoredZIP.write(["cards.csv": Data(csv.utf8), "images/a.png": bytes]))
+        _ = try source.importImagePackage(package, deckID: source.decks()[0].id, action: .add, now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(revealed: true, now: now); try source.grade(.good, now: now)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.cards().map(\.id), try source.cards().map(\.id))
+        XCTAssertEqual(try reopened.logs().map(\.id), try source.logs().map(\.id))
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: reopened.assets()[0].id)), bytes)
+        try reopened.undo(now: now)
+        XCTAssertTrue(try reopened.logs().isEmpty)
+        let note = try reopened.notes()[0]
+        try reopened.deleteNote(id: note.id)
+        try reopened.cleanupUnusedMedia()
+        XCTAssertTrue(try reopened.assets().isEmpty)
+    }
+}
+
+extension BackupRepositoryTests {
     func testAudioBackupRestoresBothFacesDraftAndUndoAndRejectsWrongMediaRole() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

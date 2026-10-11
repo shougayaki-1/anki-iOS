@@ -91,6 +91,21 @@ struct BackupValidation {
             _ = try JSONSerialization.jsonObject(with: log.libraryLog)
             // Histories intentionally survive deleting a card, so cardID may be historical.
         }
+        let answers = data.typedAnswers ?? []
+        guard answers.count <= data.logs.count else { throw BackupError.invalidData }
+        if !answers.isEmpty {
+            guard let row = data.options.first,
+                  try JSONDecoder().decode(StudyOptions.self, from: row.payload).typedAnswerPolicy != nil else { throw BackupError.invalidData }
+        }
+        try unique(answers.map(\.id))
+        let logsByID = Dictionary(uniqueKeysWithValues: data.logs.map { ($0.id, $0) })
+        for answer in answers {
+            try dates(answer.reviewedAt)
+            guard let log = logsByID[answer.id], log.responseMode == ResponseMode.typing.rawValue,
+                  log.cardID == answer.cardID, log.grade == answer.grade,
+                  abs(log.reviewedAt.timeIntervalSince(answer.reviewedAt)) < 0.0001,
+                  try JSONEncoder().encode(answer).count <= StoredZIP.maximumEntryBytes else { throw BackupError.invalidData }
+        }
         for session in data.sessions {
             try dates(session.updatedAt)
             guard session.key == "active", StudyMode(rawValue: session.mode) != nil,
@@ -121,6 +136,22 @@ struct BackupValidation {
         for row in data.options {
             let options = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
             guard row.key == "options", (1...2).contains(options.schemaVersion) else { throw BackupError.invalidData }
+            if let policy = options.typedAnswerPolicy, !TypedAnswerPolicy.supportedDays.contains(policy.retentionDays) { throw BackupError.invalidData }
+            if let overrides = options.deckLearning {
+                guard Set(overrides.map(\.deckID)).count == overrides.count,
+                      overrides.allSatisfy({ $0.isValid && decks[$0.deckID] != nil }) else { throw BackupError.invalidData }
+            }
+            if let usage = options.deckNewUsage {
+                let logs = Dictionary(uniqueKeysWithValues: data.logs.map { ($0.sequence, $0) })
+                guard Set(usage.map(\.sequence)).count == usage.count,
+                      usage.allSatisfy({ item in logs[item.sequence].map { $0.cardID == item.cardID && $0.wasNew } ?? false })
+                else { throw BackupError.invalidData }
+            }
+            if let optimization = options.fsrsOptimization {
+                guard optimization.valid else { throw BackupError.invalidData }
+                if let report = optimization.report { try dates(report.generatedAt, report.splitDate) }
+                for change in optimization.changes { try dates(change.date) }
+            }
             if let limit = options.sessionAnswerLimit, !(0...500).contains(limit) {
                 throw BackupError.invalidData
             }

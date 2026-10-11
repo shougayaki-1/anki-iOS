@@ -236,7 +236,7 @@ final class GeneratedCardUITests: XCTestCase {
         for _ in 0..<8 where !confirm.isHittable { scroll(app, up: true) }
         confirm.tap(); app.buttons["確定して保存"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["importResult"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["importResult"].label.contains("成功 1件"))
+        XCTAssertTrue(app.staticTexts["importResult"].label.contains("新規 1ノート"))
         app.buttons["closeImport"].tap(); app.buttons["closeOCR"].tap()
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))

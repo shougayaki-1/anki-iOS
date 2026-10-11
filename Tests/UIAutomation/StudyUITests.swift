@@ -16,6 +16,100 @@ final class StudyUITests: XCTestCase {
         app.launch()
         return app
     }
+    func testVerticalRubyPreviewLearningUndoAndRelaunch() {
+        richTextScenario(question: "｜春暁《しゅんぎょう》12年。\n｜東京《とうきょう》", prefix: "Issue51-vertical-ruby")
+    }
+    func testKanbunPreviewLearningUndoAndRelaunch() {
+        richTextScenario(question: "不［＃（ズ）］［＃レ］知［＃（ラ）］。\n｜未《いま》［＃「未」の左に「ザル」のルビ］［＃（ダ）］［＃レ］若［＃（カ）］［＃二］知［＃（シクシテ）］［＃一レ］。", prefix: "Issue52-kanbun")
+    }
+    private func richTextScenario(question source: String, prefix: String) {
+        let app = app()
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
+        let layout = app.buttons["questionLayout"]
+        scrollTo(layout, app: app); layout.tap(); app.buttons["縦書き"].tap()
+        let question = app.descendants(matching: .any)["questionInput"]
+        scrollTo(question, app: app); question.tap(); question.typeText(source)
+        let answer = app.descendants(matching: .any)["answerInput"]
+        scrollTo(answer, app: app); answer.tap(); answer.typeText("Answer remains hidden")
+        let preview = app.buttons["previewNote"]
+        scrollTo(preview, app: app); preview.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["previewQuestion"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.descendants(matching: .any)["previewAnswer"].exists)
+        attach(app, prefix + "-preview")
+        app.buttons["previewReveal"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["previewAnswer"].exists)
+        app.buttons["closePreview"].tap(); app.buttons["saveNote"].tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].waitForExistence(timeout: 10))
+        attach(app, prefix + "-review")
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap()
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].exists)
+        app.terminate(); app.launch()
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].waitForExistence(timeout: 10))
+    }
+
+    func testWeakPracticeRevealFinishLeavesNormalSessionAvailable() {
+        let app = app()
+        create(app, question: "Weak practice question", answer: "Weak practice answer")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        app.buttons["revealAnswer"].tap()
+        app.buttons["grade-1"].tap()
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["openWeakCards"].tap()
+        XCTAssertTrue(app.staticTexts["直近の評価がAgain"].waitForExistence(timeout: 5))
+        app.buttons["startWeakPractice"].tap()
+        XCTAssertTrue(app.staticTexts["weakPracticeQuestion"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["weakPracticeAnswer"].exists)
+        app.buttons["revealWeakPractice"].tap()
+        XCTAssertEqual(app.staticTexts["weakPracticeAnswer"].label, "Weak practice answer")
+        app.buttons["nextWeakPractice"].tap()
+        app.buttons["finishWeakPractice"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.buttons["resumeStudy"].exists || app.staticTexts["nextShortReview"].exists)
+    }
+
+    func testDeckLearningOverrideSavesAndSurvivesRelaunch() {
+        let app = app()
+        create(app, question: "Deck settings", answer: "A")
+        app.buttons["デッキ管理"].tap()
+        app.buttons["マイデッキを編集"].tap()
+        let limit = app.switches["新規上限を指定"]
+        scrollTo(limit, app: app); limit.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(limit.value as? String, "1")
+        let retention = app.switches["目標保持率を指定"]
+        scrollTo(retention, app: app); retention.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(retention.value as? String, "1")
+        app.buttons["保存"].tap()
+        app.terminate(); app.launch()
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["デッキ管理"].tap()
+        app.buttons["マイデッキを編集"].tap()
+        XCTAssertEqual(app.switches["新規上限を指定"].value as? String, "1")
+        XCTAssertEqual(app.switches["目標保持率を指定"].value as? String, "1")
+        XCTAssertTrue(app.staticTexts["新規上限：20枚／日"].exists)
+    }
+
+    func testHomeResponseSettingPersistsAndStartsTyping() {
+        let app = app()
+        create(app, question: "Mode snapshot", answer: "Tokyo")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["openSessionAnswerLimit"].tap()
+        app.buttons["sessionResponseMode"].tap()
+        app.buttons["文字入力"].tap()
+        app.buttons["閉じる"].tap()
+        app.terminate(); app.launch()
+        app.buttons["openSessionAnswerLimit"].tap()
+        XCTAssertTrue(app.buttons["sessionResponseMode"].label.contains("文字入力"))
+        app.buttons["閉じる"].tap()
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.textFields["typedAnswer"].waitForExistence(timeout: 10)
+            || app.textViews["typedAnswer"].exists)
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]
@@ -577,6 +671,62 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
     }
 
+    func testOptimizationInsufficientHistoryDoesNotChangeSettings() {
+        let app = app()
+        app.tabBars.buttons["設定"].tap()
+        let open = app.buttons["openFSRSOptimization"]
+        scrollTo(open, app: app); open.tap()
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
+        app.buttons["computeFSRSParameters"].tap()
+        XCTAssertTrue(app.staticTexts["optimizationFailure"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["optimizationFailure"].label.contains("400件"))
+        XCTAssertFalse(app.buttons["resetFSRSParameters"].isEnabled)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["設定"].tap(); scrollTo(open, app: app); open.tap()
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
+    }
+
+    func testForecastPeriodDeckAndAccessibleCountsLeaveLearningUnchanged() {
+        let app = app()
+        create(app, question: "Forecast new", answer: "A")
+        app.tabBars.buttons["記録"].tap()
+        app.buttons["openReviewForecast"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScheduled"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["forecastAnswers"].exists)
+        app.segmentedControls["forecastPeriod"].buttons["30日"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScheduled"].waitForExistence(timeout: 15))
+        app.buttons["forecastDeck"].tap(); app.buttons["マイデッキ"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastAnswers"].waitForExistence(timeout: 15))
+        attach(app, "forecast-normal-30-days")
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+    }
+
+    func testLibrarySelectionExitSearchAndCancelKeepTargets() {
+        let app = app()
+        create(app, question: "Selection one", answer: "One")
+        create(app, question: "Selection two", answer: "Two")
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.buttons["finishLibrarySelection"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        app.staticTexts["Selection one"].tap()
+        app.buttons["openBulkManagement"].tap()
+        app.buttons["closeBulkManagement"].tap()
+        XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains("1枚"))
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("two")
+        // iOS 26 hides navigation items while searching; the selection-only action remains visible.
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.staticTexts["Selection two"].tap()
+        XCTAssertTrue(app.buttons["openBulkManagement"].isEnabled)
+    }
+
     func testBulkSelectionTagsMoveSuspendResumeAndConfirmedDeleteKeepHistory() {
         let app = app()
         create(app, question: "Bulk one", answer: "Answer one")
@@ -589,8 +739,9 @@ final class StudyUITests: XCTestCase {
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["ライブラリ"].tap()
         func open(all: Bool = true) {
+            app.buttons["libraryActions"].tap()
             app.buttons["selectLibraryCards"].tap()
-            if all { app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
+            if all { app.buttons["選択"].tap(); app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
             XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains(all ? "2枚" : "1枚"))
             app.buttons["openBulkManagement"].tap()
         }
@@ -942,5 +1093,88 @@ final class StudyUITests: XCTestCase {
         let keyboardGone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: app.keyboards.firstMatch)
         XCTAssertEqual(XCTWaiter.wait(for: [keyboardGone], timeout: 5), .completed, "Keyboard should dismiss when the answer is revealed")
         app.buttons["grade-3"].tap()
+    }
+}
+
+extension StudyUITests {
+    func testOptionalTypedAnswerHistorySettingsSnapshotRestartAndUndo() {
+        let app = app()
+        create(app, question: "History question", answer: "Stored model answer")
+        create(app, question: "Next history question", answer: "Next model answer")
+        app.tabBars.buttons["設定"].tap()
+        let setting = app.buttons["typedAnswerSettings"]
+        scrollTo(setting, app: app); setting.tap()
+        let toggle = app.switches["typedAnswerSaveToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5)); XCTAssertEqual(toggle.value as? String, "0")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        app.segmentedControls.buttons["文字入力"].tap()
+        let input = app.descendants(matching: .any)["typedAnswer"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Private answer")
+        if app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap(); app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap(); app.buttons["typedAnswerHistory"].tap()
+        XCTAssertTrue(app.staticTexts["Private answer"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Stored model answer"].exists)
+        attach(app, "Issue10-saved-typed-answer")
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["記録"].waitForExistence(timeout: 15)); app.tabBars.buttons["記録"].tap()
+        app.buttons["typedAnswerHistory"].tap()
+        XCTAssertTrue(app.staticTexts["Private answer"].waitForExistence(timeout: 10))
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap(); app.buttons["undoReview"].tap(); app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap()
+        if app.buttons["typedAnswerHistory"].exists { app.buttons["typedAnswerHistory"].tap() }
+        XCTAssertTrue(app.descendants(matching: .any)["typedAnswerHistoryEmpty"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Private answer"].exists)
+    }
+
+    func testNoteCardCountsReversePreviewJapaneseStateSearchAndDelete() {
+        let app = app()
+        create(app, question: "Counts question", answer: "Counts answer")
+        let total = app.staticTexts["libraryTotalCounts"]
+        XCTAssertTrue(total.waitForExistence(timeout: 5))
+        XCTAssertTrue(total.label.contains("1ノート / 1枚"))
+        app.staticTexts["Counts question"].firstMatch.tap()
+        app.buttons["editNote"].tap()
+        let reverse = app.switches["裏表反転カードも作る"]
+        scrollTo(reverse, app: app)
+        reverse.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        let preview = app.buttons["previewNote"]
+        for _ in 0..<8 {
+            if preview.exists && preview.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(preview.exists && preview.isHittable)
+        XCTAssertEqual(app.staticTexts["generatedCardCount"].label, "このノートから2枚の学習カードを作成")
+        preview.tap()
+        XCTAssertEqual(app.staticTexts["previewCardCount"].label, "このノートから2枚の学習カードを作成")
+        attach(app, "Issue38-generated-count-preview")
+        app.buttons["closePreview"].tap()
+        app.buttons["saveNote"].tap()
+        let state = app.descendants(matching: .any)["noteState"]
+        scrollTo(state, app: app)
+        XCTAssertTrue(app.staticTexts["未学習"].exists || state.label.contains("未学習") || (state.value as? String ?? "").contains("未学習"))
+        let suspension = app.switches["学習を一時停止"]
+        scrollTo(suspension, app: app)
+        suspension.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["noteAvailability"].label.contains("停止中"))
+        attach(app, "Issue38-Japanese-state-and-suspension")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        scrollTo(total, app: app)
+        XCTAssertTrue(total.label.contains("1ノート / 2枚"))
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("Counts question")
+        XCTAssertTrue(app.staticTexts["libraryFilteredCounts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["libraryFilteredCounts"].label.contains("1ノート / 2枚"))
+        if app.buttons["キャンセル"].exists { app.buttons["キャンセル"].tap() }
+        app.staticTexts["Counts question"].firstMatch.tap()
+        let delete = app.buttons["カードを削除"]
+        scrollTo(delete, app: app)
+        delete.tap()
+        app.buttons["削除"].firstMatch.tap()
+        scrollTo(total, app: app)
+        XCTAssertTrue(total.label.contains("0ノート / 0枚"))
     }
 }

@@ -183,6 +183,14 @@ enum UITestFixtures {
         try silentAudio().write(to: documents.appendingPathComponent("Audio-\(name).wav"), options: .atomic)
         try Data("question,answer\nCSV file question,CSV file answer\n".utf8)
             .write(to: documents.appendingPathComponent("UITest-\(name).csv"), options: .atomic)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 80), format: format).image { context in
+            UIColor.systemBlue.setStroke(); context.cgContext.setLineWidth(2)
+            context.cgContext.strokeEllipse(in: CGRect(x: 10, y: 10, width: 60, height: 60))
+        }.pngData()!
+        let csv = "question,answer,image,tags,deck\n" + (0..<100).map { ",ZIP answer \($0),images/symbol.png,地図記号,社会/地理" }.joined(separator: "\n")
+        try StoredZIP.write(["cards.csv": Data(csv.utf8), "images/symbol.png": image])
+            .write(to: documents.appendingPathComponent("Images-\(name).zip"), options: .atomic)
         try Data("invalid ZIP fixture".utf8)
             .write(to: documents.appendingPathComponent("Invalid-\(name).studybackup"), options: .atomic)
     }
