@@ -3,7 +3,7 @@ import SwiftData
 
 extension PersistenceController {
     static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: StudySchemaV4.self)
+        let schema = Schema(versionedSchema: StudySchemaV5.self)
         let config: ModelConfiguration
         if let storeURL {
             config = ModelConfiguration("Study", schema: schema, url: try StudyStorageLocation(canonicalStore: storeURL).activeStore(), cloudKitDatabase: .none)
@@ -49,6 +49,7 @@ final class StudyRepository {
             if try context.fetch(FetchDescriptor<StudyPreferences>()).isEmpty {
                 context.insert(StudyPreferences())
             }
+            try pruneTypedAnswersInTransaction(now: now)
             // Process restart must not count time spent while the app was absent.
             if let draft = try session() { draft.activeSince = nil }
         }
@@ -106,7 +107,11 @@ final class StudyRepository {
     }
 
     func validate(_ input: NoteInput) throws -> Data {
-        if let imageID = input.imageID { guard try assets().contains(where: { $0.id == imageID }) else { throw StudyError.missingRecord } }
+        let media = try assets()
+        if let imageID = input.imageID { guard media.contains(where: { $0.id == imageID && $0.mediaType.hasPrefix("image/") }) else { throw StudyError.missingRecord } }
+        for id in input.audioIDs {
+            guard media.contains(where: { $0.id == id && AudioEncodingPolicy.extensions[$0.mediaType] != nil }) else { throw AttachedAudioError.missing }
+        }
         guard !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { throw StudyError.invalidContent }
         guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
@@ -114,7 +119,8 @@ final class StudyRepository {
                                   explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
                                   imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks,
                                   speechOverrides: input.speechOverrides, speechQuestion: input.speechQuestion,
-                                  speechAnswer: input.speechAnswer)
+                                  speechAnswer: input.speechAnswer, questionAudioID: input.questionAudioID, answerAudioID: input.answerAudioID,
+                                  questionLayout: input.questionLayout, answerLayout: input.answerLayout)
         let variants = Set(try CardGeneration.variants(kind: input.kind, content: content))
         var sanitized = content
         sanitized.speechOverrides = input.speechOverrides?.filter { variants.contains($0.key) }
@@ -124,7 +130,7 @@ final class StudyRepository {
     @discardableResult
     func createNote(_ input: NoteInput, clearingDraft key: String? = nil, now: Date) throws -> UUID {
         let content = try validate(input)
-        let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+        let scheduler = try ReviewScheduler(desiredRetention: deckRetention(input.deckID))
         let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
         return try transaction {
             let note = Note(input: input, content: content, now: now)
@@ -230,15 +236,18 @@ final class StudyRepository {
 
     func queueCards() throws -> [QueueCard] {
         let scheduler = try ReviewScheduler()
+        let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
+        let limits = try Dictionary(uniqueKeysWithValues: decks().map { ($0.id, try deckLimits($0.id)) })
         return try cards().map { card in
             let state = try scheduler.summary(snapshot(card)).state
             return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
-                             suspended: card.isSuspended, noteID: card.noteID)
+                             suspended: card.isSuspended, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
         }
     }
     func queueLogs() throws -> [QueueLog] {
         let map = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
-        return try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: map[$0.cardID]) }
+        let quotas = try quotaMap()
+        return try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: map[$0.cardID], quotaDeckIDs: quotas.usage[$0.sequence] ?? quotas.cards[$0.cardID] ?? []) }
     }
     // Queue eligibility and daily quotas only inspect this study day's logs.
     func todayQueueLogs(cards: [QueueCard], settings: StudySettings, now: Date) throws -> [QueueLog] {
@@ -248,7 +257,8 @@ final class StudyRepository {
         let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
             $0.reviewedAt >= start && $0.reviewedAt < end
         }))
-        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID]) }
+        let quotas = try quotaMap()
+        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID], quotaDeckIDs: quotas.usage[$0.sequence] ?? quotas.cards[$0.cardID] ?? []) }
     }
     func counts(now: Date) throws -> HomeCounts {
         try ReviewQueueBuilder(calendar: calendar).counts(cards: queueCards(), logs: queueLogs(),
@@ -271,14 +281,18 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, now: Date) throws {
         try transaction {
             let normalized = try normalizedScope(scope)
+            let selectedResponse = try responseMode ?? options().sessionResponseMode ?? .cardDefault
             let available = try ReviewQueueBuilder(calendar: calendar).queue(
-                cards: scopedQueueCards(normalized), logs: queueLogs(), settings: settings(),
+                cards: responseEligibleCards(scopedQueueCards(normalized), mode: selectedResponse), logs: queueLogs(), settings: settings(),
                 mode: mode, touched: [], reviewStreak: 0, now: now)
             // Check before replacing an interrupted draft, even if home counts were stale.
-            guard !available.isEmpty else { throw StudyError.noAvailableCards }
+            guard !available.isEmpty else {
+                if selectedResponse == .ordering { throw StudyError.noOrderingCards }
+                throw StudyError.noAvailableCards
+            }
             if let existing = try session() { context.delete(existing) }
             try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
@@ -287,7 +301,7 @@ final class StudyRepository {
             let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
-                startSequence: try lastReviewSequence(), answerLimit: limit)
+                startSequence: try lastReviewSequence(), answerLimit: limit, responseMode: selectedResponse)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
@@ -298,10 +312,11 @@ final class StudyRepository {
         guard let draft = try session(), draft.cardID == nil,
               let mode = StudyMode(rawValue: draft.mode) else { throw StudyError.noSession }
         let originalScope = try scope()
-        let limit = try options().activeSessionProgress?.answerLimit
+        let progress = try options().activeSessionProgress
+        let limit = progress?.answerLimit
         // start validates candidates before replacing anything and rolls back a
         // failed save, so an empty/failed restart retains the final Undo.
-        try start(mode: mode, scope: originalScope, answerLimit: limit, now: now)
+        try start(mode: mode, scope: originalScope, answerLimit: limit, responseMode: progress?.responseMode ?? .cardDefault, now: now)
     }
 
     func completeSession(now: Date) throws {
@@ -342,7 +357,7 @@ final class StudyRepository {
         if let progress = try sessionProgress(), progress.isComplete { return [] }
         let cards = try queueCards(), settings = try settings()
         return try ReviewQueueBuilder(calendar: calendar).queue(
-            cards: scopedQueueCards(scope(), cards: cards), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
+            cards: responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
             mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
             reviewStreak: draft.reviewStreak, now: now)
     }
@@ -354,7 +369,7 @@ final class StudyRepository {
         draft.elapsedMs = 0; draft.updatedAt = now
         draft.activeSince = draft.cardID == nil ? nil : now
         if let id = draft.cardID, let item = try noteItems(cardID: id).first {
-            draft.answerMode = item.responseMode.rawValue
+            draft.answerMode = try (options().activeSessionProgress?.responseMode?.override ?? item.responseMode).rawValue
             try prepareOrderingDraft(draft)
         }
     }
@@ -389,10 +404,15 @@ final class StudyRepository {
                 throw StudyError.noSession
             }
             let progressBefore = try sessionProgress()
-            let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+            guard let note = try notes().first(where: { $0.id == card.noteID }) else { throw StudyError.missingRecord }
+            let scheduler = try ReviewScheduler(desiredRetention: deckRetention(note.deckID), parameters: optimizationState().activeParameters)
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
-            if summary.state == "new", try counts(now: now).newRemaining == 0 { throw StudyError.newLimitReached }
+            if summary.state == "new" {
+                let single = try queueCards().filter { $0.id == cardID }
+                let available = try ReviewQueueBuilder(calendar: calendar).counts(cards: single, logs: queueLogs(), settings: settings(), now: now)
+                guard available.newRemaining > 0 else { throw StudyError.newLimitReached }
+            }
             let transition = try scheduler.review(before, grade: grade, now: now)
             let after = try JSONEncoder().encode(transition.after)
             let duration = draft.elapsedMs + (draft.activeSince.map { max(0, Int(now.timeIntervalSince($0) * 1000)) } ?? 0)
@@ -404,6 +424,20 @@ final class StudyRepository {
                                      durationMs: duration, wasNew: summary.state == "new",
                                      sequence: try lastReviewSequence() + 1)
             context.insert(log)
+            try pruneTypedAnswersInTransaction(now: now)
+            if responseMode == .typing, try options().typedAnswerPolicy?.enabled == true,
+               let item = try noteItems(cardID: card.id).first {
+                let answer = TypedAnswerRecord(id: log.id, cardID: card.id, reviewedAt: log.reviewedAt, grade: log.grade,
+                                              question: item.content.question, answer: draft.typedDraft, modelAnswer: item.content.answer)
+                context.insert(try SavedTypedAnswer(answer))
+            }
+            if summary.state == "new" {
+                var saved = try options()
+                var usage = saved.deckNewUsage ?? []
+                usage.append(DeckNewUsage(sequence: log.sequence, cardID: card.id, quotaDeckIDs: try deckAncestors(note.deckID)))
+                saved.deckNewUsage = usage
+                try writeOptionsInTransaction(saved)
+            }
             card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
             card.updatedAt = now
             draft.undoLogID = log.id
@@ -436,6 +470,10 @@ final class StudyRepository {
             draft.reviewStreak = 0
             try prepareOrderingDraft(draft)
             if latest.wasNew { draft.touchedCardIDs.removeAll { $0 == card.id } }
+            if let answer = try context.fetch(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.id == logID })).first { context.delete(answer) }
+            var saved = try options()
+            saved.deckNewUsage?.removeAll { $0.sequence == latest.sequence }
+            try writeOptionsInTransaction(saved)
             context.delete(latest)
         }
     }
@@ -444,7 +482,7 @@ final class StudyRepository {
         guard let draft = try session() else { return nil }
         let mode = StudyMode(rawValue: draft.mode) ?? .review
         let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
-        let short = try scopedQueueCards(scope()).filter {
+        let short = try responseEligibleCards(scopedQueueCards(scope()), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
             !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()
@@ -467,7 +505,9 @@ final class StudyRepository {
             return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
                                     message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
         }
-        let cards = try scopedQueueCards(scope()), logs = try queueLogs(), settings = try settings()
+        let scoped = try scopedQueueCards(scope())
+        let response = try options().activeSessionProgress?.responseMode ?? .cardDefault
+        let cards = try responseEligibleCards(scoped, mode: response), logs = try queueLogs(), settings = try settings()
         let builder = ReviewQueueBuilder(calendar: calendar)
         let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
         let queue = builder.queue(cards: cards, logs: logs, settings: settings, mode: mode,
@@ -475,17 +515,24 @@ final class StudyRepository {
         guard draft.cardID == nil, queue.isEmpty else {
             return ReviewEmptyState(reason: .retry, title: "出題を確認してください", message: "学習状態を再取得してください。", canRetry: true)
         }
+        if response == .ordering && cards.isEmpty && !scoped.isEmpty {
+            return ReviewEmptyState(reason: .noTargets, title: "並び替えに対応するカードがありません",
+                                    message: "英文の一問一答・記述式カードが対象です。ホームの学習設定で回答形式または学習対象を変更してください。", suggestsScopeChange: true)
+        }
         let limit = mode != .review && counts.eligibleNew > 0 && counts.newRemaining == 0
         let global = builder.counts(cards: try queueCards(), logs: logs, settings: settings, now: now)
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let globalUsed = Set(logs.filter { $0.wasNew && $0.reviewedAt >= day.start && $0.reviewedAt < day.end }.map(\.cardID)).count
+        let capMessage = counts.eligibleNew > 0 && globalUsed < settings.dailyNewLimit ? "デッキまたは親デッキの新規上限に達しました。ライブラリ > デッキ管理 > デッキ編集で確認できます。" : "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。設定 > 学習で変更できます。"
         let remaining = "未学習カードはあと\(global.totalNew)枚（全デッキ・停止中を除く）。現在の学習対象内は\(counts.totalNew)枚です。"
         if short != nil {
             return ReviewEmptyState(reason: .waiting, title: "今出題できるカードはありません",
-                                    message: "期限が来ると自動で出題を再確認します。このセッションで続けるか、今回はここまでにできます。" + (limit ? "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。" + remaining : ""),
+                                    message: "期限が来ると自動で出題を再確認します。このセッションで続けるか、今回はここまでにできます。" + (limit ? capMessage + remaining : ""),
                                     suggestsSettings: limit, canRetry: true)
         }
         if limit {
             return ReviewEmptyState(reason: .newLimit, title: "今日の新規学習は上限です",
-                                    message: "上限\(settings.dailyNewLimit)枚。" + remaining + "設定 > 学習で変更できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsSettings: true, canRetry: true)
+                                    message: capMessage + remaining + "学習日の切替は\(settings.dayStartHour)時です。", suggestsSettings: true, canRetry: true)
         }
         // Match queue()'s mode membership before asking why eligible cards are blocked.
         // In .new, touching a card does not make its long-term review state eligible.

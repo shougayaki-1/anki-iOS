@@ -80,8 +80,12 @@ struct AppRootView: View {
                     }
                 }
                 #endif
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications)
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || ProcessInfo.processInfo.arguments.contains("-study-test-widget")) ? WidgetSnapshotPublisher(file: .shared()) : nil)
                 #if DEBUG
+                if studyURL != nil, args.contains("-study-test-widget"), let store {
+                    try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
+                    try store.reload()
+                }
                 if studyURL != nil, args.contains("-study-test-ordering"), let store {
                     try UITestFixtures.populateOrdering(store.repository, now: store.clock())
                     try store.reload()

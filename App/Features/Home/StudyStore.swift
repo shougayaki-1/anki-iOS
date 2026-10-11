@@ -22,11 +22,13 @@ final class StudyStore {
     @ObservationIgnored private var homeTimeZone: String?
     var settings = StudySettings()
     var sessionAnswerLimit = 20
+    var sessionResponseMode = SessionResponseMode.cardDefault
     var review: ReviewPresentation?
     var failure: String?
     var reviewRefreshFailed = false
     var showingReview = false
     var selectedTab = 0
+    var dataRevision = 0
     var statistics: StudyStatistics?
     var statisticsLoading = false
     var statisticsError: String?
@@ -35,13 +37,16 @@ final class StudyStore {
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration = 0
     var notificationPermission = NotificationPermission.unknown
+    var widgetFailure: String?
+    @ObservationIgnored private let widgetSnapshots: WidgetSnapshotPublisher?
     var notificationFailure: String?
     let notifications: NotificationService
     var scheduledNotificationCount = 0
     let haptics = HapticsService()
     @ObservationIgnored private var notificationJob: Task<Void, Never>?
 
-    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil) throws {
+    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil, widgetSnapshots: WidgetSnapshotPublisher? = nil) throws {
+        self.widgetSnapshots = widgetSnapshots
         repository = StudyRepository(container: container, mediaStore: mediaStore)
         statisticsReader = StatisticsReader(container: container)
         self.clock = clock
@@ -67,6 +72,7 @@ final class StudyStore {
             // never to the review/save/home reload path.
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
+            self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
             self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
             statisticsTask?.cancel()
             statisticsGeneration += 1
@@ -78,8 +84,10 @@ final class StudyStore {
             statisticsScope.deckID = statisticsScope.deckID.flatMap { id in decks.contains { $0.id == id } ? id : nil }
             statisticsScope.tagIDs.removeAll { id in !tags.contains { $0.id == id } }
             if selectedTab == 2 { refreshStatistics() }
+            dataRevision += 1
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
+            publishWidget(snapshot, force: true)
             scheduleNotifications()
         } catch { homeFailure = error.localizedDescription; throw error }
     }
@@ -107,8 +115,17 @@ final class StudyStore {
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due
             applyHomeSnapshot(snapshot)
+            publishWidget(snapshot, force: false)
             if reconcileNotifications || changed { scheduleNotifications() }
         } catch { homeFailure = error.localizedDescription }
+    }
+    private func publishWidget(_ snapshot: HomeSnapshot, force: Bool) {
+        widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force) { [weak self] message in
+            self?.widgetFailure = message
+        }
+    }
+    func refreshWidget() {
+        do { try reload() } catch { failure = error.localizedDescription }
     }
     func refreshStatistics() {
         statisticsTask?.cancel()
@@ -184,6 +201,14 @@ final class StudyStore {
         case .mixed: return counts.due > 0 || counts.newRemaining > 0
         }
     }
+    func changeSessionResponseMode(_ mode: SessionResponseMode) {
+        perform {
+            var saved = try repository.options()
+            saved.sessionResponseMode = mode
+            try repository.updateOptions(saved)
+        }
+    }
+
     func changeSessionAnswerLimit(_ limit: Int) {
         guard [0, 10, 20, 30].contains(limit) else { failure = "回答数を選択し直してください。"; return }
         perform {
@@ -218,7 +243,7 @@ final class StudyStore {
     }
 
     var isNewLimitReached: Bool {
-        homeFailure == nil && counts.eligibleNew > 0 && newSlotsRemaining == 0
+        homeFailure == nil && counts.eligibleNew > 0 && counts.newRemaining == 0
     }
     var studyDayBoundaryMessage: String {
         let hour = settings.dayStartHour
@@ -236,6 +261,7 @@ final class StudyStore {
             return "現在のフィルター内の未学習カードは兄弟カードの同日抑制で待機中です。\(studyDayBoundaryMessage)"
         }
         if isNewLimitReached {
+            if newSlotsRemaining > 0 { return "デッキまたは親デッキの新規上限に達しました。ライブラリ > デッキ管理 > デッキ編集で確認できます。\(studyDayBoundaryMessage)" }
             return "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。\(studyDayBoundaryMessage)"
         }
         return "今は新規カードを出題できません。"

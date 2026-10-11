@@ -12,6 +12,7 @@ struct BackupService {
         }.value
     }
     static func export(repository: StudyRepository, now: Date, appVersion: String) async throws -> Data {
+        try repository.pruneTypedAnswers(now: now)
         let snapshot = try BackupData.capture(repository)
         let urls = try repository.assets().map { ($0.id, try repository.mediaStore.url(for: $0.relativePath)) }
         return try await Task.detached(priority: .utility) {
@@ -40,7 +41,7 @@ struct BackupService {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             for index in snapshot.media.indices {
                 let assetID = snapshot.media[index].id
-                let ext = snapshot.media[index].mediaType == "image/png" ? "png" : "jpg"
+                let ext = AudioEncodingPolicy.extensions[snapshot.media[index].mediaType] ?? (snapshot.media[index].mediaType == "image/png" ? "png" : "jpg")
                 let path = "\(mediaPrefix)/\(assetID.uuidString).\(ext)"
                 let file = try mediaStore.url(for: path)
                 try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -82,11 +83,14 @@ extension BackupData {
         for row in scopes { try row.insert(into: context) }
         for row in sessions { try row.insert(into: context) }
         for row in orderingDrafts ?? [] { row.insert(into: context) }
+        for row in typedAnswers ?? [] { context.insert(try SavedTypedAnswer(row)) }
         for row in imports { try row.insert(into: context) }
         for row in editorDrafts { try row.insert(into: context) }
     }
     func canonical() -> Self {
         var value = self
+        if value.typedAnswers?.isEmpty == true { value.typedAnswers = nil }
+        value.typedAnswers?.sort { $0.id.uuidString < $1.id.uuidString }
         if value.orderingDrafts?.isEmpty == true { value.orderingDrafts = nil }
         value.orderingDrafts?.sort { $0.key < $1.key }
         value.decks.sort { $0.id.uuidString < $1.id.uuidString }; value.notes.sort { $0.id.uuidString < $1.id.uuidString }

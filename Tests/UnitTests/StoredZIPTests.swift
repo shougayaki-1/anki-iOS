@@ -54,3 +54,17 @@ final class StoredZIPTests: XCTestCase {
         XCTAssertEqual(ImageEncodingPolicy.maximumPixels, 40_000_000)
     }
 }
+
+
+extension StoredZIPTests {
+    func testDeflateIsOptInBoundedAndChecksIntegrity() throws {
+        let fixture = Data(base64Encoded: "UEsDBBQAAAAIACNzS12fB9o8EwAAABEAAAALAAAAcGF5bG9hZC50eHRzSU3LSSxJTVFIzs8rSc0rKQYAUEsBAhQDFAAAAAgAI3NLXZ8H2jwTAAAAEQAAAAsAAAAAAAAAAAAAAIABAAAAAHBheWxvYWQudHh0UEsFBgAAAAABAAEAOQAAADwAAAAAAA==")!
+        XCTAssertThrowsError(try StoredZIP.read(fixture))
+        XCTAssertEqual(try StoredZIP.read(fixture, allowDeflate: true)["payload.txt"], Data("Deflated contents".utf8))
+        var broken = fixture; broken[45] ^= 0xff
+        XCTAssertThrowsError(try StoredZIP.read(broken, allowDeflate: true))
+        XCTAssertThrowsError(try StoredZIP.inflateZIP(Data([3, 0]), size: 50_000_001))
+        XCTAssertThrowsError(try StoredZIP.inflateZIP(Data([3, 0]), size: 2_000_000))
+        XCTAssertThrowsError(try StoredZIP.inflateZIP(Data([1, 2, 3]), size: 10))
+    }
+}

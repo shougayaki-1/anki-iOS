@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import SwiftData
 
 extension StudyRepository {
@@ -42,9 +43,15 @@ extension StudyRepository {
         try cleanupUnusedMedia()
     }
     func cleanupUnusedMedia() throws {
-        let noteImages = try notes().compactMap { try JSONDecoder().decode(TextContent.self, from: $0.contentPayload).imageID }
+        let noteImages = try notes().flatMap { note -> [UUID] in
+            let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            return [content.imageID].compactMap { $0 } + content.audioIDs
+        }
         let drafts = try context.fetch(FetchDescriptor<EditorDraft>())
-        let draftImages = try drafts.compactMap { try JSONDecoder().decode(NoteInput.self, from: $0.payload).imageID }
+        let draftImages = try drafts.flatMap { draft -> [UUID] in
+            let input = try JSONDecoder().decode(NoteInput.self, from: draft.payload)
+            return [input.imageID].compactMap { $0 } + input.audioIDs
+        }
         let used = Set(noteImages + draftImages)
         let all = try assets()
         guard used.isSubset(of: Set(all.map(\.id))) else { throw StudyError.missingRecord }
@@ -55,16 +62,18 @@ extension StudyRepository {
         try transaction { for asset in unused { context.delete(asset) } }
         for path in paths { try mediaStore.remove(path) }
         // A process can terminate between writing a file and inserting its row.
-        // Scan only the managed images directory, preserving every live asset.
+        // Scan only managed media directories, preserving every live asset.
         let retained = Set(try assets().map(\.relativePath))
-        let directory = try mediaStore.url(for: "images")
-        if FileManager.default.fileExists(atPath: directory.path) {
-            for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-                let path = "images/" + file.lastPathComponent
-                _ = try mediaStore.url(for: path)
-                let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-                if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true {
-                    try mediaStore.remove(path)
+        for directoryName in ["images", "audio"] {
+            let directory = try mediaStore.url(for: directoryName)
+            if FileManager.default.fileExists(atPath: directory.path) {
+                for file in try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
+                    let path = directoryName + "/" + file.lastPathComponent
+                    _ = try mediaStore.url(for: path)
+                    let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+                    if !retained.contains(path), attributes.isRegularFile == true, attributes.isSymbolicLink != true {
+                        try mediaStore.remove(path)
+                    }
                 }
             }
         }
@@ -74,7 +83,7 @@ extension StudyRepository {
                 let attributes = try folder.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
                 guard UUID(uuidString: folder.lastPathComponent) != nil, attributes.isDirectory == true, attributes.isSymbolicLink != true else { continue }
                 for file in try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey]) {
-                    guard ["jpg", "png"].contains(file.pathExtension.lowercased()),
+                    guard (["jpg", "png"] + Array(AudioEncodingPolicy.extensions.values)).contains(file.pathExtension.lowercased()),
                           UUID(uuidString: file.deletingPathExtension().lastPathComponent) != nil else { continue }
                     let attributes = try file.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
                     let path = "restored/\(folder.lastPathComponent)/\(file.lastPathComponent)"
@@ -83,5 +92,123 @@ extension StudyRepository {
                 if try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty { try FileManager.default.removeItem(at: folder) }
             }
         }
+    }
+}
+
+
+extension StudyRepository {
+    func addAudio(_ prepared: AudioEncodingPolicy.Prepared, now: Date) throws -> UUID {
+        let hash = BackupArchive.hash(prepared.data)
+        if let existing = try assets().first(where: { $0.sha256 == hash && $0.mediaType == prepared.mediaType }),
+           let url = try? assetURL(id: existing.id),
+           let current = try? Data(contentsOf: url), current == prepared.data { return existing.id }
+        let asset = try mediaStore.storeAudio(prepared)
+        do {
+            return try transaction { context.insert(MediaAsset(image: asset, now: now)); return asset.id }
+        } catch { try? mediaStore.remove(asset.relativePath); throw error }
+    }
+}
+
+extension StudyRepository {
+    func importImagePackage(_ package: ImageImportPackage, deckID: UUID, action: DuplicateAction, now: Date) throws -> ImportResult {
+        let initialNoteIDs = Set(try notes().map(\.id))
+        var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
+        var duplicates = 0
+        let selected = package.rows.filter { $0.included && $0.error == nil }
+        guard try decks().contains(where: { $0.id == deckID }) else { throw StudyError.missingRecord }
+        let fresh = try JSONEncoder().encode(ReviewScheduler(desiredRetention: settings().desiredRetention).newCard(now: now))
+        var createdPaths: [String] = []
+        do {
+            return try transaction {
+                var imported = 0, skipped = package.rows.filter { !$0.included }.count
+                var errors = package.rows.filter { $0.included }.compactMap { row in row.error.map { "\(row.line)行: \($0)" } }
+                var deckCache = try decks(), imageCache: [String: UUID] = [:]
+                var known = try assets(), allNotes = try notes(), hashCache: [String: String] = [:]
+                for row in selected {
+                    guard !ImportParser.normalized(row.question).isEmpty, !ImportParser.normalized(row.answer).isEmpty,
+                          let bytes = package.images[row.imagePath] else { errors.append("\(row.line)行: 問題・解答・画像を確認してください。"); continue }
+                    var destination = deckID
+                    if !row.deckPath.isEmpty {
+                        var parent: UUID?
+                        for segment in row.deckPath.split(separator: "/") {
+                            let name = String(segment)
+                            if let existing = deckCache.first(where: { $0.parentID == parent && $0.name == name }) { parent = existing.id }
+                            else {
+                                let deck = Deck(name: name, now: now); deck.parentID = parent
+                                context.insert(deck); deckCache.append(deck); parent = deck.id
+                            }
+                        }
+                        destination = parent ?? deckID
+                    }
+                    let hash = hashCache[row.imagePath] ?? SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+                    hashCache[row.imagePath] = hash
+                    let existing = allNotes.first { note in
+                        guard note.deckID == destination, note.type == NoteKind.basic.rawValue,
+                              let content = try? JSONDecoder().decode(TextContent.self, from: note.contentPayload),
+                              ImportParser.normalized(content.question) == ImportParser.normalized(row.question),
+                              ImportParser.normalized(content.answer) == ImportParser.normalized(row.answer),
+                              let image = known.first(where: { $0.id == content.imageID }) else { return false }
+                        return image.sha256 == hash
+                    }
+                    if existing != nil && action == .skip { skipped += 1; duplicates += 1; continue }
+                    let imageID: UUID
+                    if let cached = imageCache[row.imagePath] { imageID = cached }
+                    else if let asset = known.first(where: { $0.sha256 == hash }) { imageID = asset.id; imageCache[row.imagePath] = imageID }
+                    else {
+                        let image = try mediaStore.store(bytes); createdPaths.append(image.relativePath)
+                        let asset = MediaAsset(image: image, now: now); context.insert(asset); known.append(asset); imageID = image.id; imageCache[row.imagePath] = imageID
+                    }
+                    let input = NoteInput(deckID: destination, question: row.question, answer: row.answer,
+                                          explanation: row.explanation, tagNames: row.tags, imageID: imageID)
+                    let payload = try validate(input)
+                    if let existing, action == .update {
+                        if initialNoteIDs.contains(existing.id) {
+                            updatedNoteIDs.insert(existing.id)
+                            maintainedCardIDs.formUnion(try cards().filter { $0.noteID == existing.id }.map(\.id))
+                        }
+                        var content = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
+                        content.explanation = row.explanation
+                        existing.contentPayload = try JSONEncoder().encode(content)
+                        existing.tagIDs = try tagIDs(for: row.tags); existing.updatedAt = now
+                    } else {
+                        let note = Note(input: input, content: payload, now: now)
+                        note.tagIDs = try tagIDs(for: row.tags); context.insert(note); allNotes.append(note); createdNoteIDs.insert(note.id)
+                        let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: fresh, now: now)
+                        context.insert(card); createdCardIDs.insert(card.id)
+                    }
+                    imported += 1
+                }
+                context.insert(ImportBatch(source: "画像ZIP", now: now, success: imported, skipped: skipped, errors: errors))
+                return ImportResult(imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+                                    updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
+                                    duplicateRows: duplicates, excludedRows: package.rows.filter { !$0.included }.count)
+            }
+        } catch {
+            for path in createdPaths { try? mediaStore.remove(path) }
+            throw error
+        }
+    }
+}
+
+extension StudyRepository {
+    func imageImportDuplicates(_ package: ImageImportPackage, deckID: UUID) throws -> Set<UUID> {
+        let assetHashes = Dictionary(uniqueKeysWithValues: try assets().map { ($0.id, $0.sha256) })
+        var keys = Set<[String]>()
+        for note in try notes() where note.type == NoteKind.basic.rawValue {
+            let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            if let image = content.imageID, let hash = assetHashes[image] {
+                keys.insert([try deckPath(note.deckID), ImportParser.normalized(content.question), ImportParser.normalized(content.answer), hash])
+            }
+        }
+        let fallback = try deckPath(deckID)
+        var duplicates = Set<UUID>(), hashCache: [String: String] = [:]
+        for row in package.rows where row.error == nil {
+            guard let bytes = package.images[row.imagePath] else { continue }
+            let hash = hashCache[row.imagePath] ?? SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            hashCache[row.imagePath] = hash
+            let key = [row.deckPath.isEmpty ? fallback : row.deckPath, ImportParser.normalized(row.question), ImportParser.normalized(row.answer), hash]
+            if !keys.insert(key).inserted { duplicates.insert(row.id) }
+        }
+        return duplicates
     }
 }
