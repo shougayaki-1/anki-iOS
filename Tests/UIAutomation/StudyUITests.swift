@@ -708,7 +708,7 @@ final class StudyUITests: XCTestCase {
             app.switches["studyTag-\(tag)"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         }
         app.buttons["applyStudyFilter"].tap()
-        XCTAssertTrue(app.staticTexts["primaryNewCount"].label.contains("1枚"))
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
         XCTAssertFalse(app.buttons["start-review"].isEnabled)
         scrollTo(app.buttons["start-mixed"], app: app); app.buttons["start-mixed"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))

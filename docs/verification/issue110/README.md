@@ -9,3 +9,5 @@
 - 実機・VoiceOver音声・最大Dynamic Typeは今回未検証。
 
 結果バンドル `/private/tmp/anki-issue110-tests.xcresult`、ログ `/private/tmp/anki-issue110-tests.log`、Releaseログ `/private/tmp/anki-issue110-release.log`。一時ファイルの永続保持は保証しない。
+
+追加回帰検証：iPhone 17 Pro Max / iOS 26.5で `testHomeParentDeckAndMultipleTagsApplyResetAndMixedMode` 成功。親デッキ＋複数タグAND、リセット、混合開始と中断再開、新規件数表示を確認（結果 `/private/tmp/anki-issue110-filter-tests.xcresult`）。
