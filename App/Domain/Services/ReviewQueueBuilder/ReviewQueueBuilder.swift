@@ -20,7 +20,7 @@ struct StudyDay {
     }
 }
 
-struct QueueCard {
+struct QueueCard: Sendable {
     let id: UUID
     let state: String
     let due: Date
@@ -29,7 +29,7 @@ struct QueueCard {
     var noteID: UUID? = nil
 }
 
-struct QueueLog {
+struct QueueLog: Sendable {
     let cardID: UUID
     let reviewedAt: Date
     let wasNew: Bool

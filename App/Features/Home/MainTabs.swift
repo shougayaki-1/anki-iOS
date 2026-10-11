@@ -18,6 +18,16 @@ struct MainTabs: View {
             SettingsView(store: store, probeContainer: probeContainer)
                 .tabItem { Label("設定", systemImage: "gearshape") }.tag(3)
         }
+        .onOpenURL { url in
+            guard let destination = WidgetDestination.parse(url) else { return }
+            switch destination {
+            case .home:
+                if store.showingReview { store.pause(); guard !store.showingReview else { return } }
+                store.selectedTab = 0; store.refreshHome()
+            case .review: shortcutNavigation.submit(.study(.review))
+            case .progress: shortcutNavigation.submit(.progress)
+            }
+        }
         .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
         // One alert presenter avoids two .alert modifiers competing on TabView.
         .alert(Text(store.failure != nil ? "処理に失敗しました" : "ショートカット"),
