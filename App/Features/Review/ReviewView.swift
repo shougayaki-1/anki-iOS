@@ -219,9 +219,16 @@ struct ReviewView: View {
         guard let event, scenePhase == .active, !autoSpeechPaused, !voiceOver,
               let item = store.review?.card, item.cardID == event.cardID,
               store.settings.speech.autoplay(deckID: item.deckID,
-                                             noteOverride: item.sourceContent.speechOverrides?[item.variantKey]).includes(event.side),
-              let text = SpeechReadout.text(kind: item.kind, displayed: item.content, side: event.side) else { return }
-        speechPlayer.play(text: text, settings: store.settings.speech)
+                                             noteOverride: item.sourceContent.speechOverrides?[item.variantKey]).includes(event.side) else { return }
+        playPreferredAudio(event.side, item: item)
+    }
+
+    private func playPreferredAudio(_ side: SpeechSide, item: NoteItem) {
+        guard side == .question || store.review?.answerRevealed == true else { return }
+        if let id = item.content.audioID(for: side) {
+            if let url = try? store.repository.assetURL(id: id) { speechPlayer.playAttached(url: url) }
+            else { speechPlayer.missingAttachment() }
+        } else { playSpeech(side, item: item) }
     }
 
     private func playSpeech(_ side: SpeechSide, item: NoteItem) {
@@ -232,9 +239,9 @@ struct ReviewView: View {
     }
 
     @ViewBuilder private func speechControls(_ review: ReviewPresentation, item: NoteItem) -> some View {
-        let hasQuestion = SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil
+        let hasQuestion = item.content.questionAudioID != nil || SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil
         let hasAnswer = review.answerRevealed &&
-            SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil
+            (item.content.answerAudioID != nil || SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil)
         if hasQuestion || hasAnswer {
             VStack(alignment: .leading, spacing: 6) {
                 ViewThatFits(in: .horizontal) {
@@ -255,18 +262,31 @@ struct ReviewView: View {
 
     @ViewBuilder private func speechButtons(hasQuestion: Bool, hasAnswer: Bool, item: NoteItem) -> some View {
         if hasQuestion {
-            Button { playSpeech(.question, item: item) } label: {
+            Button { playPreferredAudio(.question, item: item) } label: {
                 Label("問題を再生", systemImage: "speaker.wave.2")
                     .fixedSize(horizontal: true, vertical: false)
             }
             .accessibilityIdentifier("speakQuestion")
         }
         if hasAnswer {
-            Button { playSpeech(.answer, item: item) } label: {
+            Button { playPreferredAudio(.answer, item: item) } label: {
                 Label("解答を再生", systemImage: "speaker.wave.2")
                     .fixedSize(horizontal: true, vertical: false)
             }
             .accessibilityIdentifier("speakAnswer")
+        }
+        if (item.content.questionAudioID != nil || (store.review?.answerRevealed == true && item.content.answerAudioID != nil)) &&
+           (SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil ||
+            (store.review?.answerRevealed == true && SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil)) {
+            Menu("TTSで読む", systemImage: "text.bubble") {
+                if SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil {
+                    Button("問題の英文を読む") { playSpeech(.question, item: item) }.accessibilityIdentifier("ttsQuestion")
+                }
+                if store.review?.answerRevealed == true,
+                   SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil {
+                    Button("解答の英文を読む") { playSpeech(.answer, item: item) }.accessibilityIdentifier("ttsAnswer")
+                }
+            }.accessibilityIdentifier("chooseTTS")
         }
         if speechPlayer.playing {
             Button { speechPlayer.stop() } label: {
@@ -292,7 +312,7 @@ struct ReviewView: View {
         }
     }
     private func questionContent(_ item: NoteItem) -> some View {
-        Text(item.content.question).font(contentFont).textSelection(.enabled)
+        StudyTextView(text: item.content.question, layout: item.content.questionLayout, font: contentFont, fontSize: store.settings.reviewAppearance.textSize == .standard ? 24 : 32)
             .accessibilityIdentifier("reviewQuestion")
             .accessibilityFocused($readingFocus, equals: .question)
     }
@@ -310,7 +330,7 @@ struct ReviewView: View {
             Text(draft.evaluationGuidance).font(.footnote).foregroundStyle(.secondary)
         }
         Text("模範解答").font(.headline)
-        Text(item.content.answer).font(answerFont).textSelection(.enabled).accessibilityIdentifier("modelAnswer")
+        StudyTextView(text: item.content.answer, layout: item.content.answerLayout, font: answerFont, fontSize: store.settings.reviewAppearance.textSize == .standard ? 20 : 28).accessibilityIdentifier("modelAnswer")
             .accessibilityFocused($readingFocus, equals: .answer)
         if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
     }

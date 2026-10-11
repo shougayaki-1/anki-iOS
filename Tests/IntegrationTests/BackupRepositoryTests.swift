@@ -200,3 +200,299 @@ final class BackupRepositoryTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: b)), jpg)
     }
 }
+
+extension BackupRepositoryTests {
+    func testTypedAnswersRestoreWithIDsTextPolicyAndUndoAndRejectBadLogLink() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        try source.createNote(NoteInput(deckID: source.decks()[0].id, question: "保存対象", answer: "模範解答", responseMode: .typing), now: now)
+        try source.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 90), now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(text: "自分の回答\n複数行", revealed: true, now: now); try source.grade(.good, now: now)
+        let expected = try source.savedTypedAnswers(now: now)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.savedTypedAnswers(now: now), expected)
+        XCTAssertEqual(try reopened.options().typedAnswerPolicy, TypedAnswerPolicy(enabled: true, retentionDays: 90))
+        try reopened.undo(now: now)
+        XCTAssertTrue(try reopened.savedTypedAnswers(now: now).isEmpty); XCTAssertTrue(try reopened.logs().isEmpty)
+        var invalid = backup.data
+        let value = expected[0]
+        invalid.typedAnswers = [TypedAnswerRecord(id: UUID(), cardID: value.cardID, reviewedAt: value.reviewedAt, grade: value.grade,
+                                                question: value.question, answer: value.answer, modelAnswer: value.modelAnswer)]
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: backup.media))
+        invalid.typedAnswers = [value, value]
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: backup.media))
+        var legacy = backup.data; legacy.typedAnswers = nil
+        let decoded = try BackupArchive.decode(BackupArchive.create(data: legacy, media: backup.media, now: now, appVersion: "legacy"))
+        XCTAssertNil(decoded.data.typedAnswers)
+        let expired = try BackupArchive.decode(await BackupService.export(repository: source, now: now.addingTimeInterval(91 * 86400), appVersion: "test"))
+        XCTAssertNil(expired.data.typedAnswers); XCTAssertEqual(expired.data.logs.count, 1)
+        XCTAssertEqual(expired.data.cards.first?.id, backup.data.cards.first?.id)
+        XCTAssertEqual(expired.data.cards.first?.fsrsPayload, backup.data.cards.first?.fsrsPayload)
+    }
+    func testImageZIPBackupRestoreAndCleanup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let bytes = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { context in
+            UIColor.blue.setStroke(); context.cgContext.strokeEllipse(in: CGRect(x: 5, y: 5, width: 30, height: 30))
+        }.pngData()!
+        let csv = "answer,image\n名称,images/a.png"
+        let package = try ImageImportPackage.read(StoredZIP.write(["cards.csv": Data(csv.utf8), "images/a.png": bytes]))
+        _ = try source.importImagePackage(package, deckID: source.decks()[0].id, action: .add, now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(revealed: true, now: now); try source.grade(.good, now: now)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.cards().map(\.id), try source.cards().map(\.id))
+        XCTAssertEqual(try reopened.logs().map(\.id), try source.logs().map(\.id))
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: reopened.assets()[0].id)), bytes)
+        try reopened.undo(now: now)
+        XCTAssertTrue(try reopened.logs().isEmpty)
+        let note = try reopened.notes()[0]
+        try reopened.deleteNote(id: note.id)
+        try reopened.cleanupUnusedMedia()
+        XCTAssertTrue(try reopened.assets().isEmpty)
+    }
+}
+
+extension BackupRepositoryTests {
+    func testAudioBackupRestoresBothFacesDraftAndUndoAndRejectsWrongMediaRole() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let prepared = try AudioEncodingPolicy.prepare(SpeechReadoutTests.silence())
+        let audio = try source.addAudio(prepared, now: now)
+        XCTAssertEqual(try source.addAudio(prepared, now: now), audio)
+        var input = NoteInput(deckID: try source.decks()[0].id, question: "Question", answer: "Answer", reverseEnabled: true, questionAudioID: audio, answerAudioID: audio)
+        let note = try source.createNote(input, now: now)
+        try source.saveEditorDraft(key: "new", input: input, now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(revealed: true, now: now)
+        try source.grade(.good, now: now.addingTimeInterval(1))
+        let before = try source.cards().map { ($0.id, $0.fsrsPayload) }
+        let logs = try source.logs().map(\.id)
+        input.answerAudioID = nil
+        try source.updateNote(id: note, input: input, now: now.addingTimeInterval(2))
+        XCTAssertEqual(try source.cards().map(\.id), before.map(\.0))
+        XCTAssertEqual(try source.cards().map(\.fsrsPayload), before.map(\.1))
+        XCTAssertEqual(try source.logs().map(\.id), logs)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        XCTAssertEqual(backup.manifest.schemaVersion, 2)
+        XCTAssertEqual(backup.media[audio], prepared.data)
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.noteItems().first?.sourceContent.questionAudioID, audio)
+        XCTAssertEqual(try reopened.editorDraft(key: "new")?.answerAudioID, audio)
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: audio)), prepared.data)
+        try reopened.undo(now: now.addingTimeInterval(5))
+        XCTAssertTrue(try reopened.logs().isEmpty)
+        input.imageID = audio
+        XCTAssertThrowsError(try source.updateNote(id: note, input: input, now: now))
+        var files = try StoredZIP.read(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        var manifest = backup.manifest; manifest.schemaVersion = 1
+        files["manifest.json"] = try JSONEncoder().encode(manifest)
+        XCTAssertThrowsError(try BackupArchive.decode(StoredZIP.write(files)))
+    }
+}
+
+extension BackupRepositoryTests {
+    func testAudioDraftPreventsCleanupAndFailedSaveRemovesNewFile() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root)
+        let prepared = try AudioEncodingPolicy.prepare(SpeechReadoutTests.silence())
+        let id = try repo.addAudio(prepared, now: now), url = try repo.assetURL(id: id)
+        let input = NoteInput(deckID: try repo.decks()[0].id, question: "Q", answer: "A", questionAudioID: id)
+        try repo.saveEditorDraft(key: "new", input: input, now: now)
+        try repo.cleanupUnusedMedia(); XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+        try repo.discardEditorDraft(key: "new")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: url.path)); XCTAssertTrue(try repo.assets().isEmpty)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.addAudio(prepared, now: now))
+        XCTAssertTrue(try repo.assets().isEmpty)
+        let folder = try repo.mediaStore.url(for: "audio")
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+    }
+}
+
+extension BackupRepositoryTests {
+    func testDeckExchangeExportsOnlySelectedContentAndImportsFreshCardsWithMedia() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let child = try XCTUnwrap(source.decks().first(where: { $0.parentID != nil }))
+        let audio = try source.addAudio(AudioEncodingPolicy.prepare(SpeechReadoutTests.silence()), now: now)
+        let note = try XCTUnwrap(source.notes().first)
+        try source.transaction {
+            var content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            content.questionAudioID = audio; content.answerAudioID = audio; content.speechOverrides = ["basic:front": .both]
+            note.contentPayload = try JSONEncoder().encode(content)
+        }
+        try source.createNote(NoteInput(deckID: source.decks()[0].id, question: "Private unrelated", answer: "Do not share"), now: now)
+        let before = try BackupData.capture(source)
+        let bytes = try await DeckExchange.export(repository: source, rootID: child.id)
+        XCTAssertEqual(try BackupData.capture(source), before)
+        let validated = try DeckExchange.decode(bytes)
+        XCTAssertEqual(validated.package.notes.count, 4)
+        XCTAssertEqual(validated.cardCount, 6)
+        XCTAssertEqual(validated.package.decks.count, 1)
+        XCTAssertNil(validated.package.decks[0].parentID)
+        XCTAssertEqual(Set(validated.package.notes.map(\.kind)), Set(NoteKind.allCases))
+        XCTAssertTrue(validated.package.notes.allSatisfy { $0.content.speechOverrides == nil })
+        XCTAssertEqual(validated.bytes[audio], SpeechReadoutTests.silence())
+        let files = try StoredZIP.read(bytes)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: files["deck.json"]!) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["schemaVersion", "rootID", "decks", "notes", "media"])
+        XCTAssertNil(files["data.json"])
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        try destination.createDeck(name: child.name, now: now)
+        try destination.createNote(NoteInput(deckID: destination.decks()[0].id, question: "Existing", answer: "Keep"), now: now)
+        try destination.start(mode: .new, now: now); try destination.updateDraft(revealed: true, now: now)
+        try destination.grade(.good, now: now.addingTimeInterval(1))
+        let savedLogs = try destination.logs().map(\.id), savedSettings = try destination.settings()
+        let savedCard = try XCTUnwrap(destination.cards().first)
+        let savedPayload = savedCard.fsrsPayload
+        let preview = try destination.previewDeckImport(validated)
+        XCTAssertTrue(preview.duplicates.isEmpty); XCTAssertEqual(preview.destinationName, "子デッキ（取込 2）")
+        XCTAssertEqual(try destination.importDeckPackage(validated, skipDuplicates: true, now: now), 4)
+        XCTAssertEqual(try destination.logs().map(\.id), savedLogs)
+        XCTAssertEqual(try destination.settings(), savedSettings)
+        XCTAssertEqual(savedCard.fsrsPayload, savedPayload)
+        let imported = try destination.cards().filter { $0.id != savedCard.id }
+        XCTAssertEqual(imported.count, 6)
+        for card in imported {
+            XCTAssertFalse(card.isSuspended)
+            let summary = try ReviewScheduler().summary(JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload))
+            XCTAssertEqual(summary.repetitions, 0)
+        }
+        let audioIDs = try destination.noteItems().flatMap { $0.sourceContent.audioIDs }
+        XCTAssertFalse(audioIDs.isEmpty)
+        XCTAssertFalse(audioIDs.contains(audio))
+        for id in audioIDs { XCTAssertEqual(try Data(contentsOf: destination.assetURL(id: id)), validated.bytes[audio]) }
+        let repeated = try destination.previewDeckImport(validated)
+        XCTAssertEqual(repeated.duplicates.count, 4)
+        let after = try BackupData.capture(destination)
+        XCTAssertEqual(try destination.importDeckPackage(validated, skipDuplicates: true, now: now), 0)
+        XCTAssertEqual(try BackupData.capture(destination), after)
+        XCTAssertEqual(try destination.importDeckPackage(validated, skipDuplicates: false, now: now), 4)
+        _ = try BackupArchive.decode(await BackupService.export(repository: destination, now: now, appVersion: "test"))
+    }
+    func testDeckExchangeRejectsCorruptionAndRollsBackAllModelsAndFiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let child = try XCTUnwrap(source.decks().first(where: { $0.parentID != nil }))
+        let bytes = try await DeckExchange.export(repository: source, rootID: child.id)
+        let validated = try DeckExchange.decode(bytes)
+        var version = validated.package; version.schemaVersion = 2
+        XCTAssertThrowsError(try DeckExchange.validate(version, bytes: validated.bytes))
+        let cycle = DeckPackage(rootID: child.id, decks: [SharedDeck(id: child.id, name: child.name, parentID: child.id)], notes: validated.package.notes, media: validated.package.media)
+        XCTAssertThrowsError(try DeckExchange.validate(cycle, bytes: validated.bytes))
+        var invalidNotes = validated.package.notes
+        invalidNotes[0].content.questionAudioID = validated.package.media[0].id
+        let invalidRole = DeckPackage(rootID: child.id, decks: validated.package.decks, notes: invalidNotes, media: validated.package.media)
+        XCTAssertThrowsError(try DeckExchange.validate(invalidRole, bytes: validated.bytes))
+        var damaged = validated.bytes; damaged[validated.package.media[0].id] = Data("broken".utf8)
+        XCTAssertThrowsError(try DeckExchange.validate(validated.package, bytes: damaged))
+        XCTAssertThrowsError(try DeckExchange.decode(Data(bytes.dropLast())))
+        var files = try StoredZIP.read(bytes)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: files["deck.json"]!) as? [String: Any])
+        json["logs"] = []
+        files["deck.json"] = try JSONSerialization.data(withJSONObject: json)
+        files["manifest.json"] = try JSONEncoder().encode(DeckFileManifest(files: files.filter { $0.key != "manifest.json" }.mapValues(BackupArchive.hash)))
+        XCTAssertThrowsError(try DeckExchange.decode(StoredZIP.write(files)))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let before = try BackupData.capture(destination)
+        destination.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try destination.importDeckPackage(validated, skipDuplicates: false, now: now))
+        XCTAssertEqual(try BackupData.capture(destination), before)
+        if let enumerator = FileManager.default.enumerator(at: destination.mediaStore.root, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in enumerator { XCTAssertNotEqual(try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile, true) }
+        }
+        destination.save = { try $0.save() }
+        let task = Task { try destination.importDeckPackage(validated, skipDuplicates: false, now: now) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled import must not succeed") } catch is CancellationError {} catch { XCTFail("\(error)") }
+        XCTAssertEqual(try BackupData.capture(destination), before)
+    }
+}
+
+extension BackupRepositoryTests {
+    func testLegacyAnkiStandardModelsMediaAndCountsImportAsFreshLearning() async throws {
+        let bytes = try UITestFixtures.ankiFixture()
+        let preview = try AnkiImport.decode(bytes)
+        XCTAssertEqual(preview.sourceNotes, 5); XCTAssertEqual(preview.sourceCards, 7)
+        XCTAssertEqual(preview.deck.package.notes.count, 3); XCTAssertEqual(preview.deck.cardCount, 5)
+        XCTAssertEqual(preview.skipped.count, 2); XCTAssertEqual(preview.scheduledCards, 7); XCTAssertEqual(preview.reviewLogs, 1)
+        XCTAssertTrue(preview.skipped.contains { $0.reason.contains("スクリプト") })
+        XCTAssertTrue(preview.skipped.contains { $0.reason.contains("2フィールド") })
+        let basic = try XCTUnwrap(preview.deck.package.notes.first { $0.content.question.contains("Anki question") })
+        XCTAssertEqual(basic.content.question, "Anki question")
+        XCTAssertEqual(basic.content.answer, "Anki answer")
+        XCTAssertNotNil(basic.content.imageID); XCTAssertNotNil(basic.content.questionAudioID); XCTAssertNotNil(basic.content.answerAudioID)
+        XCTAssertEqual(preview.deck.package.media.count, 3)
+        let cloze = try XCTUnwrap(preview.deck.package.notes.first { $0.kind == .cloze })
+        XCTAssertEqual(cloze.content.question, "{{c1::red}} and {{c2::blue::color}}")
+        XCTAssertEqual(cloze.content.explanation, "Extra explanation")
+        let reverse = try XCTUnwrap(preview.deck.package.notes.first { $0.content.reverseEnabled == true })
+        XCTAssertEqual(try CardGeneration.variants(kind: reverse.kind, content: reverse.content).count, 2)
+        XCTAssertEqual(Set(preview.deck.package.decks.map(\.name)), ["Anki取込", "Default", "Child"])
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root)
+        let before = try BackupData.capture(repo)
+        XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 3)
+        XCTAssertEqual(try repo.cards().count, 5); XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertEqual(try repo.settings().desiredRetention, before.preferences[0].desiredRetention)
+        XCTAssertTrue(try repo.noteItems().allSatisfy { $0.summary.repetitions == 0 })
+        XCTAssertEqual(try repo.previewDeckImport(preview.deck).duplicates.count, 3)
+        _ = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        var legacy2 = try StoredZIP.read(bytes)
+        legacy2["collection.anki21"] = legacy2["collection.anki2"]; legacy2["meta"] = Data([8, 2])
+        XCTAssertEqual(try AnkiImport.decode(StoredZIP.write(legacy2)).deck.cardCount, 5)
+    }
+    func testAnkiRejectsModernDamagedUnsafeSchemaAndPathsWithoutChangingStore() throws {
+        let bytes = try UITestFixtures.ankiFixture(), files = try StoredZIP.read(bytes)
+        var modern = files; modern["collection.anki21b"] = Data([1, 2, 3])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(modern)))
+        var badDB = files; badDB["collection.anki2"] = Data("not sqlite".utf8)
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(badDB)))
+        var truncated = files; truncated["collection.anki2"] = Data(files["collection.anki2"]!.prefix(200))
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(truncated)))
+        XCTAssertThrowsError(try AnkiImport.decode(UITestFixtures.ankiFixture(script: true)))
+        var paths = files; paths["media"] = try JSONEncoder().encode(["0": "../escape.png", "1": "q.wav", "2": "a.wav"])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(paths)))
+        var missing = files; missing["1"] = nil
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(missing)))
+        var unknown = files; unknown["unexpected.sql"] = Data("ATTACH".utf8)
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(unknown)))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root), before = try BackupData.capture(repo)
+        let preview = try AnkiImport.decode(bytes)
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now))
+        XCTAssertEqual(try BackupData.capture(repo), before)
+    }
+}
+
+
+extension BackupRepositoryTests {
+    // Independent Python sqlite3 + zipfile fixture, rather than our app's ZIP writer.
+    func testDeflatedLegacyAnkiPackage() throws {
+        let data = Data(base64Encoded: "UEsDBBQAAAAIAJVzS13VNwudBAIAAABQAAAQAAAAY29sbGVjdGlvbi5hbmtpMu3Yz2rUQBwH8Jl2d20Ru4UeluLBMSC0sJQt3kTFbc1KsbV1u0KL9BB3Jm1oktmdzFZLmEN9Ai++i+/gxVfwLTw6SfYvUjyJaL8fJsOP30x+v8lxcvh6N9CC+VJFnmYPyTKhlDxjjBBSHj4jpeEzQsnvlcnG5693sheXPpHql+qbpe82AAAAAAAAgBtvv1Spra7SVHvvQqHERShPi7m83XabHZd1mlu7LityawFnO6867gu3zQ7aO3vN9jF76R7Xu5P8upq/VavV6NV2XrHrKZ7kU2mmXp66rlw8ydf5VCzVJFail4x7enNFz/t5z1hqkeTT/EzPPHVdz2iqjx/yhHXco05de6dFtN6ildrKCh0UXyVDO+Zmv0iGaxdCjYtEkotwWIaL7vmwTnY3p9UHxA4AAAAAAACAm+3qiJbpx/7e7dTZbDScRyx19GVP2KBRZ052Pbfh29SRig9zsRdly05LyVg7ps5Gi5tTi1te99wxJzajo174S42+H+lsW5rmVYxxbNKbTR4GXBjz+EyxgD/x4uS9UE/TNCtst5sTY+yJ8/OOeh5c6jMZt4IPeqCEY0xx//9G7AAAAAAAAACAf8QGLRO6f5c/F37oacFZfyASHcj43jhT/Cbwi18Axf3/B7EDAAAAAAAAAP4zFVohi4sLC9n9nyz/7dMAAAAAAAAAwJ/0E1BLAwQUAAAACACVc0tdQ7+mowQAAAACAAAABQAAAG1lZGlhq64FAFBLAQIUAxQAAAAIAJVzS13VNwudBAIAAABQAAAQAAAAAAAAAAAAAACAAQAAAABjb2xsZWN0aW9uLmFua2kyUEsBAhQDFAAAAAgAlXNLXUO/pqMEAAAAAgAAAAUAAAAAAAAAAAAAAIABMgIAAG1lZGlhUEsFBgAAAAACAAIAcQAAAFkCAAAAAA==")!
+        let preview = try AnkiImport.decode(data)
+        XCTAssertEqual(preview.deck.cardCount, 1)
+        XCTAssertEqual(preview.deck.package.notes.first?.content.question, "Deflated question")
+        XCTAssertEqual(preview.deck.package.notes.first?.content.answer, "Deflated answer")
+    }
+}

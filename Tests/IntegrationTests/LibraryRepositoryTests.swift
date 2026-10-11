@@ -536,3 +536,147 @@ final class LibraryRepositoryTests: XCTestCase {
     }
 
 }
+
+extension LibraryRepositoryTests {
+    func testImportCountsTenNotesCardsAndDistinctRepeatedUpdates() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let rows = (1...10).map { ImportRow(line: $0, question: "Q\($0)", answer: "A\($0)") }
+        let created = try repo.importRows(rows, deckID: deck, kind: .basic, tagNames: [], action: .skip, source: "test", now: now)
+        XCTAssertEqual(created.imported, 10); XCTAssertEqual(created.createdNotes, 10); XCTAssertEqual(created.createdCards, 10)
+        XCTAssertEqual(created.updatedNotes, 0); XCTAssertEqual(created.maintainedCards, 0)
+        try repo.createNote(NoteInput(deckID: deck, question: "Reverse", answer: "Answer", reverseEnabled: true), now: now)
+        let before = Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) })
+        let repeated = [ImportRow(line: 1, question: "Reverse", answer: "Answer"), ImportRow(line: 2, question: "Reverse", answer: "Answer")]
+        let updated = try repo.importRows(repeated, deckID: deck, kind: .basic, tagNames: [], action: .update, source: "test", now: now)
+        XCTAssertEqual(updated.imported, 2); XCTAssertEqual(updated.updatedNotes, 1); XCTAssertEqual(updated.maintainedCards, 2)
+        XCTAssertEqual(updated.createdNotes, 0); XCTAssertEqual(updated.createdCards, 0)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) }), before)
+    }
+    func testImportCountsClozeGeneratedCardsAndMixedSkipExclusionError() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let row = ImportRow(line: 1, question: "{{c1::one}} {{c2::two}} {{c1::again}}", answer: "")
+        let created = try repo.importRows([row, row], deckID: deck, kind: .cloze, tagNames: [], action: .update, source: "test", now: now)
+        XCTAssertEqual(created.imported, 2); XCTAssertEqual(created.createdNotes, 1); XCTAssertEqual(created.createdCards, 2)
+        XCTAssertEqual(created.updatedNotes, 0); XCTAssertEqual(created.maintainedCards, 0)
+        var excluded = ImportRow(line: 3, question: "exclude", answer: "A"); excluded.included = false
+        let existing = ImportRow(line: 2, question: row.question, answer: "")
+        let invalid = ImportRow(line: 4, question: "not cloze", answer: "")
+        let result = try repo.importRows([existing, excluded, invalid], deckID: deck, kind: .cloze, tagNames: [], action: .skip, source: "test", now: now)
+        XCTAssertEqual(result.imported, 0); XCTAssertEqual(result.skipped, 2)
+        XCTAssertEqual(result.duplicateRows, 1); XCTAssertEqual(result.excludedRows, 1); XCTAssertEqual(result.errors.count, 1)
+        XCTAssertEqual(result.createdCards + result.maintainedCards, 0)
+        XCTAssertEqual(try repo.notes().count, 1); XCTAssertEqual(try repo.cards().count, 2)
+    }
+
+    func acceptedReport(_ repo: StudyRepository) throws -> OptimizationReport {
+        if try repo.logs().isEmpty {
+            let scheduler = try ReviewScheduler(), deck = try repo.decks()[0].id
+            var training: [StudyCard] = []
+            for index in 0..<30 {
+                let note = try repo.createNote(NoteInput(deckID: deck, question: "Training \(index)", answer: "A"), now: now.addingTimeInterval(-86400 * 40))
+                training.append(try XCTUnwrap(repo.cards().first { $0.noteID == note }))
+            }
+            try repo.transaction {
+                for day in 0..<40 {
+                    for (index, card) in training.enumerated() {
+                        let date = now.addingTimeInterval(Double(day - 40) * 86400)
+                        let before = try repo.snapshot(card)
+                        let grade: ReviewGrade = day > 0 && (day + index) % 5 == 0 ? .again : .good
+                        let transition = try scheduler.review(before, grade: grade, now: date)
+                        let after = try JSONEncoder().encode(transition.after)
+                        repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                                                         mode: .mental, durationMs: 1000, wasNew: day == 0, sequence: day * 30 + index + 1))
+                        card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+                    }
+                }
+            }
+        }
+        let reviews = try repo.optimizationReviews(), prepared = try FSRSOptimization.prepare(reviews)
+        var parameters = FSRSOptimization.defaults; parameters[2] *= 1.2
+        return OptimizationReport(generatedAt: now, digest: try FSRSOptimization.digest(repo.optimizationReviews()),
+                                  reviews: reviews.count, days: prepared.days, splitDate: prepared.split, parameters: parameters,
+                                  previousParameters: try repo.optimizationState().activeParameters,
+                                  standard: OptimizationMetrics(count: 210, logLoss: 0.5, rmse: 0.4),
+                                  candidate: OptimizationMetrics(count: 210, logLoss: 0.4, rmse: 0.3),
+                                  previous: try repo.optimizationState().activeParameters == nil ? nil : OptimizationMetrics(count: 210, logLoss: 0.5, rmse: 0.4), duration: 1)
+    }
+    func testOptimizationApplyResetBackupAndUndoKeepAllExistingState() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Optimize", answer: "Answer"), now: now)
+        let report = try acceptedReport(repo)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "draft", revealed: true, now: now)
+        let reviewedCardID = try XCTUnwrap(repo.session()?.cardID)
+        let before = try BackupData.capture(repo)
+        try repo.saveOptimizationReport(report); try repo.applyOptimization(now: now)
+        let applied = try BackupData.capture(repo)
+        XCTAssertEqual(before.cards, applied.cards); XCTAssertEqual(before.logs, applied.logs)
+        XCTAssertEqual(before.sessions, applied.sessions); XCTAssertEqual(before.notes, applied.notes)
+        XCTAssertEqual(try repo.optimizationState().activeParameters, report.parameters)
+        let archive = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        let options = try JSONDecoder().decode(StudyOptions.self, from: XCTUnwrap(archive.data.options.first).payload)
+        XCTAssertEqual(options.fsrsOptimization, try repo.optimizationState())
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store"))
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let original = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: media)
+        try original.initialize(now: now)
+        _ = try BackupService.restore(archive, location: location, mediaStore: media, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: media)
+        XCTAssertEqual(try reopened.optimizationState(), try repo.optimizationState())
+        XCTAssertEqual(try BackupData.capture(reopened).canonical().cards, applied.canonical().cards)
+        try reopened.grade(.good, now: now); try reopened.undo(now: now)
+        XCTAssertEqual(try BackupData.capture(reopened).canonical().cards.map(\.fsrsPayload), applied.canonical().cards.map(\.fsrsPayload))
+        try repo.grade(.good, now: now)
+        let card = try XCTUnwrap(repo.cards().first { $0.id == reviewedCardID })
+        let summary = try ReviewScheduler().summary(repo.snapshot(card))
+        XCTAssertEqual(summary.stability, report.parameters[2], accuracy: 0.000001)
+        let log = try XCTUnwrap(repo.logs().last)
+        let object = try JSONSerialization.jsonObject(with: log.libraryLog) as! [String: Any]
+        let recorded = try XCTUnwrap(object["parameterProfile"] as? [Double])
+        for (actual, expected) in zip(recorded, report.parameters) { XCTAssertEqual(actual, expected, accuracy: 1e-12) }
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.cards().first { $0.id == reviewedCardID }?.fsrsPayload, before.cards.first { $0.id == reviewedCardID }?.fsrsPayload)
+        let state = try BackupData.capture(repo)
+        try repo.resetOptimization(now: now)
+        let reset = try BackupData.capture(repo)
+        XCTAssertEqual(state.cards, reset.cards); XCTAssertEqual(state.logs, reset.logs); XCTAssertEqual(state.sessions, reset.sessions)
+        XCTAssertNil(try repo.optimizationState().activeParameters)
+        XCTAssertEqual(try repo.optimizationState().changes.count, 2)
+        // Old option payloads omit this feature and retain the standard scheduler.
+        XCTAssertNil(try JSONDecoder().decode(StudyOptions.self, from: Data(#"{"schemaVersion":2,"siblingBuryEnabled":true}"#.utf8)).fsrsOptimization)
+    }
+    func testOptimizationRejectsStaleOrWorseAndRollsBackSaveFailure() throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        var fail = false
+        let repo = StudyRepository(container: container, save: { context in
+            if fail { throw Failure.save }; try context.save()
+        })
+        try repo.initialize(now: now)
+        let report = try acceptedReport(repo)
+        try repo.saveOptimizationReport(report)
+        fail = true
+        XCTAssertThrowsError(try repo.applyOptimization(now: now))
+        XCTAssertNil(try repo.optimizationState().activeParameters)
+        XCTAssertTrue(try repo.optimizationState().changes.isEmpty)
+        fail = false
+        try repo.applyOptimization(now: now)
+        fail = true
+        XCTAssertThrowsError(try repo.resetOptimization(now: now))
+        XCTAssertEqual(try repo.optimizationState().activeParameters, report.parameters)
+        fail = false; try repo.resetOptimization(now: now)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "New", answer: "A"), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(revealed: true, now: now); try repo.grade(.good, now: now)
+        XCTAssertThrowsError(try repo.applyOptimization(now: now))
+        var bad = FSRSOptimization.defaults; bad[0] = .infinity
+        XCTAssertFalse(FSRSOptimization.validParameters(bad))
+        let prepared = try FSRSOptimization.prepare(repo.optimizationReviews())
+        let worse = OptimizationReport(generatedAt: now, digest: try FSRSOptimization.digest(repo.optimizationReviews()), reviews: try repo.logs().count, days: prepared.days,
+                                       splitDate: prepared.split, parameters: report.parameters, previousParameters: nil,
+                                       standard: report.standard, candidate: OptimizationMetrics(count: 210, logLoss: 0.6, rmse: 0.5), previous: nil, duration: 1)
+        try repo.saveOptimizationReport(worse)
+        XCTAssertThrowsError(try repo.applyOptimization(now: now))
+        XCTAssertNil(try repo.optimizationState().activeParameters)
+    }
+}

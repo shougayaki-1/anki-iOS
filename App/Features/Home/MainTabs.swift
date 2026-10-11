@@ -132,15 +132,15 @@ struct HomeView: View {
                     LearningScopeSelector(store: store) { editingScope = true }
                     Button { editingSessionAnswerLimit = true } label: {
                         HStack {
-                            Text("今回の回答数")
+                            Text("学習設定")
                             Spacer()
-                            Text(store.sessionAnswerLimit == 0 ? "すべて" : "\(store.sessionAnswerLimit)問")
+                            Text("\(store.sessionResponseMode.title)・" + (store.sessionAnswerLimit == 0 ? "すべて" : "\(store.sessionAnswerLimit)問"))
                                 .foregroundStyle(Color("SecondaryText"))
                             Image(systemName: "chevron.down").font(.caption)
                         }
                     }
                     .accessibilityIdentifier("openSessionAnswerLimit")
-                    .accessibilityHint("次の学習セッションの回答数を選びます")
+                    .accessibilityHint("次の学習セッションの回答形式と回答数を選びます")
                 }
                 if let error = store.homeFailure {
                     Section {
@@ -165,7 +165,7 @@ struct HomeView: View {
                 }
                 if store.homeFailure == nil && store.hasCards && !store.canStart(.mixed) {
                     Section {
-                        Text("今はこの条件で学習できるカードがありません。")
+                        Text(store.sessionResponseMode == .ordering ? "今は並び替えで学習できるカードがありません。英文の一問一答・記述式が対象です。学習設定で回答形式を変更できます。" : "今はこの条件で学習できるカードがありません。")
                         Button("学習対象を変更") { editingScope = true }
                     }
                 }
@@ -183,10 +183,18 @@ struct HomeView: View {
             .sheet(isPresented: $editingSessionAnswerLimit) {
                 NavigationStack {
                     List {
+                        Section("回答形式") {
+                            Picker("回答形式", selection: Binding(get: { store.sessionResponseMode }, set: { store.changeSessionResponseMode($0) })) {
+                                ForEach(SessionResponseMode.allCases, id: \.self) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }.accessibilityIdentifier("sessionResponseMode")
+                            Text("次に開始する学習に適用します。中断中の学習は開始時の設定を保持します。並び替えは対応する英文カードだけを出題します。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
                         ForEach([10, 20, 30, 0], id: \.self) { count in
                             Button {
                                 store.changeSessionAnswerLimit(count)
-                                if store.failure == nil { editingSessionAnswerLimit = false }
                             } label: {
                                 HStack {
                                     Text(count == 0 ? "すべて（上限なし）" : "\(count)問")
@@ -198,7 +206,7 @@ struct HomeView: View {
                             }
                         }
                     }
-                    .navigationTitle("今回の回答数")
+                    .navigationTitle("学習設定")
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
                             Button("閉じる") { editingSessionAnswerLimit = false }

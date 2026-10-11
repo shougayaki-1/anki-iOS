@@ -2,6 +2,13 @@ import XCTest
 @testable import AnkiIOS
 
 final class ImportParserTests: XCTestCase {
+    func testOptionalTextLayoutsAndInvalidDirection() throws {
+        let table = try ImportParser.table("question,answer,question_layout,answer_layout\nQ,A,vertical,horizontal\nX,Y,bad,\nOld,A,,", delimiter: ",")
+        let rows = ImportParser.map(table, header: true, questionColumn: 0, answerColumn: 1)
+        XCTAssertEqual(rows[0].questionLayout, .vertical); XCTAssertEqual(rows[0].answerLayout, .horizontal)
+        XCTAssertNotNil(rows[1].error); XCTAssertFalse(rows[1].included)
+        XCTAssertNil(rows[2].questionLayout)
+    }
     func testHintHeaderMappingExplicitBlankAndAbsentColumn() throws {
         for (delimiter, header) in [(Character(","), " HINT "), (Character("\t"), "ヒント")] {
             let text = ["question", "answer", header].joined(separator: String(delimiter)) + "\n" +
