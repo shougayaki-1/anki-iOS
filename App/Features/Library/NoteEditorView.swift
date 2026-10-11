@@ -147,7 +147,7 @@ struct NoteEditorView: View {
                     TextField("解説", text: $input.explanation, axis: .vertical).lineLimit(2...8)
                 }
             }
-.frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 820 : .infinity)
+.frame(maxWidth: UIDevice.current.userInterfaceIdiom != .phone ? 820 : .infinity)
             .frame(maxWidth: .infinity)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: tagText) { _, value in input.tagNames = value.components(separatedBy: ",") }

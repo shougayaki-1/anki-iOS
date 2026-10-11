@@ -2,6 +2,35 @@ import XCTest
 @testable import AnkiIOS
 
 final class ImportParserTests: XCTestCase {
+    func testNativeFileReaderRejectsUnsupportedOversizedDirectoryAndSymbolicLink() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("sample.csv"), bytes = Data("Q,A\n".utf8)
+        try bytes.write(to: file)
+        XCTAssertEqual(try LocalFileInput.read(file, extensions: ["csv"], maximumBytes: bytes.count), bytes)
+        XCTAssertThrowsError(try LocalFileInput.read(file, extensions: ["csv"], maximumBytes: bytes.count - 1))
+        XCTAssertThrowsError(try LocalFileInput.read(file, extensions: ["txt"], maximumBytes: 100))
+        XCTAssertThrowsError(try LocalFileInput.read(URL(string: "https://example.com/data.csv")!, extensions: ["csv"], maximumBytes: 100))
+        let link = directory.appendingPathComponent("link.csv")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        XCTAssertThrowsError(try LocalFileInput.read(link, extensions: ["csv"], maximumBytes: 100))
+        let folder = directory.appendingPathComponent("folder.csv")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        XCTAssertThrowsError(try LocalFileInput.read(folder, extensions: ["csv"], maximumBytes: 100))
+    }
+
+    @MainActor func testFinderURLProviderUsesTheSameBoundedReader() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("csv")
+        let bytes = Data("question,answer\nQ,A\n".utf8)
+        try bytes.write(to: file); defer { try? FileManager.default.removeItem(at: file) }
+        let provider = NSItemProvider(item: file as NSURL, typeIdentifier: "public.file-url")
+        let result: Result<(URL, Data), Error> = await withCheckedContinuation { continuation in
+            LocalFileInput.load(provider, extensions: ["csv"], maximumBytes: 100) { continuation.resume(returning: $0) }
+        }
+        XCTAssertEqual(try result.get().1, bytes)
+    }
+
     func testHintHeaderMappingExplicitBlankAndAbsentColumn() throws {
         for (delimiter, header) in [(Character(","), " HINT "), (Character("\t"), "ヒント")] {
             let text = ["question", "answer", header].joined(separator: String(delimiter)) + "\n" +

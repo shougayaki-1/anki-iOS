@@ -71,7 +71,7 @@ struct ReviewView: View {
                                                  canFinish: store.review != nil, store: store)
                         }
                     }.padding()
-                        .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 760 : .infinity)
+                        .frame(maxWidth: UIDevice.current.userInterfaceIdiom != .phone ? 760 : .infinity)
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: store.review?.card == nil ? geometry.size.height : 0)
                 }
@@ -123,7 +123,7 @@ struct ReviewView: View {
                             store.grade(grade)
                         }
                     )
-                    .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 760 : .infinity)
+                    .frame(maxWidth: UIDevice.current.userInterfaceIdiom != .phone ? 760 : .infinity)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
                     .padding(.vertical, typingFocused ? 6 : 10)

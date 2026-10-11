@@ -211,9 +211,14 @@ final class QualityRepositoryTests: XCTestCase {
     }
     func testIdentityAssetsAndPrimaryButtonContrast() throws {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String, "暗記ノート")
+        #if targetEnvironment(macCatalyst)
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "CFBundleIconName") as? String, "AppIcon")
+        XCTAssertNotNil(Bundle.main.url(forResource: "AppIcon", withExtension: "icns"))
+        #else
         let icons = try XCTUnwrap(Bundle.main.object(forInfoDictionaryKey: "CFBundleIcons") as? [String: Any])
         let primary = try XCTUnwrap(icons["CFBundlePrimaryIcon"] as? [String: Any])
         XCTAssertEqual(primary["CFBundleIconName"] as? String, "AppIcon")
+        #endif
         func luminance(_ color: UIColor, traits: UITraitCollection) -> Double {
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
             XCTAssertTrue(color.resolvedColor(with: traits).getRed(&r, green: &g, blue: &b, alpha: &a))

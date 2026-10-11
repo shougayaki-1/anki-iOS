@@ -2,9 +2,13 @@ import SwiftUI
 import PhotosUI
 import AVFoundation
 import UIKit
+import UniformTypeIdentifiers
 
 struct PhotoInputControls: View {
     let picked: (Data) -> Void
+    @State private var acceptingFiles = true
+    @State private var imageFile = false
+    @State private var dropTarget = false
     @State private var selection: PhotosPickerItem?
     @State private var camera = false
     @State private var failure: String?
@@ -16,6 +20,10 @@ struct PhotoInputControls: View {
             PhotosPicker(selection: $selection, matching: .images) {
                 Label("写真を選択", systemImage: "photo")
             }.accessibilityIdentifier("pickPhoto")
+            #if targetEnvironment(macCatalyst)
+            Button("画像ファイル", systemImage: "doc") { imageFile = true }
+                .accessibilityIdentifier("selectImageFile")
+            #else
             Button("撮影", systemImage: "camera") {
                 Task {
                     guard UIImagePickerController.isSourceTypeAvailable(.camera) else { failure = MediaError.noCamera.localizedDescription; return }
@@ -23,9 +31,24 @@ struct PhotoInputControls: View {
                     if allowed { camera = true } else { failure = MediaError.cameraDenied.localizedDescription }
                 }
             }
+            #endif
             if loading { ProgressView() }
         }
         .buttonStyle(.borderless)
+        .fileImporter(isPresented: $imageFile, allowedContentTypes: [.png, .jpeg]) { result in
+            do { picked(try LocalFileInput.read(result.get(), extensions: ["png", "jpg", "jpeg"], maximumBytes: ImageEncodingPolicy.maximumBytes)) }
+            catch { failure = error.localizedDescription }
+        }
+        .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTarget) { providers in
+            guard providers.count == 1 else { failure = "画像ファイルは1件ずつ選択してください。"; return false }
+            LocalFileInput.load(providers[0], extensions: ["png", "jpg", "jpeg"], maximumBytes: ImageEncodingPolicy.maximumBytes) { result in
+                guard acceptingFiles else { return }
+                switch result { case let .success((_, data)): picked(data); case let .failure(error): failure = error.localizedDescription }
+            }
+            return true
+        }
+        .overlay { if dropTarget { RoundedRectangle(cornerRadius: 8).stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }
+
         .onChange(of: selection) { _, item in
             loadingTask?.cancel()
             loadingTask = Task {
@@ -38,7 +61,8 @@ struct PhotoInputControls: View {
                 } catch { if !Task.isCancelled { failure = error.localizedDescription } }
             }
         }
-        .onDisappear { loadingTask?.cancel(); loading = false }
+        .onAppear { acceptingFiles = true }
+        .onDisappear { acceptingFiles = false; loadingTask?.cancel(); loading = false }
         .sheet(isPresented: $camera) {
             CameraCapture { data in camera = false; if let data { picked(data) } }
         }
@@ -65,6 +89,37 @@ struct CameraCapture: UIViewControllerRepresentable {
             let format = UIGraphicsImageRendererFormat(); format.scale = 1
             let normalized = UIGraphicsImageRenderer(size: image.size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
             finished(normalized.jpegData(compressionQuality: 0.95))
+        }
+    }
+}
+
+// File panel and Finder drops share the same bounded reader. Neither path
+// grants persistent access or stores a bookmark to the source file.
+enum LocalFileInput {
+    static func read(_ url: URL, extensions: Set<String>, maximumBytes: Int) throws -> Data {
+        guard url.isFileURL, extensions.contains(url.pathExtension.lowercased()) else { throw StudyError.unsupportedContent }
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+        guard values.isRegularFile == true, values.isSymbolicLink != true else { throw StudyError.unsupportedContent }
+        guard let size = values.fileSize, size <= maximumBytes else { throw LibraryError.fileTooLarge }
+        let data = try Data(contentsOf: url)
+        guard data.count <= maximumBytes else { throw LibraryError.fileTooLarge }
+        return data
+    }
+    static func load(_ provider: NSItemProvider, extensions: Set<String>, maximumBytes: Int,
+                     completion: @escaping @MainActor (Result<(URL, Data), Error>) -> Void) {
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, error in
+            let result: Result<(URL, Data), Error> = Result {
+                if let error { throw error }
+                let url: URL?
+                if let value = item as? URL { url = value }
+                else if let data = item as? Data { url = URL(dataRepresentation: data, relativeTo: nil) }
+                else { url = nil }
+                guard let url else { throw StudyError.unsupportedContent }
+                return (url, try read(url, extensions: extensions, maximumBytes: maximumBytes))
+            }
+            Task { @MainActor in completion(result) }
         }
     }
 }

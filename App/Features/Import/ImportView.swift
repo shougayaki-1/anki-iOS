@@ -7,6 +7,10 @@ struct ImportView: View {
     @FocusState private var focused: Bool
     @State private var text = ""
     @State private var filePicker = false
+    @State private var acceptingFiles = true
+    @State private var dropTarget = false
+    @State private var pendingFile: (url: URL, text: String)?
+    @State private var replaceInput = false
     @State private var source = "貼り付け"
     @State private var format = "Q/A"
     @State private var hasHeader = true
@@ -47,6 +51,10 @@ struct ImportView: View {
                 } else {
                     Section {
                         Button("CSV / TSV / TXTファイルを選択") { filePicker = true }.accessibilityIdentifier("selectImportFile")
+                        #if targetEnvironment(macCatalyst)
+                        Text("FinderからCSV / TSV / TXTをこの画面へドロップできます。保存前にプレビューと確定が必要です。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        #endif
                         TextEditor(text: $text).focused($focused).frame(height: 160).accessibilityIdentifier("importText")
                         Picker("形式", selection: $format) {
                             Text("Q: / A: または文章").tag("Q/A")
@@ -170,23 +178,27 @@ struct ImportView: View {
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText]) { result in
                 do {
                     let url = try result.get()
-                    guard ["csv", "tsv", "txt"].contains(url.pathExtension.lowercased()) else { throw StudyError.unsupportedContent }
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    if let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size > 10_000_000 { throw LibraryError.fileTooLarge }
-                    let data = try Data(contentsOf: url)
-                    guard data.count <= 10_000_000 else { throw LibraryError.fileTooLarge }
-                    guard let value = String(data: data, encoding: .utf8) else { throw LibraryError.invalidUTF8 }
-                    text = value.hasPrefix("\u{feff}") ? String(value.dropFirst()) : value
-                    source = url.pathExtension.lowercased()
-                    format = source == "csv" ? "CSV" : source == "tsv" ? "TSV" : "Q/A"
-                    if format != "Q/A" {
-                        let table = try ImportParser.table(text, delimiter: format == "CSV" ? "," : "\t")
-                        columnCount = max(2, table.rows.map(\.count).max() ?? 2)
-                    }
-                    rows = []
+                    acceptFile(url, data: try LocalFileInput.read(url, extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000))
                 } catch { failure = error.localizedDescription }
             }
+            .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTarget) { providers in
+                guard providers.count == 1 else { failure = "ファイルは1件ずつ選択してください。"; return false }
+                LocalFileInput.load(providers[0], extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000) { result in
+                    guard acceptingFiles else { return }
+                    switch result {
+                    case let .success((url, data)): acceptFile(url, data: data)
+                    case let .failure(error): failure = error.localizedDescription
+                    }
+                }
+                return true
+            }
+            .onAppear { acceptingFiles = true }
+            .onDisappear { acceptingFiles = false }
+            .overlay { if dropTarget { RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }
+            .confirmationDialog("入力中の内容をファイルで置き換えますか？", isPresented: $replaceInput, titleVisibility: .visible) {
+                Button("ファイルの内容に置き換える") { applyPendingFile() }
+                Button("キャンセル", role: .cancel) { pendingFile = nil }
+            } message: { Text("現在の入力とプレビューを置き換えます。登録済みカードは変更しません。") }
             .confirmationDialog("\(rows.filter(\.included).count)件の取り込みを確定しますか？", isPresented: $confirming, titleVisibility: .visible) {
                 Button("確定して保存") { commit() }.accessibilityIdentifier("commitImport")
             } message: { Text("重複は「\(action.title)」。\(resetHistory && action == .update ? "更新対象の復習予定を初期化します。" : "既存の学習履歴を保持します。")") }
@@ -194,6 +206,18 @@ struct ImportView: View {
                 Button("閉じる", role: .cancel) { failure = nil }
             } message: { Text(failure ?? "") }
         }
+    }
+    private func acceptFile(_ url: URL, data: Data) {
+        guard let value = String(data: data, encoding: .utf8) else { failure = LibraryError.invalidUTF8.localizedDescription; return }
+        pendingFile = (url, value.hasPrefix("\u{feff}") ? String(value.dropFirst()) : value)
+        if !text.isEmpty || !rows.isEmpty { replaceInput = true } else { applyPendingFile() }
+    }
+    private func applyPendingFile() {
+        guard let file = pendingFile else { return }
+        text = file.text; source = file.url.pathExtension.lowercased()
+        format = source == "csv" ? "CSV" : source == "tsv" ? "TSV" : "Q/A"
+        rows = []; previewPage = 0; result = nil; pendingFile = nil
+        refreshColumnCount()
     }
     private var pageCount: Int { max(1, (rows.count + pageSize - 1) / pageSize) }
     private var currentPage: Int { min(max(0, previewPage), pageCount - 1) }
