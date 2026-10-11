@@ -40,8 +40,10 @@ struct ImportView: View {
             Form {
                 if let result {
                     Section("取り込み結果") {
-                        Text("成功 \(result.imported)件 / スキップ \(result.skipped)件 / エラー \(result.errors.count)件")
+                        Text(result.summary)
                             .accessibilityIdentifier("importResult")
+                        Text("ノートは問題と解答のまとまり、カードは出題単位です。同じノートを複数行で更新した場合、処理行数とノート数は異なります。")
+                            .font(.footnote).foregroundStyle(.secondary)
                         ForEach(result.errors, id: \.self) { Text($0).foregroundStyle(.red) }
                         Button("新しい取り込み") { self.result = nil; rows = []; text = "" }
                     }
@@ -264,7 +266,9 @@ struct ImageZIPImportView: View {
             Form {
                 if let result {
                     Section("取り込み結果") {
-                        Text("成功 \(result.imported)件 / スキップ \(result.skipped)件 / エラー \(result.errors.count)件").accessibilityIdentifier("imageImportResult")
+                        Text(result.summary).accessibilityIdentifier("imageImportResult")
+                        Text("ノートは問題と解答のまとまり、カードは出題単位です。同じノートを複数行で更新した場合、処理行数とノート数は異なります。")
+                            .font(.footnote).foregroundStyle(.secondary)
                         ForEach(result.errors, id: \.self) { Text($0).foregroundStyle(.red) }
                     }
                 } else {

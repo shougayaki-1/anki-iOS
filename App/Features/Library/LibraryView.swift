@@ -21,8 +21,19 @@ struct LibraryView: View {
     }
 
     var body: some View {
+        let counts = Dictionary(grouping: store.notes, by: \.noteID).mapValues(\.count)
         NavigationStack {
             List(selection: $selection) {
+                Section("登録数") {
+                    Text("登録全体: \(counts.count)ノート / \(store.notes.count)枚")
+                        .accessibilityIdentifier("libraryTotalCounts")
+                    if !search.isEmpty {
+                        Text("表示中: \(Set(filtered.map(\.noteID)).count)ノート / \(filtered.count)枚")
+                            .accessibilityIdentifier("libraryFilteredCounts")
+                    }
+                    Text("ノートは問題と解答のまとまり、カードは出題単位です。反転・穴埋め番号・画像マスクにより1ノートから複数枚を作成します。登録枚数は今日のユニーク学習枚数や延べ回答回数とは別です。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 if !editMode.isEditing {
                     Section {
                         NavigationLink("苦手カード・重点練習") { WeakCardListView(store: store) }
@@ -37,9 +48,9 @@ struct LibraryView: View {
                     Section(deck.name) {
                         ForEach(filtered.filter { $0.deckID == deck.id }) { item in
                             if editMode.isEditing {
-                                cardRow(item).tag(item.cardID)
+                                cardRow(item, siblingCount: counts[item.noteID] ?? 1).tag(item.cardID)
                             } else {
-                                NavigationLink { NoteDetailView(store: store, cardID: item.cardID) } label: { cardRow(item) }
+                                NavigationLink { NoteDetailView(store: store, cardID: item.cardID) } label: { cardRow(item, siblingCount: counts[item.noteID] ?? 1) }
                             }
                         }
                     }
@@ -114,9 +125,10 @@ struct LibraryView: View {
 
         }
     }
-    private func cardRow(_ item: NoteItem) -> some View {
+    private func cardRow(_ item: NoteItem, siblingCount: Int) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(item.content.question).lineLimit(2)
+            if siblingCount > 1 { Text("同じノートから\(siblingCount)枚").font(.caption).foregroundStyle(.secondary) }
             Text(item.kind.title + (item.isSuspended ? " · 停止中" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -152,8 +164,14 @@ struct NoteDetailView: View {
                     Section("学習状態") {
                         LabeledContent("形式", value: item.kind.title)
                         LabeledContent("回答方法", value: item.responseMode.title)
-                        LabeledContent("状態", value: item.summary.state)
-                        LabeledContent("回答回数", value: "\(item.summary.repetitions)")
+                        LabeledContent("状態", value: LearningStatePresentation(state: item.summary.state).title)
+                            .accessibilityIdentifier("noteState")
+                        Text(LearningStatePresentation(state: item.summary.state).explanation)
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Text(LearningStatePresentation(state: item.summary.state).availability(suspended: item.isSuspended, due: item.summary.dueDate, now: store.clock()))
+                            .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("noteAvailability")
+                        LabeledContent("このノートのカード", value: "\(store.notes.filter { $0.noteID == item.noteID }.count)枚")
+                        LabeledContent("このカードの延べ回答回数", value: "\(item.summary.repetitions)回")
                         LabeledContent("忘却回数", value: "\(item.summary.lapses)")
                         if item.summary.state != "new" {
                             LabeledContent("次回復習", value: item.summary.dueDate.formatted())
@@ -168,11 +186,11 @@ struct NoteDetailView: View {
                 .navigationTitle(item.kind.title)
                 .toolbar { Button("編集") { editing = true }.accessibilityIdentifier("editNote") }
                 .sheet(isPresented: $editing) { NoteEditorView(store: store, item: item) }
-                .confirmationDialog("このカードを削除しますか？", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                .confirmationDialog("このノートの\(store.notes.filter { $0.noteID == item.noteID }.count)枚のカードを削除しますか？", isPresented: $confirmingDelete, titleVisibility: .visible) {
                     Button("削除", role: .destructive) {
                         if store.perform({ try store.repository.deleteNote(id: item.noteID) }) { dismiss() }
                     }
-                } message: { Text("問題と解答は削除されます。過去の回答履歴は残ります。") }
+                } message: { Text("同じノートの問題・解答とすべての兄弟カードを削除します。過去の回答履歴は残ります。") }
             } else { ContentUnavailableView("カードがありません", systemImage: "rectangle") }
         }
     }

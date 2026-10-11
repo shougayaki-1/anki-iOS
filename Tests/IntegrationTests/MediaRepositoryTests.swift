@@ -438,3 +438,29 @@ extension MediaRepositoryTests {
         XCTAssertTrue(package.images.isEmpty)
     }
 }
+
+extension MediaRepositoryTests {
+    func testRegistrationCountsMatchBasicReverseClozeAndMasksAndZIPUpdates() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), mediaStore: MediaStore(root: root))
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, image = try repo.addImage(imageData(), now: now)
+        try repo.createNote(NoteInput(deckID: deck, question: "Normal", answer: "A"), now: now)
+        try repo.createNote(NoteInput(deckID: deck, question: "Reverse", answer: "A", reverseEnabled: true), now: now)
+        try repo.createNote(NoteInput(deckID: deck, kind: .cloze, question: "{{c1::one}} {{c2::two}}"), now: now)
+        let masks = [ImageMask(rect: MaskRect(x: 0, y: 0, width: 0.3, height: 0.3), answer: "one"), ImageMask(rect: MaskRect(x: 0.5, y: 0.5, width: 0.3, height: 0.3), answer: "two")]
+        try repo.createNote(NoteInput(deckID: deck, kind: .imageOcclusion, question: "Masks", imageID: image, masks: masks), now: now)
+        let items = try repo.noteItems()
+        XCTAssertEqual(Set(items.map(\.noteID)).count, 4); XCTAssertEqual(items.count, 7)
+        XCTAssertEqual(Dictionary(grouping: items, by: \.noteID).values.map(\.count).sorted(), [1,2,2,2])
+        let package = try imagePackage(count: 2)
+        let created = try repo.importImagePackage(package, deckID: deck, action: .skip, now: now)
+        XCTAssertEqual(created.createdNotes, 2); XCTAssertEqual(created.createdCards, 2)
+        var repeated = package; repeated.rows = [package.rows[0], package.rows[0]]
+        let updated = try repo.importImagePackage(repeated, deckID: deck, action: .update, now: now)
+        XCTAssertEqual(updated.imported, 2); XCTAssertEqual(updated.updatedNotes, 1); XCTAssertEqual(updated.maintainedCards, 1)
+        let skipped = try repo.importImagePackage(package, deckID: deck, action: .skip, now: now)
+        XCTAssertEqual(skipped.duplicateRows, 2); XCTAssertEqual(skipped.createdCards + skipped.maintainedCards, 0)
+    }
+}

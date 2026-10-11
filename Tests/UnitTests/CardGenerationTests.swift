@@ -144,3 +144,18 @@ final class NumericSettingsInputTests: XCTestCase {
         XCTAssertEqual(MaskRect(x: 0, y: 0, width: 1, height: 1).replacingPercentage("100", at: \.height)?.height, 1)
     }
 }
+
+extension CardGenerationTests {
+    func testJapaneseStateDescriptionsDistinguishSuspensionFutureDueAndNewLimits() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for (raw, label) in [("new", "未学習"), ("learning", "学習中"), ("review", "復習待ち"), ("relearning", "再学習中")] {
+            let value = LearningStatePresentation(state: raw)
+            XCTAssertEqual(value.title, label); XCTAssertFalse(value.explanation.isEmpty)
+            XCTAssertTrue(value.availability(suspended: true, due: now, now: now).contains("停止中"))
+            if raw != "new" {
+                XCTAssertTrue(value.availability(suspended: false, due: now.addingTimeInterval(60), now: now).contains("待機"))
+                XCTAssertTrue(value.availability(suspended: false, due: now, now: now).contains("期日"))
+            } else { XCTAssertTrue(value.availability(suspended: false, due: now, now: now).contains("新規枠")) }
+        }
+    }
+}

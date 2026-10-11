@@ -538,6 +538,36 @@ final class LibraryRepositoryTests: XCTestCase {
 }
 
 extension LibraryRepositoryTests {
+    func testImportCountsTenNotesCardsAndDistinctRepeatedUpdates() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let rows = (1...10).map { ImportRow(line: $0, question: "Q\($0)", answer: "A\($0)") }
+        let created = try repo.importRows(rows, deckID: deck, kind: .basic, tagNames: [], action: .skip, source: "test", now: now)
+        XCTAssertEqual(created.imported, 10); XCTAssertEqual(created.createdNotes, 10); XCTAssertEqual(created.createdCards, 10)
+        XCTAssertEqual(created.updatedNotes, 0); XCTAssertEqual(created.maintainedCards, 0)
+        try repo.createNote(NoteInput(deckID: deck, question: "Reverse", answer: "Answer", reverseEnabled: true), now: now)
+        let before = Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) })
+        let repeated = [ImportRow(line: 1, question: "Reverse", answer: "Answer"), ImportRow(line: 2, question: "Reverse", answer: "Answer")]
+        let updated = try repo.importRows(repeated, deckID: deck, kind: .basic, tagNames: [], action: .update, source: "test", now: now)
+        XCTAssertEqual(updated.imported, 2); XCTAssertEqual(updated.updatedNotes, 1); XCTAssertEqual(updated.maintainedCards, 2)
+        XCTAssertEqual(updated.createdNotes, 0); XCTAssertEqual(updated.createdCards, 0)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) }), before)
+    }
+    func testImportCountsClozeGeneratedCardsAndMixedSkipExclusionError() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let row = ImportRow(line: 1, question: "{{c1::one}} {{c2::two}} {{c1::again}}", answer: "")
+        let created = try repo.importRows([row, row], deckID: deck, kind: .cloze, tagNames: [], action: .update, source: "test", now: now)
+        XCTAssertEqual(created.imported, 2); XCTAssertEqual(created.createdNotes, 1); XCTAssertEqual(created.createdCards, 2)
+        XCTAssertEqual(created.updatedNotes, 0); XCTAssertEqual(created.maintainedCards, 0)
+        var excluded = ImportRow(line: 3, question: "exclude", answer: "A"); excluded.included = false
+        let existing = ImportRow(line: 2, question: row.question, answer: "")
+        let invalid = ImportRow(line: 4, question: "not cloze", answer: "")
+        let result = try repo.importRows([existing, excluded, invalid], deckID: deck, kind: .cloze, tagNames: [], action: .skip, source: "test", now: now)
+        XCTAssertEqual(result.imported, 0); XCTAssertEqual(result.skipped, 2)
+        XCTAssertEqual(result.duplicateRows, 1); XCTAssertEqual(result.excludedRows, 1); XCTAssertEqual(result.errors.count, 1)
+        XCTAssertEqual(result.createdCards + result.maintainedCards, 0)
+        XCTAssertEqual(try repo.notes().count, 1); XCTAssertEqual(try repo.cards().count, 2)
+    }
+
     func acceptedReport(_ repo: StudyRepository) throws -> OptimizationReport {
         if try repo.logs().isEmpty {
             let scheduler = try ReviewScheduler(), deck = try repo.decks()[0].id

@@ -167,6 +167,10 @@ struct NoteEditorView: View {
                     if !input.answer.isEmpty, let reason = OrderingAnswer.reason(kind: input.kind, answer: input.answer) {
                         Text(reason).font(.footnote).foregroundStyle(.secondary)
                     }
+                    if let variants = speechVariants {
+                        Text("このノートから\(variants.count)枚の学習カードを作成")
+                            .accessibilityIdentifier("generatedCardCount")
+                    }
                     Button("出題プレビュー") { preview = true }.accessibilityIdentifier("previewNote")
                     if item == nil { Button("保存して次へ") { requestSave(next: true) }.disabled(!canSave) }
                 }
