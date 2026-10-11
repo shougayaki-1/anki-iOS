@@ -2,6 +2,53 @@ import XCTest
 import UIKit
 
 final class StudyUITests: XCTestCase {
+    func testReviewHomeSeparatesAnswerLimitAndCardPoolAndStartsInOneTap() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
+        app.launch()
+        let review = app.buttons["start-review"]
+        XCTAssertTrue(review.waitForExistence(timeout: 15))
+        XCTAssertTrue(review.isHittable)
+        XCTAssertTrue(review.label.contains("最大20問"))
+        XCTAssertTrue(review.label.contains("復習できるカード：1枚"))
+        XCTAssertLessThan(review.frame.maxY, app.tabBars.firstMatch.frame.minY)
+        attach(app, "Issue88-review-answer-limit-and-card-pool")
+        review.tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+    }
+
+    func testHomeAnswerLimitChangesLabelsAndKeepsResumeIndependent() {
+        let app = app()
+        create(app, question: "Home limit question", answer: "Answer")
+        app.tabBars.buttons["ホーム"].tap()
+        let start = app.buttons["start-new"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        XCTAssertTrue(start.label.contains("最大20問"))
+        XCTAssertTrue(start.label.contains("新しく学べるカード：1枚"))
+        for limit in [10, 30, 0, 20] {
+            app.buttons["openSessionAnswerLimit"].tap()
+            let choice = app.buttons[limit == 0 ? "すべて（上限なし）" : "\(limit)問"]
+            scrollTo(choice, app: app); choice.tap()
+            app.buttons["閉じる"].tap()
+            XCTAssertTrue(start.label.contains(limit == 0 ? "上限なし" : "最大\(limit)問"))
+            XCTAssertTrue(start.label.contains("1枚"))
+            let mixed = app.buttons["start-mixed"]
+            scrollTo(mixed, app: app)
+            XCTAssertTrue(mixed.label.contains(limit == 0 ? "上限なし" : "最大\(limit)問"))
+            XCTAssertTrue(mixed.label.contains("1枚"))
+            for _ in 0..<3 { app.swipeDown() }
+        }
+        scrollTo(start, app: app); start.tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        app.buttons["pauseStudy"].tap()
+        app.buttons["openSessionAnswerLimit"].tap()
+        app.buttons["10問"].tap(); app.buttons["閉じる"].tap()
+        XCTAssertEqual(app.buttons["resumeStudy"].label, "続きから再開")
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.staticTexts["remainingQuestions"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.staticTexts["remainingQuestions"].label, "残り20問")
+        attach(app, "Issue88-resume-keeps-original-limit")
+    }
     #if targetEnvironment(macCatalyst)
     func testMacKeyboardEditStudyAndSharedWindows() throws {
         let app = XCUIApplication()

@@ -700,6 +700,33 @@ final class StudyRepositoryTests: XCTestCase {
         }
     }
 
+    func testHomeAnswerLimitChangesKeep80CardPoolAndExistingSessionSnapshot() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        var settings = try repo.settings(); settings.dailyNewLimit = 100
+        try repo.updateSettings(settings)
+        for _ in 0..<80 { try create(repo) }
+        try store.reload()
+        for limit in [10, 20, 30, 0] {
+            store.changeSessionAnswerLimit(limit)
+            XCTAssertNil(store.failure)
+            XCTAssertEqual(store.homePrimaryAction, .start(.new, 80))
+            XCTAssertEqual(store.homeCardCount(.new), 80)
+            XCTAssertEqual(store.homeCardCount(.mixed), 80)
+            XCTAssertEqual(store.homeCardCount(.review), 0)
+            XCTAssertTrue(store.canStart(.new)); XCTAssertFalse(store.canStart(.review))
+            XCTAssertEqual(store.homePrimaryAction.buttonTitle(answerLimit: store.sessionAnswerLimit),
+                           HomeStudyPresentation.startTitle(mode: .new, answerLimit: limit))
+        }
+        store.changeSessionAnswerLimit(20)
+        try repo.start(mode: .new, now: now)
+        try repo.setSessionActive(false, now: now)
+        try store.reload()
+        store.changeSessionAnswerLimit(10)
+        XCTAssertEqual(store.homePrimaryAction.buttonTitle(answerLimit: store.sessionAnswerLimit), "続きから再開")
+        XCTAssertEqual(store.review?.sessionProgress?.limit, 20)
+    }
+
     func testHomePrimaryActionWaitingDueAndCompletionKeepHistory() throws {
         var date = now
         let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { date })

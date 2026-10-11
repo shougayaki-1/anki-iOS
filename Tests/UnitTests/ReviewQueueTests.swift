@@ -2,6 +2,27 @@ import XCTest
 @testable import AnkiIOS
 
 final class ReviewQueueTests: XCTestCase {
+    func testHomeLabelsSeparateAnswerLimitFromCardPoolForEveryMode() {
+        for mode in StudyMode.allCases {
+            for limit in [10, 20, 30, 0] {
+                let expected = mode.title + (limit == 0 ? "・上限なし" : "・最大\(limit)問")
+                for count in [0, 3, 80] {
+                    let action = HomePrimaryAction.start(mode, count)
+                    XCTAssertEqual(action.buttonTitle(answerLimit: limit), expected)
+                    XCTAssertFalse(action.buttonTitle(answerLimit: limit).contains("枚"))
+                    XCTAssertTrue(action.accessibilityLabel(answerLimit: limit).contains(expected))
+                    XCTAssertTrue(action.accessibilityLabel(answerLimit: limit).contains("\(count)枚"))
+                }
+                XCTAssertFalse(HomeStudyPresentation.explanation(answerLimit: limit).contains("すべて"))
+            }
+        }
+        for action in [HomePrimaryAction.resume(.new), .waiting(Date()), .complete, .addCards, .unavailable] {
+            for limit in [10, 20, 30, 0] {
+                XCTAssertEqual(action.buttonTitle(answerLimit: limit), action.title)
+                XCTAssertEqual(action.accessibilityLabel(answerLimit: limit), action.title)
+            }
+        }
+    }
     func testHiddenImagesNeverHideImageOcclusionAndDefaultsStayCompatible() {
         let defaults = ReviewAppearance()
         XCTAssertFalse(defaults.gesturesEnabled); XCTAssertTrue(defaults.animationsEnabled)
