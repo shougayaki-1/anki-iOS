@@ -292,7 +292,7 @@ struct ReviewView: View {
         }
     }
     private func questionContent(_ item: NoteItem) -> some View {
-        Text(item.content.question).font(contentFont).textSelection(.enabled)
+        StudyTextView(text: item.content.question, layout: item.content.questionLayout, font: contentFont, fontSize: store.settings.reviewAppearance.textSize == .standard ? 24 : 32)
             .accessibilityIdentifier("reviewQuestion")
             .accessibilityFocused($readingFocus, equals: .question)
     }
@@ -310,7 +310,7 @@ struct ReviewView: View {
             Text(draft.evaluationGuidance).font(.footnote).foregroundStyle(.secondary)
         }
         Text("模範解答").font(.headline)
-        Text(item.content.answer).font(answerFont).textSelection(.enabled).accessibilityIdentifier("modelAnswer")
+        StudyTextView(text: item.content.answer, layout: item.content.answerLayout, font: answerFont, fontSize: store.settings.reviewAppearance.textSize == .standard ? 20 : 28).accessibilityIdentifier("modelAnswer")
             .accessibilityFocused($readingFocus, equals: .answer)
         if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
     }

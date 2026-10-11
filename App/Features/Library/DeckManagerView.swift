@@ -144,6 +144,9 @@ struct DeckEditorView: View {
     var initialParentID: UUID? = nil
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
+    @State private var learning: DeckLearningOverride?
+    @State private var effectiveRetention = 90
+    @State private var effectiveLimit = ""
     @State private var parentID: UUID?
     @State private var destination: UUID?
     @State private var deleting = false
@@ -160,6 +163,20 @@ struct DeckEditorView: View {
                 }.accessibilityIdentifier("deckParentPicker")
             }
             if let deckID {
+                Section("学習設定") {
+                    Toggle("新規上限を指定", isOn: Binding(get: { learning?.newLimit != nil }, set: { learning?.newLimit = $0 ? 20 : nil }))
+                    if let value = learning?.newLimit {
+                        Stepper("新規上限：\(value)枚／日", value: Binding(get: { learning?.newLimit ?? 20 }, set: { learning?.newLimit = $0 }), in: 0...500)
+                    }
+                    Toggle("目標保持率を指定", isOn: Binding(get: { learning?.retention != nil }, set: { learning?.retention = $0 ? 0.9 : nil }))
+                    if let value = learning?.retention {
+                        Stepper("目標保持率：\(Int((value * 100).rounded()))%", value: Binding(get: { Int(((learning?.retention ?? 0.9) * 100).rounded()) }, set: { learning?.retention = Double($0) / 100 }), in: 80...97)
+                    }
+                    Text("保存済みの実効保持率：\(effectiveRetention)%\n新規上限：\(effectiveLimit)")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("未指定は親から継承します。新規学習は全体・親・このデッキの上限をすべて守ります。保持率は次の回答から適用し、既存の復習予定を変更しません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
                     NavigationLink {
                         DeckContentsOperationView(store: store, sourceID: deckID, operation: .move)
@@ -203,6 +220,10 @@ struct DeckEditorView: View {
             do {
                 if let id = deckID, let deck = try store.repository.decks().first(where: { $0.id == id }) {
                     name = deck.name; parentID = deck.parentID; excluded = try store.repository.descendants(of: id)
+                    learning = try store.repository.options().deckLearning?.first { $0.deckID == id } ?? DeckLearningOverride(deckID: id)
+                    effectiveRetention = Int((try store.repository.deckRetention(id) * 100).rounded())
+                    let limits = try store.repository.deckLimits(id).values
+                    effectiveLimit = "全体\(store.settings.dailyNewLimit)枚" + (limits.min().map { "、デッキ\($0)枚（子孫共通）" } ?? "、全体設定を継承")
                 } else if deckID == nil, let initialParentID, store.decks.contains(where: { $0.id == initialParentID }) {
                     parentID = initialParentID
                 }
@@ -218,7 +239,9 @@ struct DeckEditorView: View {
     }
     private func save() {
         do {
-            if let id = deckID { try store.repository.moveDeck(id: id, name: name, parentID: parentID, now: store.clock()) }
+            if let id = deckID {
+                try store.repository.moveDeck(id: id, name: name, parentID: parentID, learning: learning, now: store.clock())
+            }
             else { try store.repository.createDeck(name: name, parentID: parentID, now: store.clock()) }
             try store.reload(); dismiss()
         } catch { failure = error.localizedDescription }

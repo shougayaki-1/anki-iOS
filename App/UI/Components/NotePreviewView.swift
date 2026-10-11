@@ -12,7 +12,7 @@ struct NotePreviewView: View {
     private var content: TextContent {
         TextContent(question: input.question, answer: input.answer, explanation: input.explanation, hint: input.hint,
                     reverseEnabled: input.reverseEnabled, imageID: input.imageID,
-                    masks: input.masks, hideAllMasks: input.hideAllMasks)
+                    masks: input.masks, hideAllMasks: input.hideAllMasks, questionLayout: input.questionLayout, answerLayout: input.answerLayout)
     }
     var body: some View {
         NavigationStack {
@@ -24,7 +24,7 @@ struct NotePreviewView: View {
                             ForEach(variants, id: \.self) { Text("カード\((variants.firstIndex(of: $0) ?? 0) + 1)").tag($0) }
                         }
                         if let shown = try? CardGeneration.displayed(kind: input.kind, content: content, variant: selected) {
-                            Text(shown.question).font(.title2).accessibilityIdentifier("previewQuestion")
+                            StudyTextView(text: shown.question, layout: shown.questionLayout, font: .title2, fontSize: 24).accessibilityIdentifier("previewQuestion")
                             if let image {
                                 StudyImageView(image: image, masks: input.kind == .imageOcclusion ? input.masks : [],
                                                targetID: UUID(uuidString: String(selected.dropFirst("image:".count))),
@@ -48,7 +48,7 @@ struct NotePreviewView: View {
                             }
                             if revealed {
                                 if input.responseMode == .ordering, ordering?.result == .correct { Label("正解", systemImage: "checkmark.circle") }
-                                Text(shown.answer).accessibilityIdentifier("previewAnswer")
+                                StudyTextView(text: shown.answer, layout: shown.answerLayout).accessibilityIdentifier("previewAnswer")
                                 if !shown.explanation.isEmpty { Text(shown.explanation).foregroundStyle(.secondary) }
                             }
                             Button(revealed ? "問題に戻る" : "答えを表示") {

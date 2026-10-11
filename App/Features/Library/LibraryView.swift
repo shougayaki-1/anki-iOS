@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var editMode = EditMode.inactive
     @State private var selection = Set<UUID>()
     @State private var bulkEditing = false
+    @State private var bulkCommitted = false
 
     var filtered: [NoteItem] {
         store.notes.filter {
@@ -33,6 +34,12 @@ struct LibraryView: View {
                     Text("ノートは問題と解答のまとまり、カードは出題単位です。反転・穴埋め番号・画像マスクにより1ノートから複数枚を作成します。登録枚数は今日のユニーク学習枚数や延べ回答回数とは別です。")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                if !editMode.isEditing {
+                    Section {
+                        NavigationLink("苦手カード・重点練習") { WeakCardListView(store: store) }
+                            .accessibilityIdentifier("openWeakCards")
+                    }
+                }
                 if filtered.isEmpty {
                     ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
                                            description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
@@ -53,48 +60,62 @@ struct LibraryView: View {
             .onChange(of: search) { _, _ in selection.removeAll() }
             .onChange(of: editMode) { _, mode in if !mode.isEditing { selection.removeAll() } }
             .safeAreaInset(edge: .bottom) {
-                if !store.notes.isEmpty {
-                    VStack(spacing: 8) {
-                        HStack {
-                            if editMode.isEditing {
-                                Text("選択: \(selection.count)枚").accessibilityIdentifier("bulkSelectionCount")
-                            } else { Text("一括操作").font(.subheadline) }
-                            Spacer()
-                            EditButton().environment(\.editMode, $editMode).accessibilityIdentifier("selectLibraryCards")
+                if editMode.isEditing {
+                    HStack {
+                        Menu("選択", systemImage: "checkmark.circle") {
+                            Button("表示中を全選択") { selection = Set(filtered.map(\.cardID)) }
+                                .accessibilityIdentifier("selectAllLibraryCards")
+                            Button("選択を解除") { selection.removeAll() }
+                                .disabled(selection.isEmpty)
                         }
-                        if editMode.isEditing {
-                            HStack {
-                                Button("表示中を全選択") { selection = Set(filtered.map(\.cardID)) }.accessibilityIdentifier("selectAllLibraryCards")
-                                Spacer()
-                                Button("解除") { selection.removeAll() }
-                            }
-                            Button("一括操作") { bulkEditing = true }
-                                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                                .disabled(selection.isEmpty).accessibilityIdentifier("openBulkManagement")
-                        }
+                        Spacer()
+                        Button("一括操作") { bulkCommitted = false; bulkEditing = true }
+                            .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
+                            .disabled(selection.isEmpty).accessibilityIdentifier("openBulkManagement")
                     }.padding().background(.regularMaterial)
                 }
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
-            .navigationTitle("ライブラリ")
+            .navigationTitle(editMode.isEditing ? "カードを選択" : "ライブラリ")
+            .onDisappear { selection.removeAll(); editMode = .inactive }
             .navigationDestination(item: $shortcutDeck) { destination in
                 ShortcutDeckContentsView(store: store, deckID: destination.id)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("文字認識", systemImage: "text.viewfinder") { ocr = true }.accessibilityIdentifier("openOCR")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
+                if editMode.isEditing {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Text("選択: \(selection.count)枚").accessibilityIdentifier("bulkSelectionCount")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完了") { selection.removeAll(); editMode = .inactive }
+                            .accessibilityIdentifier("finishLibrarySelection")
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu("ライブラリ操作", systemImage: "ellipsis.circle") {
+                            Button("カードを選択", systemImage: "checkmark.circle") {
+                                selection.removeAll(); editMode = .active
+                            }.disabled(filtered.isEmpty).accessibilityIdentifier("selectLibraryCards")
+                        }.accessibilityIdentifier("libraryActions")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("文字認識", systemImage: "text.viewfinder") { ocr = true }.accessibilityIdentifier("openOCR")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
+                    }
                 }
             }
-            .sheet(isPresented: $bulkEditing, onDismiss: { selection.removeAll(); editMode = .inactive }) {
-                BulkManagementView(store: store, selection: selection) {
-                    selection.removeAll(); editMode = .inactive; bulkEditing = false
+            .sheet(isPresented: $bulkEditing, onDismiss: {
+                if bulkCommitted { selection.removeAll(); editMode = .inactive }
+            }) {
+                BulkManagementView(store: store, selection: selection, didCommit: { bulkCommitted = true }) { committed in
+                    if committed { selection.removeAll(); editMode = .inactive }
+                    bulkEditing = false
                 }
             }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
@@ -193,7 +214,8 @@ private enum BulkOperation: String, CaseIterable {
 private struct BulkManagementView: View {
     @Bindable var store: StudyStore
     let selection: Set<UUID>
-    let close: () -> Void
+    let didCommit: () -> Void
+    let close: (Bool) -> Void
     @State private var operation = BulkOperation.move
     @State private var destination: UUID?
     @State private var tagText = ""
@@ -217,7 +239,7 @@ private struct BulkManagementView: View {
             Form {
                 if let result {
                     Section("結果") { Text(result).accessibilityIdentifier("bulkResult") }
-                    Button("閉じる") { close() }.accessibilityIdentifier("closeBulkResult")
+                    Button("閉じる") { close(true) }.accessibilityIdentifier("closeBulkResult")
                 } else {
                     Section {
                         Text("選択カード: \(selection.count)枚")
@@ -270,7 +292,7 @@ private struct BulkManagementView: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("一括操作")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close() }.accessibilityIdentifier("closeBulkManagement") }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close(result != nil) }.accessibilityIdentifier("closeBulkManagement") }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }.accessibilityIdentifier("dismissBulkKeyboard") }
             }
             .onChange(of: operation) { _, _ in preview = nil }
@@ -295,10 +317,122 @@ private struct BulkManagementView: View {
         var receipt: BulkEditResult?
         let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
         if let receipt {
+            didCommit()
             result = "変更済み: \(receipt.changedNotes)ノート・\(receipt.changedCards)枚"
             if !refreshed { result! += "。表示を更新できません。閉じてアプリを開き直してください。" }
             preview = nil
         } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
         store.failure = nil
+    }
+}
+
+
+private struct WeakCardListView: View {
+    @Bindable var store: StudyStore
+    @State private var scope = LearningScope()
+    @State private var days = 30
+    @State private var rows: [WeakCardItem] = []
+    @State private var failure: String?
+    @State private var practice: WeakPracticeSession?
+
+    var body: some View {
+        List {
+            Section("絞り込み") {
+                Picker("デッキ（子孫を含む）", selection: $scope.deckID) {
+                    Text("すべて").tag(UUID?.none)
+                    ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("履歴の期間", selection: $days) {
+                    ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
+                }
+                ForEach(store.tags) { tag in
+                    Toggle(tag.name, isOn: Binding(get: { scope.tagIDs.contains(tag.id) }, set: { value in
+                        if value { scope.tagIDs.append(tag.id) } else { scope.tagIDs.removeAll { $0 == tag.id } }
+                    }))
+                }
+            }
+            Section {
+                Text("直近Again、Again2回以上、3回答以上でAgain割合30%以上・難易度8以上・推定想起確率75%未満を基準に抽出します。停止中・未学習は除外します。タグはすべて含む条件です。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("重点練習では復習予定・FSRS・回答履歴・今日の学習枚数を変更しません。正式な評価はホームの通常学習で行います。")
+                    .font(.footnote)
+                Button("重点練習を始める") {
+                    do {
+                        practice = try store.repository.weakPractice(scope: scope, days: days == 0 ? nil : days, now: store.clock())
+                        failure = nil
+                    } catch { failure = error.localizedDescription }
+                }.disabled(rows.isEmpty).accessibilityIdentifier("startWeakPractice")
+                Text("兄弟カードは通常の同日抑制に加え、練習内でも1ノート1枚に制限します（短期学習は例外）。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let failure { Section { Text(failure).foregroundStyle(.red); Button("再試行") { refresh() } } }
+            if rows.isEmpty && failure == nil { Text("この条件の苦手カードはありません。期間やデッキ・タグを変更してください。") }
+            Section("苦手カード：\(rows.count)枚") {
+                ForEach(rows) { row in
+                    NavigationLink { NoteDetailView(store: store, cardID: row.id) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(row.card.content.question).lineLimit(2)
+                            Text(row.card.deckName).font(.caption).foregroundStyle(.secondary)
+                            ForEach(row.evidence.reasons, id: \.self) { Text($0).font(.footnote) }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("苦手カード")
+        .task { refresh() }
+        .onChange(of: scope) { _, _ in refresh() }
+        .onChange(of: days) { _, _ in refresh() }
+        .sheet(item: $practice, onDismiss: { refresh() }) { session in
+            WeakPracticeView(store: store, initial: session)
+        }
+    }
+    private func refresh() {
+        do { rows = try store.repository.weakCards(scope: scope, days: days == 0 ? nil : days, now: store.clock()); failure = nil }
+        catch { rows = []; failure = error.localizedDescription }
+    }
+}
+
+private struct WeakPracticeView: View {
+    @Bindable var store: StudyStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var session: WeakPracticeSession
+    init(store: StudyStore, initial: WeakPracticeSession) {
+        self.store = store; _session = State(initialValue: initial)
+    }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 20) {
+                    Text("練習のみ・復習予定と学習履歴は変更しません")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if let item = session.current {
+                        Text("\(session.index + 1)／\(session.cards.count)枚")
+                        Text(item.content.question).font(.title2).accessibilityIdentifier("weakPracticeQuestion")
+                        if let id = item.sourceContent.imageID {
+                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
+                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? item.sourceContent.masks ?? [] : [],
+                                    targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
+                                    hideAll: item.sourceContent.hideAllMasks ?? true, revealed: session.revealed)
+                            } else { Text("画像を読み込めません。ライブラリで画像を確認してください。") }
+                        }
+                        if session.revealed {
+                            Text(item.content.answer).accessibilityIdentifier("weakPracticeAnswer")
+                            if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
+                            Button("次のカード") { session.next() }.accessibilityIdentifier("nextWeakPractice")
+                        } else {
+                            StudyHintView(hint: item.content.hint).id(item.cardID)
+                            Button("答えを表示") { session.reveal() }.accessibilityIdentifier("revealWeakPractice")
+                        }
+                        if session.index > 0 { Button("前のカード") { session.previous() } }
+                    } else {
+                        Text("重点練習を完了しました")
+                        Button("閉じる") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                    }
+                }.padding()
+            }
+            .navigationTitle("重点練習")
+            .toolbar { Button("終了") { dismiss() } }
+        }
     }
 }
