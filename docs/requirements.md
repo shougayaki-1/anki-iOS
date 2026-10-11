@@ -440,6 +440,11 @@ SessionScopeは開始時にだけ設定する実行中セッションの条件�
 - 完全復元と別の.studydeck（format studydeck/schemaVersion1）。選択デッキの子孫・ノート・タグ・参照メディアのみ。FSRS/ReviewLog/日時/個人設定/自動音声/下書きは除外。
 - 内容・階層・件数・重複・名称衝突を確認してFiles/Share Sheetへ共有、または確定取込。新しいUUIDと未学習状態で追加し、既存データを保持。
 - 詳細な上限・互換性・原子性・テストは[デッキ交換仕様](deck-exchange.md)。
+
+### Issue #14: Anki .apkg第一段階
+- Legacy1/2 schema11（collection.anki2/anki21）の標準基本・逆方向・穴埋めと限定メディアを、SQLite read-only・上限付きZIP検証で取込。HTML/JSは実行しない。
+- 最新anki21b、任意テンプレート、複数メディアや履歴引継ぎは未対応。対応/非対応・元件数と生成数・理由・新規開始を確認して対応部分のみ追加。
+- 対応表、上限、安全設計、テストfixtureは[Anki互換性仕様](apkg-compatibility.md)。
 ### タイピング回答の任意保存（#10）
 
 初期値OFF。ON時は文字入力で確定した回答本文と回答時点の問題・模範解答を、評価/時刻/Card/ReviewLogに紐付けて端末内に保存する。7日/30日/90日/手動削除までを選択し、個別・全削除、Undo、保存失敗の巻き戻し、Schema V5移行と完全バックアップ復元を整合させる。通常のライブラリ検索には本文を含めない。専用履歴画面のみで検索する。外部送信・AI採点は行わない。[保存仕様とプライバシー](typed-answer-history.md) を参照。

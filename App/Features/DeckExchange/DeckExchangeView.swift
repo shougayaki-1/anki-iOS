@@ -1,7 +1,10 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-extension UTType { static let studyDeck = UTType(exportedAs: "dev.shoug.studydeck", conformingTo: .zip) }
+extension UTType {
+    static let studyDeck = UTType(exportedAs: "dev.shoug.studydeck", conformingTo: .zip)
+    static let ankiPackage = UTType(importedAs: "dev.shoug.anki-package", conformingTo: .zip)
+}
 struct DeckFileDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.studyDeck] }
     let data: Data
@@ -20,6 +23,9 @@ struct DeckExchangeView: View {
     @State private var preview: DeckImportPreview?
     @State private var skipDuplicates = true
     @State private var importing = false
+    @State private var importingAnki = false
+    @State private var ankiPreview: AnkiImportPreview?
+    @State private var skippedPage = 0
     @State private var exporting = false
     @State private var confirmation = false
     @State private var working = false
@@ -42,10 +48,19 @@ struct DeckExchangeView: View {
                     .font(.footnote)
             }
             Section("デッキを受け取る") {
-                Button(".studydeckファイルを選択") { clearPreview(); importing = true }
+                Button(".studydeckファイルを選択") { clearPreview(); importingAnki = false; importing = true }
                     .disabled(working).accessibilityIdentifier("selectDeckFile")
                 Text("既存データに追加します。全カードが未学習で開始し、同名デッキは別名で新しく作成します。")
                     .font(.footnote)
+            }
+            Section("Ankiから移行する") {
+                Button("Anki .apkgを選択") { clearPreview(); importingAnki = true; importing = true }
+                    .disabled(working).accessibilityIdentifier("selectAnkiPackage")
+                DisclosureGroup("対応形式と変更点") {
+                    Text("Ankiで「古いAnkiバージョンをサポート」を有効にして書き出してください。collection.anki2/anki21・schema11が対象です。最新anki21bは未対応です。")
+                    Text("2フィールドの標準的な基本・逆方向・穴埋めに対応。画像は問題面にJPEG/PNG1枚、音声は各面1本。文字装飾はプレーンテキストへ変わり、任意HTML/JS・画像遮蔽・動画・LaTeX・複数メディア等は未対応です。")
+                    Text("AnkiのFSRS・予定・回答履歴は引き継げません。新規学習として開始します。未対応ノートと理由を表示し、対応するノートだけを確認してから追加します。")
+                }.font(.footnote)
             }
             if working {
                 Section {
@@ -54,6 +69,24 @@ struct DeckExchangeView: View {
                 }
             }
             if let result { Text(result).accessibilityIdentifier("deckExchangeResult") }
+            if let ankiPreview {
+                Section("Ankiの移行結果") {
+                    LabeledContent("元ノート", value: "\(ankiPreview.sourceNotes)")
+                    LabeledContent("元カード", value: "\(ankiPreview.sourceCards)")
+                    LabeledContent("未対応ノート", value: "\(ankiPreview.skipped.count)").accessibilityIdentifier("ankiSkippedCount")
+                    Text("学習済みカード\(ankiPreview.scheduledCards)件・回答履歴\(ankiPreview.reviewLogs)件は取り込みません。すべて新規学習として開始します。文字装飾やテンプレートの配置も移行しません。")
+                        .font(.footnote).accessibilityIdentifier("ankiHistoryPolicy")
+                    ForEach(Array(ankiPreview.skipped.dropFirst(skippedPage * 100).prefix(100))) { item in
+                        Text("ノート\(item.id)：\(item.reason)").font(.footnote)
+                    }
+                    if ankiPreview.skipped.count > 100 {
+                        HStack {
+                            Button("未対応の前へ") { skippedPage -= 1 }.disabled(skippedPage == 0)
+                            Button("未対応の次へ") { skippedPage += 1 }.disabled((skippedPage + 1) * 100 >= ankiPreview.skipped.count)
+                        }
+                    }
+                }
+            }
             if let selected {
                 Section(exportBytes == nil ? "取込プレビュー" : "共有プレビュー") {
                     LabeledContent("デッキ", value: "\(selected.package.decks.count)")
@@ -69,7 +102,7 @@ struct DeckExchangeView: View {
                         Toggle("重複をスキップ", isOn: $skipDuplicates).accessibilityIdentifier("skipDeckDuplicates")
                         Text("本文・形式・画像/音声の内容が同じノートを重複として扱います。タグや回答方法の違いは重複判定に含みません。既存ノートの上書きは行いません。")
                             .font(.footnote)
-                        Button("確認して取り込む") { confirmation = true }.disabled(working)
+                        Button("確認して取り込む") { confirmation = true }.disabled(working || selected.package.notes.isEmpty)
                             .accessibilityIdentifier("confirmDeckImport")
                     } else if exportBytes != nil {
                         Button("Filesに書き出す") { exporting = true }.accessibilityIdentifier("exportDeckFile")
@@ -97,11 +130,16 @@ struct DeckExchangeView: View {
         .onAppear { if rootID == nil { rootID = store.decks.first?.id } }
         .onChange(of: rootID) { _, _ in clearPreview() }
         .onDisappear { operation?.cancel(); removeShareFile() }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.studyDeck, .zip]) { outcome in
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.studyDeck, .ankiPackage, .zip]) { outcome in
             switch outcome {
             case .failure(let error): if (error as NSError).code != NSUserCancelledError { failure = error.localizedDescription }
             case .success(let url): run {
-                let value = try await DeckExchange.read(url)
+                let value: ValidatedDeckPackage
+                if importingAnki {
+                    let imported = try await AnkiImport.read(url)
+                    try Task.checkCancellation()
+                    value = imported.deck; ankiPreview = imported
+                } else { value = try await DeckExchange.read(url) }
                 try Task.checkCancellation()
                 let summary = try store.repository.previewDeckImport(value)
                 selected = value; preview = summary; page = 0
@@ -123,7 +161,7 @@ struct DeckExchangeView: View {
                     try store.reload(); clearPreview(); result = "\(count)ノートを取り込みました。"
                 }
             }.accessibilityIdentifier("commitDeckImport")
-        } message: { Text("\(preview?.destinationName ?? "")へ追加します。既存のカード・回答履歴は保持されます。重複判定は確定時に再確認します。") }
+        } message: { Text("\(preview?.destinationName ?? "")へ追加します。既存のカード・回答履歴は保持されます。重複判定は確定時に再確認します。\(ankiPreview == nil ? "" : " Ankiの履歴は移行せず、未対応ノートを除外し、装飾はプレーンテキストになります。")") }
         .alert("デッキファイルを処理できません", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("閉じる", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
@@ -154,7 +192,7 @@ struct DeckExchangeView: View {
         if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }
         shareURL = nil
     }
-    private func clearPreview() { selected = nil; exportBytes = nil; preview = nil; result = nil; page = 0; removeShareFile() }
+    private func clearPreview() { ankiPreview = nil; skippedPage = 0; selected = nil; exportBytes = nil; preview = nil; result = nil; page = 0; removeShareFile() }
     private func deckPath(_ id: UUID, in package: DeckPackage) -> String {
         var cursor: UUID? = id, names: [String] = []
         let byID = Dictionary(uniqueKeysWithValues: package.decks.map { ($0.id, $0) })

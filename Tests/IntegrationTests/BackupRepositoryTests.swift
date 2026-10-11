@@ -424,3 +424,75 @@ extension BackupRepositoryTests {
         XCTAssertEqual(try BackupData.capture(destination), before)
     }
 }
+
+extension BackupRepositoryTests {
+    func testLegacyAnkiStandardModelsMediaAndCountsImportAsFreshLearning() async throws {
+        let bytes = try UITestFixtures.ankiFixture()
+        let preview = try AnkiImport.decode(bytes)
+        XCTAssertEqual(preview.sourceNotes, 5); XCTAssertEqual(preview.sourceCards, 7)
+        XCTAssertEqual(preview.deck.package.notes.count, 3); XCTAssertEqual(preview.deck.cardCount, 5)
+        XCTAssertEqual(preview.skipped.count, 2); XCTAssertEqual(preview.scheduledCards, 7); XCTAssertEqual(preview.reviewLogs, 1)
+        XCTAssertTrue(preview.skipped.contains { $0.reason.contains("スクリプト") })
+        XCTAssertTrue(preview.skipped.contains { $0.reason.contains("2フィールド") })
+        let basic = try XCTUnwrap(preview.deck.package.notes.first { $0.content.question.contains("Anki question") })
+        XCTAssertEqual(basic.content.question, "Anki question")
+        XCTAssertEqual(basic.content.answer, "Anki answer")
+        XCTAssertNotNil(basic.content.imageID); XCTAssertNotNil(basic.content.questionAudioID); XCTAssertNotNil(basic.content.answerAudioID)
+        XCTAssertEqual(preview.deck.package.media.count, 3)
+        let cloze = try XCTUnwrap(preview.deck.package.notes.first { $0.kind == .cloze })
+        XCTAssertEqual(cloze.content.question, "{{c1::red}} and {{c2::blue::color}}")
+        XCTAssertEqual(cloze.content.explanation, "Extra explanation")
+        let reverse = try XCTUnwrap(preview.deck.package.notes.first { $0.content.reverseEnabled == true })
+        XCTAssertEqual(try CardGeneration.variants(kind: reverse.kind, content: reverse.content).count, 2)
+        XCTAssertEqual(Set(preview.deck.package.decks.map(\.name)), ["Anki取込", "Default", "Child"])
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root)
+        let before = try BackupData.capture(repo)
+        XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 3)
+        XCTAssertEqual(try repo.cards().count, 5); XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertEqual(try repo.settings().desiredRetention, before.preferences[0].desiredRetention)
+        XCTAssertTrue(try repo.noteItems().allSatisfy { $0.summary.repetitions == 0 })
+        XCTAssertEqual(try repo.previewDeckImport(preview.deck).duplicates.count, 3)
+        _ = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        var legacy2 = try StoredZIP.read(bytes)
+        legacy2["collection.anki21"] = legacy2["collection.anki2"]; legacy2["meta"] = Data([8, 2])
+        XCTAssertEqual(try AnkiImport.decode(StoredZIP.write(legacy2)).deck.cardCount, 5)
+    }
+    func testAnkiRejectsModernDamagedUnsafeSchemaAndPathsWithoutChangingStore() throws {
+        let bytes = try UITestFixtures.ankiFixture(), files = try StoredZIP.read(bytes)
+        var modern = files; modern["collection.anki21b"] = Data([1, 2, 3])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(modern)))
+        var badDB = files; badDB["collection.anki2"] = Data("not sqlite".utf8)
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(badDB)))
+        var truncated = files; truncated["collection.anki2"] = Data(files["collection.anki2"]!.prefix(200))
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(truncated)))
+        XCTAssertThrowsError(try AnkiImport.decode(UITestFixtures.ankiFixture(script: true)))
+        var paths = files; paths["media"] = try JSONEncoder().encode(["0": "../escape.png", "1": "q.wav", "2": "a.wav"])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(paths)))
+        var missing = files; missing["1"] = nil
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(missing)))
+        var unknown = files; unknown["unexpected.sql"] = Data("ATTACH".utf8)
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(unknown)))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root), before = try BackupData.capture(repo)
+        let preview = try AnkiImport.decode(bytes)
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now))
+        XCTAssertEqual(try BackupData.capture(repo), before)
+    }
+}
+
+
+extension BackupRepositoryTests {
+    // Independent Python sqlite3 + zipfile fixture, rather than our app's ZIP writer.
+    func testDeflatedLegacyAnkiPackage() throws {
+        let data = Data(base64Encoded: "UEsDBBQAAAAIAJVzS13VNwudBAIAAABQAAAQAAAAY29sbGVjdGlvbi5hbmtpMu3Yz2rUQBwH8Jl2d20Ru4UeluLBMSC0sJQt3kTFbc1KsbV1u0KL9BB3Jm1oktmdzFZLmEN9Ai++i+/gxVfwLTw6SfYvUjyJaL8fJsOP30x+v8lxcvh6N9CC+VJFnmYPyTKhlDxjjBBSHj4jpeEzQsnvlcnG5693sheXPpHql+qbpe82AAAAAAAAgBtvv1Spra7SVHvvQqHERShPi7m83XabHZd1mlu7LityawFnO6867gu3zQ7aO3vN9jF76R7Xu5P8upq/VavV6NV2XrHrKZ7kU2mmXp66rlw8ydf5VCzVJFail4x7enNFz/t5z1hqkeTT/EzPPHVdz2iqjx/yhHXco05de6dFtN6ildrKCh0UXyVDO+Zmv0iGaxdCjYtEkotwWIaL7vmwTnY3p9UHxA4AAAAAAACAm+3qiJbpx/7e7dTZbDScRyx19GVP2KBRZ052Pbfh29SRig9zsRdly05LyVg7ps5Gi5tTi1te99wxJzajo174S42+H+lsW5rmVYxxbNKbTR4GXBjz+EyxgD/x4uS9UE/TNCtst5sTY+yJ8/OOeh5c6jMZt4IPeqCEY0xx//9G7AAAAAAAAACAf8QGLRO6f5c/F37oacFZfyASHcj43jhT/Cbwi18Axf3/B7EDAAAAAAAAAP4zFVohi4sLC9n9nyz/7dMAAAAAAAAAwJ/0E1BLAwQUAAAACACVc0tdQ7+mowQAAAACAAAABQAAAG1lZGlhq64FAFBLAQIUAxQAAAAIAJVzS13VNwudBAIAAABQAAAQAAAAAAAAAAAAAACAAQAAAABjb2xsZWN0aW9uLmFua2kyUEsBAhQDFAAAAAgAlXNLXUO/pqMEAAAAAgAAAAUAAAAAAAAAAAAAAIABMgIAAG1lZGlhUEsFBgAAAAACAAIAcQAAAFkCAAAAAA==")!
+        let preview = try AnkiImport.decode(data)
+        XCTAssertEqual(preview.deck.cardCount, 1)
+        XCTAssertEqual(preview.deck.package.notes.first?.content.question, "Deflated question")
+        XCTAssertEqual(preview.deck.package.notes.first?.content.answer, "Deflated answer")
+    }
+}

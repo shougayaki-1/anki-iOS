@@ -111,8 +111,8 @@ extension SpeechUITests {
         }
         XCTAssertTrue(element.exists && element.isHittable, app.debugDescription)
     }
-    private func exchangeSelect(_ name: String, app: XCUIApplication) {
-        app.buttons["selectDeckFile"].tap()
+    private func exchangeSelect(_ name: String, app: XCUIApplication, identifier: String = "selectDeckFile") {
+        exchangeScroll(app.buttons[identifier], app: app); app.buttons[identifier].tap()
         let file = app.cells.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
         if !file.waitForExistence(timeout: 3) {
             if app.buttons["ブラウズ"].firstMatch.exists { app.buttons["ブラウズ"].firstMatch.tap() }
@@ -159,5 +159,39 @@ extension SpeechUITests {
         app.buttons["stopSpeech"].tap(); app.buttons["revealAnswer"].tap()
         XCTAssertTrue(app.buttons["speakAnswer"].waitForExistence(timeout: 5))
         app.buttons["pauseStudy"].tap()
+    }
+}
+
+extension SpeechUITests {
+    func testAnkiFileReportsUnsupportedNotesAndImportsAsNewLearning() {
+        let app = XCUIApplication(), id = UUID().uuidString
+        app.launchArguments = ["-study-test-store", id, "-study-test-file-fixtures"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["デッキ管理"].tap(); app.buttons["openDeckExchange"].tap()
+        exchangeSelect("Anki-\(id)", app: app, identifier: "selectAnkiPackage")
+        exchangeScroll(app.staticTexts["ankiHistoryPolicy"], app: app)
+        XCTAssertTrue(app.staticTexts["ankiHistoryPolicy"].label.contains("新規学習"))
+        XCTAssertTrue(app.staticTexts["ankiHistoryPolicy"].label.contains("回答履歴1件"))
+        let unsupported = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "スクリプト")).firstMatch
+        XCTAssertTrue(unsupported.exists)
+        exchangeScroll(app.buttons["cancelDeckPreview"], app: app); app.buttons["cancelDeckPreview"].tap()
+        XCTAssertFalse(app.buttons["confirmDeckImport"].exists)
+        for _ in 0..<6 { if app.buttons["selectAnkiPackage"].isHittable { break }; app.swipeDown() }
+        exchangeSelect("Anki-\(id)", app: app, identifier: "selectAnkiPackage")
+        exchangeScroll(app.buttons["confirmDeckImport"], app: app); app.buttons["confirmDeckImport"].tap()
+        app.buttons["commitDeckImport"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("3ノート"))
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        app.buttons["revealAnswer"].tap()
+        XCTAssertTrue(app.buttons["grade-3"].waitForExistence(timeout: 5))
+        app.buttons["grade-3"].tap()
+        XCTAssertTrue(app.buttons["undoReview"].waitForExistence(timeout: 5))
+        app.buttons["undoReview"].tap(); app.buttons["pauseStudy"].tap()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 5))
     }
 }
