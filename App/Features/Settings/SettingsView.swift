@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct SettingsView: View {
     @Bindable var store: StudyStore
@@ -7,6 +8,8 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @State private var requestingNotification = false
     @State private var backup = false
+    @State private var widgetRefreshRequested = false
+    @State private var lastWidgetRefreshFeedbackAt: Date?
 
     var body: some View {
         NavigationStack {
@@ -30,8 +33,22 @@ struct SettingsView: View {
                 Section("ウィジェット") {
                     Text("ホーム画面の追加メニューから「暗記ノート」を選べます。全デッキの件数と進捗のみ共有し、問題文・答えは共有しません。更新の頻度や時刻はiOSが制御します。")
                         .font(.footnote)
-                    Button("ウィジェットの更新をリクエスト") { store.refreshWidget() }.accessibilityIdentifier("refreshWidget")
-                    if let failure = store.widgetFailure { Text(failure).font(.footnote) }
+                    Button("ウィジェットの更新をリクエスト") { requestWidgetRefresh() }
+                        .accessibilityIdentifier("refreshWidget")
+                    if let failure = store.widgetFailure {
+                        Label(failure, systemImage: "exclamationmark.triangle")
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .accessibilityIdentifier("widgetRefreshFailure")
+                    } else if widgetRefreshRequested {
+                        Label("ウィジェットの更新をリクエストしました", systemImage: "arrow.clockwise.circle")
+                            .font(.footnote)
+                            .foregroundStyle(Color("SecondaryText"))
+                            .accessibilityIdentifier("widgetRefreshRequested")
+                        Text("表示への反映時刻はiOSが管理するため、すぐに変わらない場合があります。")
+                            .font(.footnote)
+                            .foregroundStyle(Color("SecondaryText"))
+                    }
                 }
                 Section("タイピング回答") {
                     NavigationLink("回答の保存設定") { TypedAnswerSettingsView(store: store) }
@@ -150,6 +167,26 @@ struct SettingsView: View {
                 #endif
             }.scrollDismissesKeyboard(.interactively).navigationTitle("設定")
                 .sheet(isPresented: $backup) { BackupView(store: store) }
+        }
+    }
+    private func requestWidgetRefresh() {
+        let isRetry = store.widgetFailure != nil
+        // Old asynchronous failures must not block acknowledgment of a new request.
+        store.widgetFailure = nil
+        widgetRefreshRequested = false
+        guard store.refreshWidget(), store.widgetFailure == nil else { return }
+
+        widgetRefreshRequested = true
+        // The inline status represents request acceptance; only haptics and
+        // VoiceOver announcements are throttled during rapid consecutive taps.
+        let now = Date()
+        if !isRetry, let last = lastWidgetRefreshFeedbackAt,
+           now.timeIntervalSince(last) < 1 { return }
+        lastWidgetRefreshFeedbackAt = now
+        store.haptics.play(.widgetRefreshRequest, mode: store.settings.hapticsMode)
+        if UIAccessibility.isVoiceOverRunning {
+            UIAccessibility.post(notification: .announcement,
+                                 argument: "ウィジェットの更新をリクエストしました。実際の反映時刻はiOSが管理します。")
         }
     }
     private func update(_ edit: (inout StudySettings) -> Void) {
