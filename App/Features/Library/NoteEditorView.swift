@@ -5,6 +5,10 @@ struct NoteEditorView: View {
     let item: NoteItem?
     @Environment(\.dismiss) private var dismiss
     @FocusedValue(\.numericSettingEditing) private var numericSettingEditing
+    @State private var kanbunBase = ""
+    @State private var kanbunOkuri = ""
+    @State private var kanbunMark = "レ"
+    @State private var kanbunLeft = ""
     @State private var rubySide = false
     @State private var rubyBase = ""
     @State private var rubyReading = ""
@@ -89,6 +93,28 @@ struct NoteEditorView: View {
                             if rubySide { input.answer += value } else { input.question += value }
                             rubyBase = ""; rubyReading = ""
                         }.disabled(rubyBase.isEmpty || rubyReading.isEmpty || (rubyBase + rubyReading).contains(where: { "｜|《》\n".contains($0) }))
+                    }
+                }
+                Section("漢文の訓点") {
+                    Text("例：不［＃（ズ）］［＃レ］知［＃（ラ）］。返り点は左下、送り仮名は右下へ配置します。訓点付き本文は縦書きを推奨します。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    DisclosureGroup("訓点付きの字を末尾に追加") {
+                        Toggle("解答面に追加", isOn: $rubySide)
+                        TextField("漢字1字", text: $kanbunBase)
+                        TextField("送り仮名（任意）", text: $kanbunOkuri)
+                        Picker("返り点", selection: $kanbunMark) {
+                            Text("なし").tag("")
+                            ForEach(KanbunDocument.returnMarks, id: \.self) { Text($0).tag($0) }
+                        }
+                        TextField("再読の左ルビ（任意）", text: $kanbunLeft)
+                        Button("訓点付きの字を追加") {
+                            var value = kanbunBase
+                            if !kanbunOkuri.isEmpty { value += "［＃（\(kanbunOkuri)）］" }
+                            if !kanbunMark.isEmpty { value += "［＃\(kanbunMark)］" }
+                            if !kanbunLeft.isEmpty { value += "［＃「\(kanbunBase)」の左に「\(kanbunLeft)」のルビ］" }
+                            if rubySide { input.answer += value } else { input.question += value }
+                            kanbunBase = ""; kanbunOkuri = ""; kanbunLeft = ""
+                        }.disabled(kanbunBase.count != 1 || kanbunOkuri.count > 32 || kanbunLeft.count > 32 || (kanbunBase + kanbunOkuri + kanbunLeft).contains(where: { "［］「」\n".contains($0) }))
                     }
                 }
                 Section("問題") {

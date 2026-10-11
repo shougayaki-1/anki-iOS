@@ -30,7 +30,7 @@ final class StudyRepositoryTests: XCTestCase {
         try revealAndGrade(repo, grade: .easy, date: now)
         let states = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate) }
         input.questionLayout = .horizontal; input.answerLayout = .vertical
-        input.question = "｜東京《トウキョウ》"
+        input.question = "不［＃（ズ）］［＃一レ］知［＃（ラ）］。"
         try repo.updateNote(id: id, input: input, now: now)
         for (id, payload, due) in states {
             let card = try XCTUnwrap(repo.cards().first { $0.id == id })
@@ -47,9 +47,10 @@ final class StudyRepositoryTests: XCTestCase {
         try restored.initialize(now: now)
         let content = try JSONDecoder().decode(TextContent.self, from: restored.notes().first!.contentPayload)
         XCTAssertEqual(content.questionLayout, .horizontal); XCTAssertEqual(content.answerLayout, .vertical)
+        XCTAssertEqual(content.question, input.question)
         XCTAssertEqual(try restored.editorDraft(key: "new")?.answerLayout, .vertical)
         XCTAssertEqual(Set(try restored.cards().map(\.id)), Set(states.map { $0.0 }))
-        let table = try ImportParser.table("question,answer,question_layout,answer_layout\n｜東京《トウキョウ》,Capital,vertical,horizontal", delimiter: ",")
+        let table = try ImportParser.table("question,answer,question_layout,answer_layout\n不［＃（ズ）］［＃一レ］知［＃（ラ）］。,Capital,vertical,horizontal", delimiter: ",")
         let rows = ImportParser.map(table, header: true, questionColumn: 0, answerColumn: 1)
         _ = try restored.importRows(rows, deckID: deck, kind: .basic, tagNames: [], action: .update, source: "CSV", now: now)
         let updated = try JSONDecoder().decode(TextContent.self, from: restored.notes().first!.contentPayload)

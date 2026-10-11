@@ -17,25 +17,31 @@ final class StudyUITests: XCTestCase {
         return app
     }
     func testVerticalRubyPreviewLearningUndoAndRelaunch() {
+        richTextScenario(question: "｜春暁《しゅんぎょう》12年。\n｜東京《とうきょう》", prefix: "Issue51-vertical-ruby")
+    }
+    func testKanbunPreviewLearningUndoAndRelaunch() {
+        richTextScenario(question: "不［＃（ズ）］［＃レ］知［＃（ラ）］。\n｜未《いま》［＃「未」の左に「ザル」のルビ］［＃（ダ）］［＃レ］若［＃（カ）］［＃二］知［＃（シクシテ）］［＃一レ］。", prefix: "Issue52-kanbun")
+    }
+    private func richTextScenario(question source: String, prefix: String) {
         let app = app()
         app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
         let layout = app.buttons["questionLayout"]
         scrollTo(layout, app: app); layout.tap(); app.buttons["縦書き"].tap()
         let question = app.descendants(matching: .any)["questionInput"]
-        scrollTo(question, app: app); question.tap(); question.typeText("｜春暁《しゅんぎょう》12年。\n｜東京《とうきょう》")
+        scrollTo(question, app: app); question.tap(); question.typeText(source)
         let answer = app.descendants(matching: .any)["answerInput"]
         scrollTo(answer, app: app); answer.tap(); answer.typeText("Answer remains hidden")
         let preview = app.buttons["previewNote"]
         scrollTo(preview, app: app); preview.tap()
         XCTAssertTrue(app.descendants(matching: .any)["previewQuestion"].waitForExistence(timeout: 10))
         XCTAssertFalse(app.descendants(matching: .any)["previewAnswer"].exists)
-        attach(app, "Issue51-vertical-ruby-preview")
+        attach(app, prefix + "-preview")
         app.buttons["previewReveal"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["previewAnswer"].exists)
         app.buttons["closePreview"].tap(); app.buttons["saveNote"].tap()
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].waitForExistence(timeout: 10))
-        attach(app, "Issue51-vertical-ruby-review")
+        attach(app, prefix + "-review")
         app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap()
         app.buttons["undoReview"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].exists)
