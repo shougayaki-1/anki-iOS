@@ -114,7 +114,7 @@ final class StudyRepository {
                                   explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
                                   imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks,
                                   speechOverrides: input.speechOverrides, speechQuestion: input.speechQuestion,
-                                  speechAnswer: input.speechAnswer)
+                                  speechAnswer: input.speechAnswer, questionLayout: input.questionLayout, answerLayout: input.answerLayout)
         let variants = Set(try CardGeneration.variants(kind: input.kind, content: content))
         var sanitized = content
         sanitized.speechOverrides = input.speechOverrides?.filter { variants.contains($0.key) }
