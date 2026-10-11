@@ -152,7 +152,7 @@ final class QualityUITests: XCTestCase {
             var top = (app.navigationBars.allElementsBoundByIndex.map { $0.frame.maxY }.max() ?? app.frame.minY) + 8
             let progress = app.progressIndicators["sessionProgressBar"]
             if progress.exists { top = max(top, progress.frame.maxY + 8) }
-            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer" || element.identifier == "confirmImport")
+            let fixedControl = element.exists && (element.identifier.hasPrefix("grade-") || element.identifier == "revealAnswer" || element.identifier == "confirmImport" || element.identifier == "confirmImageImport")
             if fixedControl && element.isHittable { return }
             var bottom = app.frame.maxY - 16
             if app.buttons["pauseStudy"].exists {
@@ -187,6 +187,10 @@ final class QualityUITests: XCTestCase {
             if local.exists { local.tap() }
             let folder = app.cells.containing(.staticText, identifier: "暗記ノート").firstMatch
             if folder.exists { folder.tap() }
+        }
+        if !file.exists, app.searchFields["検索"].firstMatch.exists {
+            let search = app.searchFields["検索"].firstMatch
+            search.tap(); search.typeText(name)
         }
         XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription)
         file.tap()
@@ -331,5 +335,37 @@ final class QualityUITests: XCTestCase {
         app.buttons["pauseStudy"].tap(); app.tabBars.buttons["記録"].tap()
         scrollTo(app.staticTexts["todayAnswerCount"], app: app)
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
+    }
+}
+
+extension QualityUITests {
+    func testImageZIPNativePicker100CardsPreviewLearnUndoAndRestart() {
+        let app = XCUIApplication(), id = UUID().uuidString
+        app.launchArguments = ["-study-test-store", id, "-study-test-file-fixtures"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15)); app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["openImport"].tap(); app.buttons["selectImportFile"].tap()
+        selectFile("Images-\(id)", app: app)
+        XCTAssertTrue(app.navigationBars["画像ZIPの取り込み"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["images/symbol.png"].firstMatch.exists)
+        attach(app, name: "Issue22-image-ZIP-preview")
+        let confirm = app.buttons["confirmImageImport"]
+        scrollTo(confirm, app: app); confirm.tap(); app.buttons["確定して保存"].firstMatch.tap()
+        let result = app.staticTexts["imageImportResult"]
+        XCTAssertTrue(result.waitForExistence(timeout: 20)); XCTAssertTrue(result.label.contains("成功 100件"))
+        app.buttons["closeImageImport"].tap(); app.buttons["closeImport"].tap()
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "画像を見て答えてください")
+        app.buttons["revealAnswer"].tap()
+        XCTAssertTrue(app.staticTexts["modelAnswer"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["modelAnswer"].label.contains("ZIP answer"))
+        attach(app, name: "Issue22-imported-image-study")
+        app.buttons["grade-3"].tap(); app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))
     }
 }
