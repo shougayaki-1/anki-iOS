@@ -396,3 +396,89 @@ struct LibraryResults {
     var cardCount = 0
     var cardIDs: Set<UUID> { Set(cardsByDeck.values.joined().map(\.id)) }
 }
+
+// Counts and note grouping are prepared once per library revision/search result.
+// Expanding a folder only flattens the visible branches of the shared deck tree.
+struct LibraryNoteRow: Identifiable {
+    let card: LibraryCard
+    let cardIDs: Set<UUID>
+    var id: UUID { card.noteID }
+}
+
+struct LibraryTreeRow: Identifiable {
+    let deck: DeckTreeNode?
+    let note: LibraryNoteRow?
+    let depth: Int
+    let cardCount: Int
+    let expanded: Bool
+    let expandable: Bool
+    var id: String { deck.map { "deck-\($0.id)" } ?? "note-\(note!.id)" }
+}
+
+struct LibraryTreeProjection {
+    let roots: [DeckTreeNode]
+    let notesByDeck: [UUID: [LibraryNoteRow]]
+    let subtreeCards: [UUID: Int]
+    let searchDeckIDs: Set<UUID>?
+
+    init(decks: [DeckItem], index: LibraryIndex, results: LibraryResults, search: String) {
+        let roots = DeckTreeBuilder.roots(from: decks)
+        self.roots = roots
+        var groups: [UUID: [LibraryNoteRow]] = [:]
+        for (deck, cards) in results.cardsByDeck {
+            var order: [UUID] = [], byNote: [UUID: [LibraryCard]] = [:]
+            for card in cards {
+                if byNote[card.noteID] == nil { order.append(card.noteID) }
+                byNote[card.noteID, default: []].append(card)
+            }
+            groups[deck] = order.compactMap { id in
+                guard let cards = byNote[id], let first = cards.first else { return nil }
+                return LibraryNoteRow(card: first, cardIDs: Set(cards.map(\.id)))
+            }
+        }
+        notesByDeck = groups
+        var counts: [UUID: Int] = [:], included = Set<UUID>()
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        func visit(_ node: DeckTreeNode, path: String) -> Bool {
+            let path = path.isEmpty ? node.name : "\(path) / \(node.name)"
+            var found = groups[node.id]?.isEmpty == false || path.localizedCaseInsensitiveContains(query)
+            var count = index.cardsByDeck[node.id]?.count ?? 0
+            for child in node.children {
+                if visit(child, path: path) { found = true }
+                count += counts[child.id] ?? 0
+            }
+            counts[node.id] = count
+            if found { included.insert(node.id) }
+            return found
+        }
+        for root in roots { _ = visit(root, path: "") }
+        subtreeCards = counts
+        searchDeckIDs = query.isEmpty ? nil : included
+    }
+
+    func rows(expanded: Set<UUID>) -> [LibraryTreeRow] {
+        var result: [LibraryTreeRow] = []
+        func visit(_ node: DeckTreeNode, depth: Int) {
+            if let included = searchDeckIDs, !included.contains(node.id) { return }
+            let open = searchDeckIDs != nil || expanded.contains(node.id)
+            result.append(LibraryTreeRow(deck: node, note: nil, depth: depth,
+                                         cardCount: subtreeCards[node.id] ?? 0, expanded: open,
+                                         expandable: !node.children.isEmpty || (subtreeCards[node.id] ?? 0) > 0))
+            guard open else { return }
+            for note in notesByDeck[node.id] ?? [] {
+                result.append(LibraryTreeRow(deck: nil, note: note, depth: depth + 1,
+                                             cardCount: note.cardIDs.count, expanded: false, expandable: false))
+            }
+            for child in node.children { visit(child, depth: depth + 1) }
+        }
+        for root in roots { visit(root, depth: 0) }
+        return result
+    }
+
+    static func expandedIDs(_ saved: String) -> Set<UUID> {
+        Set(saved.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
+    }
+    static func saveExpanded(_ ids: Set<UUID>) -> String {
+        ids.map(\.uuidString).sorted().joined(separator: ",")
+    }
+}

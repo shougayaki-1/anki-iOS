@@ -118,6 +118,10 @@ struct AppRootView: View {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
                     try store.reload()
                 }
+                if studyURL != nil, args.contains("-study-test-library-tree"), let store {
+                    try UITestFixtures.populateLibraryTree(store.repository, now: store.clock())
+                    try store.reload()
+                }
                 if studyURL != nil, args.contains("-study-test-ordering"), let store {
                     try UITestFixtures.populateOrdering(store.repository, now: store.clock())
                     try store.reload()
