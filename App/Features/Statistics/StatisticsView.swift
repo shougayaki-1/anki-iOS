@@ -132,20 +132,8 @@ struct StatisticsView: View {
                 }
                 Section("集計条件") {
                     DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $store.statisticsScope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
-                    Menu {
-                        Button("すべてのタグ") { store.statisticsScope.tagIDs = [] }
-                        ForEach(store.tags) { tag in
-                            Button {
-                                if store.statisticsScope.tagIDs.contains(tag.id) {
-                                    store.statisticsScope.tagIDs.removeAll { $0 == tag.id }
-                                } else {
-                                    store.statisticsScope.tagIDs.append(tag.id)
-                                }
-                            } label: {
-                                Label(tag.name, systemImage: store.statisticsScope.tagIDs.contains(tag.id)
-                                      ? "checkmark.circle.fill" : "circle")
-                            }
-                        }
+                    NavigationLink {
+                        ContextualTagScopeSheet(store: store, scope: $store.statisticsScope)
                     } label: {
                         LabeledContent("タグ（すべてを含む）", value: selectedTagNames)
                     }

@@ -490,16 +490,9 @@ struct LearningScopeSheet: View {
             Form {
                 Section("デッキ（子孫を含む）") {
                     DeckSelectionField("デッキ", decks: store.decks, selection: $draft.deckID, nilTitle: "すべてのデッキ", includesDescendants: true).accessibilityIdentifier("studyDeckPicker")
+                    Button("リセット") { draft = LearningScope() }.accessibilityIdentifier("resetStudyFilter")
                 }
-                Section("タグ（選択したすべてを含む）") {
-                    ForEach(store.tags) { tag in
-                        Toggle(tag.name, isOn: Binding(get: { draft.tagIDs.contains(tag.id) }, set: { selected in
-                            if selected { draft.tagIDs.append(tag.id) }
-                            else { draft.tagIDs.removeAll { $0 == tag.id } }
-                        })).accessibilityIdentifier("studyTag-\(tag.name)")
-                    }
-                }
-                Button("リセット") { draft = LearningScope() }.accessibilityIdentifier("resetStudyFilter")
+                ContextualTagFilterSections(store: store, scope: $draft)
             }
             .navigationTitle("学習対象")
             .toolbar {
@@ -510,6 +503,121 @@ struct LearningScopeSheet: View {
                     Button("適用") { if store.applyScope(draft) { dismiss() } }.accessibilityIdentifier("applyStudyFilter")
                 }
             }
+        }
+    }
+}
+
+struct ContextualTagScopeSheet: View {
+    @Bindable var store: StudyStore
+    @Binding var scope: LearningScope
+    @State private var draft: LearningScope
+    @Environment(\.dismiss) private var dismiss
+    init(store: StudyStore, scope: Binding<LearningScope>) {
+        self.store = store; _scope = scope; _draft = State(initialValue: scope.wrappedValue)
+    }
+    var body: some View {
+        Form { ContextualTagFilterSections(store: store, scope: $draft) }
+            .navigationTitle("タグで絞り込む")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("適用") { scope = draft; dismiss() } }
+            }
+    }
+}
+
+struct ContextualTagFilterSections: View {
+    @Bindable var store: StudyStore
+    @Binding var scope: LearningScope
+    @State private var index: TagFilterIndex?
+    @State private var summary = TagFilterSummary()
+    @State private var search = ""
+    @State private var expandedGroups: Set<String> = []
+    @State private var failure: String?
+    private struct Request: Equatable {
+        let revision: Int
+        let repository: ObjectIdentifier
+    }
+    private var groups: [TagFilterGroup] {
+        guard !search.isEmpty else { return summary.groups }
+        return summary.groups.compactMap { group in
+            let tags = group.tags.filter { $0.name.localizedCaseInsensitiveContains(search) }
+            return tags.isEmpty ? nil : TagFilterGroup(id: group.id, title: group.title, tags: tags)
+        }
+    }
+    var body: some View {
+        Section("タグで絞り込む") {
+            TextField("タグを検索", text: $search).accessibilityIdentifier("tagFilterSearch")
+            Text("選択したすべてのタグを持つカードに絞り込みます。タグ未選択なら制限しません。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+        if !scope.tagIDs.isEmpty {
+            Section("選択中") {
+                ScrollView(.horizontal) {
+                    HStack {
+                        ForEach(scope.tagIDs, id: \.self) { id in
+                            let name = store.tags.first { $0.id == id }?.name ?? "削除済みタグ"
+                            Button { scope.tagIDs.removeAll { $0 == id } } label: { Label(name, systemImage: "xmark.circle") }
+                                .buttonStyle(.bordered).accessibilityLabel("\(name)を解除")
+                        }
+                    }
+                }
+                Button("タグをすべて解除") { scope.tagIDs = [] }.accessibilityIdentifier("clearStudyTags")
+                if !summary.unavailable.isEmpty {
+                    Label("このデッキでは使われていない選択中タグがあります。選択は保持されています。", systemImage: "exclamationmark.triangle")
+                        .font(.footnote).accessibilityIdentifier("unavailableStudyTags")
+                }
+            }
+        }
+        ForEach(groups) { group in
+            Section(group.title) {
+                if summary.groups.count > 4 && search.isEmpty {
+                    DisclosureGroup(isExpanded: Binding(get: { expandedGroups.contains(group.id) }, set: { open in
+                        if open { expandedGroups.insert(group.id) } else { expandedGroups.remove(group.id) }
+                    })) {
+                        tagRows(group)
+                    } label: { Text("\(group.tags.count)タグ") }
+                } else { tagRows(group) }
+            }
+        }
+        Section("条件に一致する登録カード") {
+            if let failure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+            } else if index == nil { ProgressView("タグの使用状況を読み込み中") }
+            else {
+                Text("\(summary.cards)枚").accessibilityIdentifier("tagFilterCardCount")
+                Text("停止中のカードも含む登録枚数です。今日出題できる枚数とは異なります。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                if groups.isEmpty { Text(search.isEmpty ? "このデッキに使用中のタグはありません。" : "一致するタグ名がありません。") }
+                if summary.cards == 0 {
+                    Text(scope.tagIDs.isEmpty ? "このデッキに登録カードがありません。" : "選択したすべてのタグを持つカードがありません。")
+                    if !scope.tagIDs.isEmpty { Button("タグ条件を解除") { scope.tagIDs = [] } }
+                    if scope.deckID != nil { Button("すべてのデッキに戻す") { scope.deckID = nil } }
+                }
+            }
+        }
+        .task(id: Request(revision: store.dataRevision, repository: ObjectIdentifier(store.repository))) {
+            do {
+                let loaded = try await TagFilterReader(container: store.repository.context.container).load()
+                try Task.checkCancellation()
+                index = loaded; summary = loaded.summary(scope: scope); failure = nil
+            } catch is CancellationError { }
+            catch { failure = error.localizedDescription }
+        }
+        .onChange(of: scope) { _, scope in if let index { summary = index.summary(scope: scope) } }
+    }
+    private func tagRows(_ group: TagFilterGroup) -> some View {
+        ForEach(group.tags) { tag in
+            Toggle(isOn: Binding(get: { scope.tagIDs.contains(tag.id) }, set: { selected in
+                if selected { if !scope.tagIDs.contains(tag.id) { scope.tagIDs.append(tag.id) } }
+                else { scope.tagIDs.removeAll { $0 == tag.id } }
+            })) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack { Text(tag.name); Spacer(); Text("\(tag.cards)枚").foregroundStyle(.secondary) }
+                    if !search.isEmpty || group.id == "shared" {
+                        Text(tag.paths.joined(separator: "、")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
+            }.accessibilityIdentifier("studyTag-\(tag.name)")
         }
     }
 }

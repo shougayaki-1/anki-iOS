@@ -102,6 +102,12 @@ enum UITestFixtures {
         try repository.createNote(NoteInput(deckID: child, question: "Only A", answer: "A", tagNames: ["A"]), now: now)
         try repository.createNote(NoteInput(deckID: other, question: "Other card", answer: "A", tagNames: ["A", "B"]), now: now)
     }
+    @MainActor static func populateTagFilters(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        try populateHomeFilters(repository, now: now)
+        guard let other = try repository.decks().first(where: { $0.name == "Other" }) else { throw StudyError.missingRecord }
+        try repository.createNote(NoteInput(deckID: other.id, question: "Outside tag", answer: "Answer", tagNames: ["他分野"]), now: now)
+    }
     @MainActor static func populateMask(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let format = UIGraphicsImageRendererFormat(); format.scale = 1

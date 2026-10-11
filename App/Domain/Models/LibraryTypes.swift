@@ -54,6 +54,111 @@ struct TagItem: Identifiable {
     let name: String
 }
 
+struct TagFilterNote {
+    let deckID: UUID
+    let tagIDs: Set<UUID>
+    let cards: Int
+}
+struct TagFilterCandidate: Identifiable {
+    let id: UUID
+    let name: String
+    let cards: Int
+    let paths: [String]
+}
+struct TagFilterGroup: Identifiable {
+    let id: String
+    let title: String
+    let tags: [TagFilterCandidate]
+}
+struct TagFilterSummary {
+    var groups: [TagFilterGroup] = []
+    var cards = 0
+    var unavailable: Set<UUID> = []
+}
+struct TagFilterIndex {
+    let decks: [DeckItem]
+    let tags: [TagItem]
+    let notes: [TagFilterNote]
+
+    func summary(scope: LearningScope) -> TagFilterSummary {
+        let deckMap = Dictionary(uniqueKeysWithValues: decks.map { ($0.id, $0) })
+        var children: [UUID: [UUID]] = [:]
+        for deck in decks {
+            if let parent = deck.parentID, deckMap[parent] != nil { children[parent, default: []].append(deck.id) }
+        }
+        var allowed: Set<UUID>?
+        if let selected = scope.deckID {
+            var ids: Set<UUID> = [selected], pending = [selected]
+            while let next = pending.popLast() {
+                for child in children[next] ?? [] where ids.insert(child).inserted { pending.append(child) }
+            }
+            allowed = ids
+        }
+        let included = notes.filter { $0.cards > 0 && (allowed?.contains($0.deckID) ?? true) }
+        let usedDecks = Set(included.map(\.deckID))
+        // Group by the actual root. If a single common container owns the data,
+        // skip its single-child chain and use the first branching level as context.
+        func chain(_ id: UUID) -> [UUID] {
+            var result: [UUID] = [], seen: Set<UUID> = [], current: UUID? = id
+            while let value = current, seen.insert(value).inserted, let deck = deckMap[value] {
+                result.append(value); current = deck.parentID
+            }
+            return result.reversed()
+        }
+        let chains = Dictionary(uniqueKeysWithValues: usedDecks.map { ($0, chain($0)) })
+        let rootIDs = Set(chains.values.compactMap(\.first))
+        var activeBranches: [UUID: Set<UUID>] = [:]
+        for path in chains.values where path.count > 1 {
+            for position in 0..<(path.count - 1) { activeBranches[path[position], default: []].insert(path[position + 1]) }
+        }
+        var groupDeck: [UUID: UUID] = [:]
+        for (deck, path) in chains {
+            var position = 0
+            if rootIDs.count == 1 {
+                while position + 1 < path.count {
+                    let ancestor = path[position]
+                    let activeChildren = activeBranches[ancestor] ?? []
+                    position += 1
+                    if activeChildren.count > 1 { break }
+                }
+            }
+            groupDeck[deck] = path.isEmpty ? deck : path[position]
+        }
+        var counts: [UUID: Int] = [:], usage: [UUID: Set<UUID>] = [:]
+        let selected = Set(scope.tagIDs)
+        var result = TagFilterSummary()
+        for note in included {
+            if selected.isSubset(of: note.tagIDs) { result.cards += note.cards }
+            for tag in note.tagIDs {
+                counts[tag, default: 0] += note.cards
+                usage[tag, default: []].insert(note.deckID)
+            }
+        }
+        result.unavailable = selected.subtracting(Set(counts.keys))
+        var groups: [String: [TagFilterCandidate]] = [:], titles: [String: String] = [:]
+        for tag in tags {
+            guard let count = counts[tag.id], let used = usage[tag.id] else { continue }
+            let key: String, title: String
+            if used.count > 1 { key = "shared"; title = "複数デッキで使用" }
+            else {
+                let id = used.first.flatMap { groupDeck[$0] } ?? used.first!
+                key = id.uuidString; title = deckMap[id]?.name ?? "デッキ"
+            }
+            titles[key] = title
+            groups[key, default: []].append(TagFilterCandidate(id: tag.id, name: tag.name, cards: count,
+                paths: used.compactMap { deckMap[$0]?.name }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }))
+        }
+        result.groups = groups.map { key, tags in
+            TagFilterGroup(id: key, title: titles[key]!, tags: tags.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })
+        }.sorted {
+            if $0.id == "shared" { return false }
+            if $1.id == "shared" { return true }
+            return $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+        return result
+    }
+}
+
 extension NoteInput {
     // Tags are handled separately from content to preserve stable card variants.
 }

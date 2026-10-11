@@ -1,6 +1,32 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testContextualTagsSearchCountsAndKeepSelectionOutsideDeck() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-tag-filters"]
+        app.launch()
+        XCTAssertTrue(app.buttons["openStudyFilter"].waitForExistence(timeout: 15))
+        app.buttons["openStudyFilter"].tap()
+        let outside = app.switches["studyTag-他分野"]
+        XCTAssertTrue(outside.waitForExistence(timeout: 10))
+        outside.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        app.buttons["studyDeckPicker"].tap(); app.buttons["マイデッキ"].tap()
+        XCTAssertTrue(app.staticTexts["unavailableStudyTags"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["他分野を解除"].exists)
+        XCTAssertFalse(outside.exists)
+        let count = app.staticTexts["tagFilterCardCount"]
+        app.swipeUp()
+        XCTAssertTrue(count.waitForExistence(timeout: 5)); XCTAssertEqual(count.label, "0枚")
+        app.swipeDown()
+        app.buttons["clearStudyTags"].tap()
+        let search = app.textFields["tagFilterSearch"]
+        search.tap(); search.typeText("B\n")
+        XCTAssertTrue(app.switches["studyTag-B"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.switches["studyTag-A"].exists)
+        app.buttons["cancelStudyFilter"].tap()
+        XCTAssertTrue(app.buttons["openStudyFilter"].label.contains("全デッキ"))
+    }
+
     func testDeckSelectionSearchExpansionCancellationAndApply() {
         deckSelectionScenario(accessibility: false)
     }

@@ -391,12 +391,9 @@ private struct WeakCardListView: View {
                 Picker("履歴の期間", selection: $days) {
                     ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
                 }
-                ForEach(store.tags) { tag in
-                    Toggle(tag.name, isOn: Binding(get: { scope.tagIDs.contains(tag.id) }, set: { value in
-                        if value { scope.tagIDs.append(tag.id) } else { scope.tagIDs.removeAll { $0 == tag.id } }
-                    }))
-                }
+
             }
+            ContextualTagFilterSections(store: store, scope: $scope)
             Section {
                 Text("直近Again、Again2回以上、3回答以上でAgain割合30%以上・難易度8以上・推定想起確率75%未満を基準に抽出します。停止中・未学習は除外します。タグはすべて含む条件です。")
                     .font(.footnote).foregroundStyle(.secondary)
