@@ -8,7 +8,7 @@ struct FSRSOptimizationView: View {
     @State private var worker: Task<OptimizationReport, Error>?
     @State private var failure: String?
     @State private var operationWarning: String?
-    @State private var awaitingStateRecheck = false
+    @State private var lastOperation: FSRSOptimizationOperation?
     @State private var unmetRequirements: [String] = []
     @State private var confirmingApply = false
     @State private var confirmingReset = false
@@ -85,7 +85,7 @@ struct FSRSOptimizationView: View {
                     }
                 }
             }
-            if let operationWarning {
+            if let operationWarning = lastOperation?.warning ?? operationWarning {
                 Section("設定の変更結果") {
                     Label(operationWarning, systemImage: "exclamationmark.circle")
                         .foregroundStyle(.orange)
@@ -108,7 +108,7 @@ struct FSRSOptimizationView: View {
             // A success notice is only shown during its originating screen visit.
             presentation.successNotice = nil
             operationWarning = nil
-            awaitingStateRecheck = false
+            lastOperation = nil
             _ = reload()
         }
         .onDisappear {
@@ -127,23 +127,27 @@ struct FSRSOptimizationView: View {
     private func reload() -> Bool {
         do {
             presentation.didRead(try store.repository.optimizationState())
-            if awaitingStateRecheck {
-                // The last warning was only about unknown state, now resolved by this read.
-                operationWarning = nil
-                awaitingStateRecheck = false
-            }
+            refreshOperationRead()
             return true
         } catch {
             presentation.readFailed("設定状態を確認できません。再確認してください。（\(error.localizedDescription)）")
+            refreshOperationRead()
             return false
         }
+    }
+
+    private func refreshOperationRead() {
+        guard var operation = lastOperation else { return }
+        // Settings read only changes the read status; it never retries a write or home refresh.
+        operation.recheck(presentation.state)
+        lastOperation = operation
     }
 
     private func clearFeedback() {
         failure = nil
         presentation.successNotice = nil
         operationWarning = nil
-        awaitingStateRecheck = false
+        lastOperation = nil
         unmetRequirements = []
     }
 
@@ -157,22 +161,24 @@ struct FSRSOptimizationView: View {
     }
 
     private func describeChange(
-        _ outcome: FSRSOptimizationPersistenceOutcome,
-        action: String,
-        successMessage: String
+        kind: FSRSOptimizationOperation.Kind,
+        expected: FSRSOptimizationOperation.Target,
+        repositorySucceeded: Bool,
+        homeReloadSucceeded: Bool
     ) {
-        switch outcome {
-        case .completed:
-            showSuccess(successMessage)
-        case .savedHomeReloadFailed:
-            operationWarning = "\(action)は保存されましたが、ホーム画面の更新に失敗しました。設定は次回の回答から反映されます。\(store.failure ?? "ホーム画面を再表示して確認してください。")"
-        case .saveFailed:
-            operationWarning = "\(action)を保存できませんでした。現在の設定を確認してください。\(store.failure ?? "もう一度お試しください。")"
-        case .unverified:
-            awaitingStateRecheck = true
-            operationWarning = "\(action)の処理後、設定状態を確認できません。\(store.failure ?? "設定状態を再確認してください。")"
-        case .mismatch:
-            operationWarning = "\(action)後の設定が予想と異なります。表示された現在の設定を確認し、必要なら再計算してください。"
+        // perform=false may mean that only the home reload failed.
+        let errorDetail = homeReloadSucceeded ? nil : store.failure
+        _ = reload()
+        let outcome = FSRSOptimizationPersistenceOutcome.classify(
+            repositorySucceeded: repositorySucceeded,
+            homeReloadSucceeded: homeReloadSucceeded,
+            confirmedMatch: expected.matches(presentation.state)
+        )
+        lastOperation = FSRSOptimizationOperation(
+            kind: kind, target: expected, outcome: outcome, errorDetail: errorDetail
+        )
+        if outcome.isComplete, let success = kind.successMessage {
+            showSuccess(success)
         }
     }
 
@@ -188,14 +194,9 @@ struct FSRSOptimizationView: View {
             try store.repository.applyOptimization(now: store.clock())
             repositorySucceeded = true
         }
-        // perform=false may mean the write committed and only the home reload failed.
-        _ = reload()
-        let outcome = FSRSOptimizationPersistenceOutcome.classify(
-            repositorySucceeded: repositorySucceeded,
-            homeReloadSucceeded: homeReloadSucceeded,
-            confirmedMatch: presentation.matchesActiveParameters(report.parameters)
-        )
-        describeChange(outcome, action: "個人最適化", successMessage: "個人最適化を適用しました。次回の回答から有効です")
+        describeChange(kind: .apply, expected: .parameters(report.parameters),
+                       repositorySucceeded: repositorySucceeded,
+                       homeReloadSucceeded: homeReloadSucceeded)
     }
 
     private func resetParameters() {
@@ -209,13 +210,9 @@ struct FSRSOptimizationView: View {
             try store.repository.resetOptimization(now: store.clock())
             repositorySucceeded = true
         }
-        _ = reload()
-        let outcome = FSRSOptimizationPersistenceOutcome.classify(
-            repositorySucceeded: repositorySucceeded,
-            homeReloadSucceeded: homeReloadSucceeded,
-            confirmedMatch: presentation.matchesActiveParameters(nil)
-        )
-        describeChange(outcome, action: "標準設定への復帰", successMessage: "標準パラメータに戻しました。次回の回答から有効です")
+        describeChange(kind: .reset, expected: .parameters(nil),
+                       repositorySucceeded: repositorySucceeded,
+                       homeReloadSucceeded: homeReloadSucceeded)
     }
 
     private func cancelCalculation() {
@@ -264,25 +261,9 @@ struct FSRSOptimizationView: View {
                         try store.repository.saveOptimizationReport(report)
                         repositorySucceeded = true
                     }
-                    _ = reload()
-                    let outcome = FSRSOptimizationPersistenceOutcome.classify(
-                        repositorySucceeded: repositorySucceeded,
-                        homeReloadSucceeded: homeReloadSucceeded,
-                        confirmedMatch: presentation.matchesReport(report)
-                    )
-                    switch outcome {
-                    case .completed:
-                        break // Verified report is shown in the form; no success haptic.
-                    case .savedHomeReloadFailed:
-                        operationWarning = "計算結果は保存されましたが、ホーム画面の更新に失敗しました。\(store.failure ?? "ホーム画面を再表示して確認してください。")"
-                    case .saveFailed:
-                        operationWarning = "計算結果を保存できませんでした。\(store.failure ?? "再計算してください。")"
-                    case .unverified:
-                        awaitingStateRecheck = true
-                        operationWarning = "計算結果の保存後、設定状態を確認できません。\(store.failure ?? "設定状態を再確認してください。")"
-                    case .mismatch:
-                        operationWarning = "計算結果を再取得しましたが、保存内容が一致しません。必要なら再計算してください。"
-                    }
+                    describeChange(kind: .report, expected: .report(report),
+                                   repositorySucceeded: repositorySucceeded,
+                                   homeReloadSucceeded: homeReloadSucceeded)
                 } catch is CancellationError {
                     if failure == nil {
                         failure = "計算を中止しました。パラメータは変更していません。"
@@ -339,14 +320,98 @@ struct FSRSOptimizationPresentation {
     }
 }
 
-enum FSRSOptimizationPersistenceOutcome: Equatable {
-    case completed, savedHomeReloadFailed, saveFailed, unverified, mismatch
+struct FSRSOptimizationPersistenceOutcome: Equatable {
+    enum Save: Equatable { case succeeded, failed }
+    enum Home: Equatable { case succeeded, failed, notAttempted }
+    enum Read: Equatable { case matched, mismatched, unavailable }
+
+    let save: Save
+    let home: Home
+    var read: Read
+
+    var isComplete: Bool { save == .succeeded && home == .succeeded && read == .matched }
 
     static func classify(repositorySucceeded: Bool, homeReloadSucceeded: Bool, confirmedMatch: Bool?) -> Self {
-        guard let confirmedMatch else { return .unverified }
-        guard repositorySucceeded else { return .saveFailed }
-        guard confirmedMatch else { return .mismatch }
-        return homeReloadSucceeded ? .completed : .savedHomeReloadFailed
+        Self(save: repositorySucceeded ? .succeeded : .failed,
+             home: !repositorySucceeded ? .notAttempted : (homeReloadSucceeded ? .succeeded : .failed),
+             read: readResult(confirmedMatch))
+    }
+
+    static func readResult(_ match: Bool?) -> Read {
+        switch match {
+        case .some(true): return .matched
+        case .some(false): return .mismatched
+        case .none: return .unavailable
+        }
+    }
+}
+
+// Only the latest operation on this screen visit is retained.
+// A settings retry updates read, never the known save or home refresh outcome.
+struct FSRSOptimizationOperation {
+    enum Kind: CaseIterable {
+        case apply, reset, report
+
+        var title: String {
+            switch self {
+            case .apply: return "個人最適化"
+            case .reset: return "標準設定への復帰"
+            case .report: return "計算結果"
+            }
+        }
+
+        var successMessage: String? {
+            switch self {
+            case .apply: return "個人最適化を適用しました。次回の回答から有効です"
+            case .reset: return "標準パラメータに戻しました。次回の回答から有効です"
+            case .report: return nil
+            }
+        }
+    }
+
+    enum Target {
+        case parameters([Double]?)
+        case report(OptimizationReport)
+
+        func matches(_ state: FSRSOptimizationState?) -> Bool? {
+            guard let state else { return nil }
+            switch self {
+            case .parameters(let expected): return state.activeParameters == expected
+            case .report(let expected): return state.report == expected
+            }
+        }
+    }
+
+    let kind: Kind
+    let target: Target
+    var outcome: FSRSOptimizationPersistenceOutcome
+    let errorDetail: String?
+
+    mutating func recheck(_ state: FSRSOptimizationState?) {
+        outcome.read = FSRSOptimizationPersistenceOutcome.readResult(target.matches(state))
+    }
+
+    var warning: String? {
+        if outcome.isComplete { return nil }
+        var messages: [String] = []
+        switch outcome.save {
+        case .failed:
+            messages.append("\(kind.title)を保存できませんでした。")
+        case .succeeded:
+            if outcome.home == .failed {
+                messages.append("\(kind.title)は保存されましたが、ホーム画面の更新に失敗しました。")
+            } else if outcome.read == .unavailable {
+                messages.append("\(kind.title)の保存処理は完了しましたが、設定状態を確認できません。")
+            }
+        }
+        if outcome.read == .mismatched && outcome.save == .succeeded {
+            messages.append("再取得した内容が予想と異なります。必要なら再計算してください。")
+        }
+        // The separate read failure remains retryable; a retry cannot clear save/home errors.
+        if let errorDetail, outcome.save == .failed || outcome.home == .failed {
+            messages.append(errorDetail)
+        }
+        return messages.isEmpty ? nil : messages.joined(separator: " ")
     }
 }
 

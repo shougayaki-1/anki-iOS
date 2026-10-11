@@ -236,21 +236,130 @@ final class FSRSOptimizationTests: XCTestCase {
 
     func testPersistenceOutcomeCoversApplyResetAndReportPaths() {
         typealias Outcome = FSRSOptimizationPersistenceOutcome
-        // 1 & 5: Saved, target verified, home updated.
-        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: true,
-                                        confirmedMatch: true), .completed)
-        // 2 & 6 & 10: Saved and verified, home update failed.
-        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
-                                        confirmedMatch: true), .savedHomeReloadFailed)
-        // 3: Saved but optimization readback failed.
-        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
-                                        confirmedMatch: nil), .unverified)
-        // 4: Write itself failed, state could be read.
-        XCTAssertEqual(Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
-                                        confirmedMatch: false), .saveFailed)
-        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: true,
-                                        confirmedMatch: false), .mismatch)
-        XCTAssertEqual(Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
-                                        confirmedMatch: nil), .unverified)
+        // The six independent combinations required by the follow-up review.
+        let complete = Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: true,
+                                        confirmedMatch: true)
+        XCTAssertEqual(complete.save, .succeeded)
+        XCTAssertEqual(complete.home, .succeeded)
+        XCTAssertEqual(complete.read, .matched)
+        XCTAssertTrue(complete.isComplete)
+
+        let homeFailed = Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
+                                          confirmedMatch: true)
+        XCTAssertEqual(homeFailed.home, .failed)
+        XCTAssertEqual(homeFailed.read, .matched)
+        XCTAssertFalse(homeFailed.isComplete)
+
+        let homeAndReadFailed = Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
+                                                 confirmedMatch: nil)
+        XCTAssertEqual(homeAndReadFailed.save, .succeeded)
+        XCTAssertEqual(homeAndReadFailed.home, .failed)
+        XCTAssertEqual(homeAndReadFailed.read, .unavailable)
+        XCTAssertFalse(homeAndReadFailed.isComplete)
+
+        let writeFailed = Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
+                                           confirmedMatch: true)
+        XCTAssertEqual(writeFailed.save, .failed)
+        XCTAssertEqual(writeFailed.home, .notAttempted)
+        XCTAssertEqual(writeFailed.read, .matched)
+
+        let writeAndReadFailed = Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
+                                                  confirmedMatch: nil)
+        XCTAssertEqual(writeAndReadFailed.save, .failed)
+        XCTAssertEqual(writeAndReadFailed.home, .notAttempted)
+        XCTAssertEqual(writeAndReadFailed.read, .unavailable)
+        XCTAssertFalse(writeAndReadFailed.isComplete)
+
+        let mismatch = Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: true,
+                                        confirmedMatch: false)
+        XCTAssertEqual(mismatch.save, .succeeded)
+        XCTAssertEqual(mismatch.home, .succeeded)
+        XCTAssertEqual(mismatch.read, .mismatched)
+        XCTAssertFalse(mismatch.isComplete)
+    }
+
+    func testCompoundFailureWarningsSurviveReadRetryForAllThreeOperations() {
+        typealias Outcome = FSRSOptimizationPersistenceOutcome
+        let report = OptimizationReport(
+            generatedAt: base, digest: String(repeating: "a", count: 64),
+            reviews: 400, days: 30, splitDate: base, parameters: FSRSOptimization.defaults,
+            previousParameters: nil,
+            standard: OptimizationMetrics(count: 80, logLoss: 1, rmse: 0.8),
+            candidate: OptimizationMetrics(count: 80, logLoss: 0.9, rmse: 0.7),
+            previous: nil, duration: 1
+        )
+        for kind in FSRSOptimizationOperation.Kind.allCases {
+            var verified = FSRSOptimizationState()
+            let target: FSRSOptimizationOperation.Target
+            switch kind {
+            case .apply:
+                verified.activeParameters = report.parameters
+                target = .parameters(report.parameters)
+            case .reset:
+                target = .parameters(nil)
+            case .report:
+                verified.report = report
+                target = .report(report)
+            }
+            // A: The write failed and settings were temporarily unreadable.
+            var writeFailed = FSRSOptimizationOperation(
+                kind: kind, target: target,
+                outcome: Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
+                                          confirmedMatch: nil), errorDetail: "WRITE_FAILED"
+            )
+            XCTAssertTrue(writeFailed.warning?.contains("保存できませんでした") == true)
+            XCTAssertFalse(writeFailed.warning?.contains("保存後") == true)
+            XCTAssertEqual(writeFailed.outcome.home, .notAttempted)
+            writeFailed.recheck(verified)
+            XCTAssertEqual(writeFailed.outcome.read, .matched)
+            XCTAssertEqual(writeFailed.outcome.save, .failed)
+            XCTAssertTrue(writeFailed.warning?.contains("WRITE_FAILED") == true)
+            XCTAssertFalse(writeFailed.outcome.isComplete)
+
+            // B: Write completed but home refresh failed; retry only repairs the read.
+            var homeFailed = FSRSOptimizationOperation(
+                kind: kind, target: target,
+                outcome: Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
+                                          confirmedMatch: nil), errorDetail: "HOME_FAILED"
+            )
+            XCTAssertTrue(homeFailed.warning?.contains("ホーム画面の更新に失敗") == true)
+            homeFailed.recheck(verified)
+            XCTAssertEqual(homeFailed.outcome.read, .matched)
+            XCTAssertEqual(homeFailed.outcome.home, .failed)
+            XCTAssertTrue(homeFailed.warning?.contains("HOME_FAILED") == true)
+            XCTAssertFalse(homeFailed.outcome.isComplete)
+            XCTAssertFalse(homeFailed.warning?.contains("設定状態を確認できません") == true)
+        }
+    }
+
+    func testFailedReportSaveCannotMasqueradeAsPreviouslyStoredReport() {
+        typealias Outcome = FSRSOptimizationPersistenceOutcome
+        let report = OptimizationReport(
+            generatedAt: base, digest: String(repeating: "a", count: 64),
+            reviews: 400, days: 30, splitDate: base, parameters: FSRSOptimization.defaults,
+            previousParameters: nil,
+            standard: OptimizationMetrics(count: 80, logLoss: 1, rmse: 0.8),
+            candidate: OptimizationMetrics(count: 80, logLoss: 0.9, rmse: 0.7),
+            previous: nil, duration: 1
+        )
+        var verified = FSRSOptimizationState()
+        verified.report = report
+        var presentation = FSRSOptimizationPresentation()
+        presentation.didRead(verified)
+        presentation.readFailed("READ_FAILED")
+        XCTAssertNil(presentation.state?.report)
+        var operation = FSRSOptimizationOperation(
+            kind: .report, target: .report(report),
+            outcome: Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
+                                      confirmedMatch: nil), errorDetail: "WRITE_FAILED"
+        )
+        XCTAssertTrue(operation.warning?.contains("計算結果を保存できませんでした") == true)
+        XCTAssertFalse(operation.warning?.contains("保存後") == true)
+        presentation.didRead(verified)
+        operation.recheck(presentation.state)
+        XCTAssertEqual(operation.outcome.save, .failed)
+        XCTAssertFalse(operation.outcome.isComplete)
+        XCTAssertTrue(operation.warning?.contains("保存できませんでした") == true)
+        XCTAssertNil(operation.kind.successMessage)
     }
 }
