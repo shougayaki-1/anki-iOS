@@ -17,6 +17,7 @@ struct StudyOptions: Codable, Equatable {
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil
+    var fsrsOptimization: FSRSOptimizationState? = nil
     var deckLearning: [DeckLearningOverride]? = nil
     var deckNewUsage: [DeckNewUsage]? = nil
     var sessionResponseMode: SessionResponseMode? = nil

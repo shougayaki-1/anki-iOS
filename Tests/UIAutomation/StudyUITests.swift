@@ -614,6 +614,22 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
     }
 
+    func testOptimizationInsufficientHistoryDoesNotChangeSettings() {
+        let app = app()
+        app.tabBars.buttons["設定"].tap()
+        let open = app.buttons["openFSRSOptimization"]
+        scrollTo(open, app: app); open.tap()
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
+        app.buttons["computeFSRSParameters"].tap()
+        XCTAssertTrue(app.staticTexts["optimizationFailure"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["optimizationFailure"].label.contains("400件"))
+        XCTAssertFalse(app.buttons["resetFSRSParameters"].isEnabled)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["設定"].tap(); scrollTo(open, app: app); open.tap()
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
+    }
+
     func testLibrarySelectionExitSearchAndCancelKeepTargets() {
         let app = app()
         create(app, question: "Selection one", answer: "One")

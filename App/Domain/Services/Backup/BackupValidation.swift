@@ -129,6 +129,11 @@ struct BackupValidation {
                       usage.allSatisfy({ item in logs[item.sequence].map { $0.cardID == item.cardID && $0.wasNew } ?? false })
                 else { throw BackupError.invalidData }
             }
+            if let optimization = options.fsrsOptimization {
+                guard optimization.valid else { throw BackupError.invalidData }
+                if let report = optimization.report { try dates(report.generatedAt, report.splitDate) }
+                for change in optimization.changes { try dates(change.date) }
+            }
             if let limit = options.sessionAnswerLimit, !(0...500).contains(limit) {
                 throw BackupError.invalidData
             }

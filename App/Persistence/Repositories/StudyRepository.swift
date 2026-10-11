@@ -399,7 +399,7 @@ final class StudyRepository {
             }
             let progressBefore = try sessionProgress()
             guard let note = try notes().first(where: { $0.id == card.noteID }) else { throw StudyError.missingRecord }
-            let scheduler = try ReviewScheduler(desiredRetention: deckRetention(note.deckID))
+            let scheduler = try ReviewScheduler(desiredRetention: deckRetention(note.deckID), parameters: optimizationState().activeParameters)
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
             if summary.state == "new" {
