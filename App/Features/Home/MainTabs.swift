@@ -205,7 +205,7 @@ struct HomeView: View {
                         HStack {
                             Text("学習設定")
                             Spacer()
-                            Text("\(store.sessionResponseMode.title)・" + (store.sessionAnswerLimit == 0 ? "すべて" : "\(store.sessionAnswerLimit)問"))
+                            Text("\(store.sessionResponseMode.title)・" + (store.sessionAnswerLimit == 0 ? "上限なし" : "\(store.sessionAnswerLimit)問"))
                                 .foregroundStyle(Color("SecondaryText"))
                             Image(systemName: "chevron.down").font(.caption)
                         }
@@ -377,11 +377,12 @@ struct ReviewHeroSection: View {
                     Text("今回の出題は完了しました").font(.headline)
                     Text("確定済みの学習履歴と次回の予定を保存して、今回の学習を完了します。")
                 case let .start(mode, count):
-                    Text(mode == .review ? "いま復習できるカード" : "いま新しく覚えられるカード").font(.headline)
+                    Text(mode == .review ? "復習できるカード" : "新しく学べるカード").font(.headline)
                     Text("\(count)枚").font(.largeTitle.bold())
                         .accessibilityIdentifier(mode == .review ? "dueCount" : "primaryNewCount")
-                        .accessibilityLabel("\(mode.title)、絞り込み後、\(String(count))枚")
-                    Text(mode.explanation).font(.footnote).foregroundStyle(Color("SecondaryText"))
+                        .accessibilityLabel(HomeStudyPresentation.cardPool(mode: mode, count: count))
+                    Text(HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
+                        .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 case .addCards:
                     Text("最初のカードを登録しましょう。").font(.headline)
                 case .unavailable:
@@ -394,11 +395,12 @@ struct ReviewHeroSection: View {
                 }
                 if executable {
                     Button(action: execute) {
-                        Text(action.title).font(.headline)
+                        Text(action.buttonTitle(answerLimit: store.sessionAnswerLimit)).font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, minHeight: 56)
                     }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
                         .accessibilityIdentifier(action.identifier)
+                        .accessibilityLabel(action.accessibilityLabel(answerLimit: store.sessionAnswerLimit))
                 }
             }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 4)
         }
@@ -417,20 +419,19 @@ struct OtherStudyModesSection: View {
                 Button { start(mode) } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Text(store.review == nil ? mode.title : "新しい学習：\(mode.title)").font(.headline)
+                            Text((store.review == nil ? "" : "新しい学習：") + HomeStudyPresentation.startTitle(mode: mode, answerLimit: store.sessionAnswerLimit)).font(.headline)
                                 .foregroundStyle(Color.primary).fixedSize(horizontal: false, vertical: true)
                             Spacer()
-                            if mode == .new {
-                                Text("\(store.counts.newRemaining)枚").foregroundStyle(Color.primary)
-                                    .accessibilityIdentifier("newCount")
-                            }
                             Image(systemName: "chevron.right").font(.caption)
                         }
-                        Text(mode == .new ? mode.explanation : store.mixedAvailabilityMessage)
+                        Text(HomeStudyPresentation.cardPool(mode: mode, count: store.homeCardCount(mode)))
+                            .font(.subheadline).foregroundStyle(Color("SecondaryText"))
+                        Text(HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
                             .font(.footnote).foregroundStyle(Color("SecondaryText"))
                     }.padding(.vertical, 6)
                 }.accessibilityIdentifier("start-\(mode.rawValue)").disabled(!store.canStart(mode))
-                    .accessibilityHint(mode == .new ? store.newAvailabilityMessage : store.mixedAvailabilityMessage)
+                    .accessibilityLabel((store.review == nil ? "" : "新しい学習：") + HomeStudyPresentation.startTitle(mode: mode, answerLimit: store.sessionAnswerLimit) + "。" + HomeStudyPresentation.cardPool(mode: mode, count: store.homeCardCount(mode)))
+                    .accessibilityHint((mode == .new ? store.newAvailabilityMessage : store.mixedAvailabilityMessage) + HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
                 if mode == .new {
                     Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(Color("SecondaryText"))
                         .accessibilityIdentifier("newAvailabilityMessage")
@@ -443,9 +444,7 @@ struct OtherStudyModesSection: View {
                     }
                 }
             }
-            if case .start(.new, _) = store.homePrimaryAction {
-                Text("今日学べる新規カード: \(store.counts.newRemaining)枚").accessibilityIdentifier("newCount")
-            }
+            Text("今日学べる新規カード: \(store.counts.newRemaining)枚").accessibilityIdentifier("newCount")
         } header: { Text(store.review == nil ? "ほかの学習" : "別の学習を開始").foregroundStyle(Color("SecondaryText")) }
     }
 }

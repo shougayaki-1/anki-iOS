@@ -201,6 +201,13 @@ final class StudyStore {
         case .mixed: return counts.due > 0 || counts.newRemaining > 0
         }
     }
+    func homeCardCount(_ mode: StudyMode) -> Int {
+        switch mode {
+        case .review: return counts.due
+        case .new: return counts.newRemaining
+        case .mixed: return counts.due + counts.newRemaining
+        }
+    }
     func changeSessionResponseMode(_ mode: SessionResponseMode) {
         perform {
             var saved = try repository.options()

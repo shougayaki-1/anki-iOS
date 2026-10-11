@@ -220,10 +220,18 @@ enum HomePrimaryAction: Equatable {
         case .resume: return "続きから再開"
         case .waiting: return "短期復習の待機中"
         case .complete: return "今回の学習を完了"
-        case let .start(mode, count): return "\(mode.title)（\(count)枚）"
+        case let .start(mode, _): return mode.title
         case .addCards: return "カードを追加する"
         case .unavailable: return "今は学習できるカードがありません"
         }
+    }
+    func buttonTitle(answerLimit: Int) -> String {
+        guard case let .start(mode, _) = self else { return title }
+        return HomeStudyPresentation.startTitle(mode: mode, answerLimit: answerLimit)
+    }
+    func accessibilityLabel(answerLimit: Int) -> String {
+        guard case let .start(mode, count) = self else { return title }
+        return buttonTitle(answerLimit: answerLimit) + "。" + HomeStudyPresentation.cardPool(mode: mode, count: count)
     }
     var identifier: String {
         switch self {
@@ -234,6 +242,28 @@ enum HomePrimaryAction: Equatable {
         case .addCards: return "addFirstHomeNote"
         case .unavailable: return "unavailableStudy"
         }
+    }
+}
+
+enum HomeStudyPresentation {
+    static func startTitle(mode: StudyMode, answerLimit: Int) -> String {
+        let limit = answerLimit == 0 ? "上限なし" : "最大\(answerLimit)問"
+        return "\(mode.title)・\(limit)"
+    }
+
+    static func cardPool(mode: StudyMode, count: Int) -> String {
+        let title: String
+        switch mode {
+        case .review: title = "復習できるカード"
+        case .new: title = "新しく学べるカード"
+        case .mixed: title = "復習＋新規で学べるカード"
+        }
+        return "\(title)：\(count)枚"
+    }
+
+    static func explanation(answerLimit: Int) -> String {
+        let limit = answerLimit == 0 ? "回答数の上限はありません。" : "1回の学習は最大\(answerLimit)回の回答で終了します。"
+        return limit + "同じカードへの再回答も数えます。出題できるカードがなくなると、上限より前に終了することがあります。"
     }
 }
 

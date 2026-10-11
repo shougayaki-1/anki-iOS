@@ -614,7 +614,7 @@ private struct ReviewEmptyStateView: View {
             }
             if canFinish, state?.reason == .complete {
                 let limit = store.review?.sessionProgress?.limit ?? 0
-                Button(limit > 0 ? "同じ設定でもう\(limit)問学習する" : "同じ設定で学習を続ける",
+                Button(limit > 0 ? "同じ設定でもう最大\(limit)問学習する" : "同じ設定で上限なしの学習を始める",
                        action: store.startAnotherSession)
                     .accessibilityIdentifier("startAnotherSession")
                 Text("出題候補がない場合は、このセッションと最後のUndoを保持します。")
