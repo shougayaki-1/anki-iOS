@@ -137,4 +137,34 @@ final class FSRSOptimizationTests: XCTestCase {
         do { _ = try await task.value; XCTFail("Expected cancellation") }
         catch is CancellationError {} catch { XCTFail("Unexpected \(error)") }
     }
+
+    func testGuidanceShowsActualHistoryShortages() {
+        let empty = FSRSOptimizationGuidance.unmetRequirements(for: [])
+        XCTAssertTrue(empty.contains { $0.contains("0件") && $0.contains("400件") })
+        XCTAssertTrue(empty.contains { $0.contains("0日") && $0.contains("30日") })
+
+        let cards = (0..<10).map { _ in UUID() }
+        let shortHistory = (0..<10).flatMap { day in
+            cards.enumerated().map { index, card in
+                OptimizationReview(id: UUID(), cardID: card,
+                                   date: base.addingTimeInterval(Double(day) * 86400),
+                                   grade: 3, sequence: day * 10 + index, startsNew: day == 0)
+            }
+        }
+        let messages = FSRSOptimizationGuidance.unmetRequirements(for: shortHistory)
+        XCTAssertTrue(messages.contains { $0.contains("90件") && $0.contains("400件") })
+        XCTAssertTrue(messages.contains { $0.contains("10日") && $0.contains("30日") })
+        XCTAssertTrue(messages.contains { $0.contains("10枚") && $0.contains("20枚") })
+    }
+
+    func testGuidanceDistinguishesGradeImbalanceFromCountShortage() {
+        let alwaysRecalled = reviews().map {
+            OptimizationReview(id: $0.id, cardID: $0.cardID, date: $0.date,
+                               grade: 3, sequence: $0.sequence, startsNew: $0.startsNew)
+        }
+        let messages = FSRSOptimizationGuidance.unmetRequirements(for: alwaysRecalled)
+        XCTAssertTrue(messages.contains { $0.contains("学習用") && $0.contains("Again 0件") })
+        XCTAssertTrue(messages.contains { $0.contains("検証用") && $0.contains("Again 0件") })
+        XCTAssertFalse(messages.contains { $0.contains("必要400件") })
+    }
 }
