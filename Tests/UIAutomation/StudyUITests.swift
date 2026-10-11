@@ -577,6 +577,28 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
     }
 
+    func testLibrarySelectionExitSearchAndCancelKeepTargets() {
+        let app = app()
+        create(app, question: "Selection one", answer: "One")
+        create(app, question: "Selection two", answer: "Two")
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.buttons["finishLibrarySelection"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        app.staticTexts["Selection one"].tap()
+        app.buttons["openBulkManagement"].tap()
+        app.buttons["closeBulkManagement"].tap()
+        XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains("1枚"))
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("two")
+        // iOS 26 hides navigation items while searching; the selection-only action remains visible.
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.staticTexts["Selection two"].tap()
+        XCTAssertTrue(app.buttons["openBulkManagement"].isEnabled)
+    }
+
     func testBulkSelectionTagsMoveSuspendResumeAndConfirmedDeleteKeepHistory() {
         let app = app()
         create(app, question: "Bulk one", answer: "Answer one")
@@ -589,8 +611,9 @@ final class StudyUITests: XCTestCase {
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["ライブラリ"].tap()
         func open(all: Bool = true) {
+            app.buttons["libraryActions"].tap()
             app.buttons["selectLibraryCards"].tap()
-            if all { app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
+            if all { app.buttons["選択"].tap(); app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
             XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains(all ? "2枚" : "1枚"))
             app.buttons["openBulkManagement"].tap()
         }
