@@ -496,3 +496,32 @@ extension BackupRepositoryTests {
         XCTAssertEqual(preview.deck.package.notes.first?.content.answer, "Deflated answer")
     }
 }
+
+
+extension BackupRepositoryTests {
+    func testRestoreOutcomeCountsCommittedStoreAndPreservesIDsAndHistory() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now },
+            mediaStore: MediaStore(root: root.appendingPathComponent("destination/Media")), storageLocation: location)
+        try store.repository.createNote(NoteInput(deckID: store.repository.decks()[0].id, question: "Before", answer: "Old"), now: now)
+        let result = try store.restoreBackup(backup)
+        XCTAssertNil(result.warning); XCTAssertNil(store.failure)
+        let summary = try XCTUnwrap(result.summary)
+        XCTAssertEqual(summary.decks, try store.repository.decks().count)
+        XCTAssertEqual(summary.notes, try store.repository.notes().count)
+        XCTAssertEqual(summary.cards, try store.repository.cards().count)
+        XCTAssertEqual(summary.logs, try store.repository.logs().count)
+        XCTAssertEqual(summary.media, try store.repository.assets().count)
+        XCTAssertEqual(Set(try store.repository.cards().map(\.id)), Set(backup.data.cards.map(\.id)))
+        XCTAssertEqual(try BackupData.capture(store.repository).canonical().cards, backup.data.canonical().cards)
+        XCTAssertEqual(try BackupData.capture(store.repository).canonical().logs, backup.data.canonical().logs)
+        store.selectedTab = 3
+        store.selectedTab = 0
+        store.refreshHome()
+        XCTAssertTrue(store.hasCards)
+    }
+}

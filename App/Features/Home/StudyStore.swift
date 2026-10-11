@@ -7,6 +7,26 @@ struct NoteSaveNotice: Identifiable {
     let message: String
 }
 
+struct BackupRestoreSummary: Equatable {
+    let decks: Int
+    let notes: Int
+    let cards: Int
+    let logs: Int
+    let media: Int
+    @MainActor init(context: ModelContext) throws {
+        decks = try context.fetchCount(FetchDescriptor<Deck>())
+        notes = try context.fetchCount(FetchDescriptor<Note>())
+        cards = try context.fetchCount(FetchDescriptor<StudyCard>())
+        logs = try context.fetchCount(FetchDescriptor<StudyReviewLog>())
+        media = try context.fetchCount(FetchDescriptor<MediaAsset>())
+    }
+    var description: String { "\(decks)デッキ・\(notes)ノート・\(cards)カード・回答履歴\(logs)件・メディア\(media)件" }
+}
+struct BackupRestoreOutcome: Equatable {
+    let summary: BackupRestoreSummary?
+    let warning: String?
+}
+
 @MainActor @Observable
 final class StudyStore {
     var repository: StudyRepository
@@ -359,7 +379,8 @@ final class StudyStore {
     func pause() {
         if perform({ try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
     }
-    func restoreBackup(_ backup: ValidatedBackup) throws {
+    @discardableResult
+    func restoreBackup(_ backup: ValidatedBackup) throws -> BackupRestoreOutcome {
         notificationJob?.cancel()
         do {
             let container = try BackupService.restore(backup, location: storageLocation, mediaStore: repository.mediaStore, now: clock())
@@ -373,8 +394,17 @@ final class StudyStore {
             libraryReader = LibraryReader(container: container)
             repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
             showingReview = false
+            failure = nil
+            var warning: String?
             do { scope = try repository.homeScope(); try reload() }
-            catch { failure = "復元は保存済みですが、画面の更新に失敗しました: " + error.localizedDescription }
+            catch { warning = "復元は保存済みですが、画面を更新できませんでした。ホームで再表示してください。\n" + error.localizedDescription }
+            let summary: BackupRestoreSummary?
+            do { summary = try BackupRestoreSummary(context: repository.context) }
+            catch {
+                summary = nil
+                warning = (warning.map { $0 + "\n" } ?? "") + "復元は保存済みですが、件数を確認できませんでした。復元を繰り返す必要はありません。"
+            }
+            return BackupRestoreOutcome(summary: summary, warning: warning)
         } catch { scheduleNotifications(); throw error }
     }
     func setNotificationEnabled(_ enabled: Bool) async {
