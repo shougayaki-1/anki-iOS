@@ -114,10 +114,20 @@ enum UITestFixtures {
                               masks: [ImageMask(rect: MaskRect(x: 0.25, y: 0.25, width: 0.5, height: 0.25))])
         try repository.createNote(input, now: now)
     }
+    static func silentAudio() -> Data {
+        var bytes = Data()
+        func text(_ s: String) { bytes.append(contentsOf: s.utf8) }
+        func number<T: FixedWidthInteger>(_ n: T) { var little = n.littleEndian; withUnsafeBytes(of: &little) { bytes.append(contentsOf: $0) } }
+        text("RIFF"); number(UInt32(160036)); text("WAVEfmt "); number(UInt32(16))
+        number(UInt16(1)); number(UInt16(1)); number(UInt32(8000)); number(UInt32(16000))
+        number(UInt16(2)); number(UInt16(16)); text("data"); number(UInt32(160000))
+        bytes.append(Data(count: 160000)); return bytes
+    }
     static func prepare(name: String) throws {
         guard UUID(uuidString: name) != nil else { throw StudyError.invalidContent }
         let documents = URL.documentsDirectory
         try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        try silentAudio().write(to: documents.appendingPathComponent("Audio-\(name).wav"), options: .atomic)
         try Data("question,answer\nCSV file question,CSV file answer\n".utf8)
             .write(to: documents.appendingPathComponent("UITest-\(name).csv"), options: .atomic)
         let format = UIGraphicsImageRendererFormat(); format.scale = 1

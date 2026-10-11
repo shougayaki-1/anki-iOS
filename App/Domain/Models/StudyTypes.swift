@@ -58,6 +58,8 @@ struct TextContent: Codable, Equatable {
     var speechOverrides: [String: SpeechAutoplay]? = nil
     var speechQuestion: String? = nil
     var speechAnswer: String? = nil
+    var questionAudioID: UUID? = nil
+    var answerAudioID: UUID? = nil
     var questionLayout: TextLayout? = nil
     var answerLayout: TextLayout? = nil
 }
@@ -79,6 +81,8 @@ struct NoteInput: Codable, Equatable {
     var speechOverrides: [String: SpeechAutoplay]? = nil
     var speechQuestion: String? = nil
     var speechAnswer: String? = nil
+    var questionAudioID: UUID? = nil
+    var answerAudioID: UUID? = nil
     var questionLayout: TextLayout? = nil
     var answerLayout: TextLayout? = nil
 }

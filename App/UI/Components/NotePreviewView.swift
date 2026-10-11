@@ -12,7 +12,8 @@ struct NotePreviewView: View {
     private var content: TextContent {
         TextContent(question: input.question, answer: input.answer, explanation: input.explanation, hint: input.hint,
                     reverseEnabled: input.reverseEnabled, imageID: input.imageID,
-                    masks: input.masks, hideAllMasks: input.hideAllMasks, questionLayout: input.questionLayout, answerLayout: input.answerLayout)
+                    masks: input.masks, hideAllMasks: input.hideAllMasks,
+                    questionAudioID: input.questionAudioID, answerAudioID: input.answerAudioID, questionLayout: input.questionLayout, answerLayout: input.answerLayout)
     }
     var body: some View {
         NavigationStack {

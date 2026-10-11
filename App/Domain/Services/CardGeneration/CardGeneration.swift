@@ -47,6 +47,7 @@ struct CardGeneration {
         var displayed = content
         if variant == "basic:reverse" {
             displayed.question = content.answer; displayed.answer = content.question
+            displayed.questionAudioID = content.answerAudioID; displayed.answerAudioID = content.questionAudioID
             displayed.speechQuestion = content.speechAnswer; displayed.speechAnswer = content.speechQuestion
             displayed.hint = nil
             displayed.questionLayout = content.answerLayout; displayed.answerLayout = content.questionLayout

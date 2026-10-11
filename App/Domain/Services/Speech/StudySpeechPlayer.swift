@@ -94,11 +94,12 @@ private struct SpeechUtteranceIdentity: @unchecked Sendable {
 
 /// Owns the speech queue for a single visible study screen, not a global audio player.
 @MainActor
-final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     @Published private(set) var playing = false
     @Published private(set) var notice: String?
     private let synthesizer = AVSpeechSynthesizer()
     private var activeUtterance: AVSpeechUtterance?
+    private var attachedPlayer: AVAudioPlayer?
     private var audioObservers = Set<AnyCancellable>()
 
     override init() {
@@ -114,7 +115,7 @@ final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDe
             .receive(on: RunLoop.main)
             .sink { [weak self] notification in
                 if let reason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
-                   AVAudioSession.RouteChangeReason(rawValue: reason) == .oldDeviceUnavailable {
+                   [.oldDeviceUnavailable, .newDeviceAvailable, .override, .routeConfigurationChange].contains(AVAudioSession.RouteChangeReason(rawValue: reason)) {
                     self?.stop()
                 }
             }
@@ -147,10 +148,45 @@ final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDe
     }
 
     func stop() {
+        attachedPlayer?.stop(); attachedPlayer = nil
         activeUtterance = nil
         playing = false
         notice = nil
         synthesizer.stopSpeaking(at: .immediate)
+    }
+
+    func playAttached(url: URL) {
+        stop()
+        do {
+            guard url.isFileURL, FileManager.default.fileExists(atPath: url.path) else { throw AttachedAudioError.missing }
+            guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= AudioEncodingPolicy.maximumBytes else { throw AttachedAudioError.tooLarge }
+            try AVAudioSession.sharedInstance().setCategory(.ambient, mode: .default)
+            let player = try AVAudioPlayer(contentsOf: url)
+            guard player.duration.isFinite, player.duration > 0, player.duration <= AudioEncodingPolicy.maximumDuration,
+                  player.prepareToPlay() else { throw AttachedAudioError.invalid }
+            player.delegate = self
+            attachedPlayer = player
+            guard player.play() else { throw AttachedAudioError.invalid }
+            playing = true
+        } catch {
+            attachedPlayer = nil; playing = false
+            notice = error is AttachedAudioError ? error.localizedDescription : AttachedAudioError.invalid.localizedDescription
+        }
+    }
+    func missingAttachment() { stop(); notice = AttachedAudioError.missing.localizedDescription }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        finishAttachment(player, failed: !flag)
+    }
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        finishAttachment(player, failed: true)
+    }
+    nonisolated private func finishAttachment(_ player: AVAudioPlayer, failed: Bool) {
+        let identity = AttachedPlayerIdentity(player)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, identity.matches(self.attachedPlayer) else { return }
+            self.attachedPlayer = nil; self.playing = false
+            if failed { self.notice = AttachedAudioError.invalid.localizedDescription }
+        }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
@@ -169,4 +205,10 @@ final class StudySpeechPlayer: NSObject, ObservableObject, AVSpeechSynthesizerDe
             self.playing = false
         }
     }
+}
+
+private struct AttachedPlayerIdentity: @unchecked Sendable {
+    private let player: AVAudioPlayer
+    init(_ player: AVAudioPlayer) { self.player = player }
+    @MainActor func matches(_ current: AVAudioPlayer?) -> Bool { player === current }
 }
