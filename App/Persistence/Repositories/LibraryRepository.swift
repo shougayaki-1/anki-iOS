@@ -475,3 +475,64 @@ extension StudyRepository {
         else { context.insert(try ExtraPreferences(options: saved)) }
     }
 }
+
+extension StudyRepository {
+    func optimizationState() throws -> FSRSOptimizationState {
+        let state = try options().fsrsOptimization ?? FSRSOptimizationState()
+        guard state.valid else { throw OptimizationError.invalid }
+        return state
+    }
+    func optimizationReviews() throws -> [OptimizationReview] {
+        guard try context.fetchCount(FetchDescriptor<StudyReviewLog>()) <= 10000 else { throw OptimizationError.tooLarge }
+        let rows = try logs()
+        let scheduler = try ReviewScheduler()
+        return try rows.map { row in
+            let before = try JSONDecoder().decode(SchedulerSnapshot.self, from: row.fsrsBefore)
+            return OptimizationReview(id: row.id, cardID: row.cardID, date: row.reviewedAt, grade: row.grade,
+                                      sequence: row.sequence, startsNew: try scheduler.summary(before).state == "new")
+        }
+    }
+    func saveOptimizationReport(_ report: OptimizationReport) throws {
+        guard report.valid else { throw OptimizationError.invalid }
+        try transaction {
+            var options = try options(), state = try optimizationState()
+            let reviews = try optimizationReviews(), prepared = try FSRSOptimization.prepare(reviews)
+            guard try FSRSOptimization.digest(reviews) == report.digest,
+                  state.activeParameters == report.previousParameters,
+                  report.reviews == reviews.count, report.days == prepared.days, report.splitDate == prepared.split,
+                  report.standard.count == prepared.events.filter({ prepared.eligible.contains($0.id) && $0.date > prepared.split }).count
+            else { throw OptimizationError.stale }
+            state.report = report; options.fsrsOptimization = state
+            try persistOptimizationOptions(options)
+        }
+    }
+    func applyOptimization(now: Date) throws {
+        try transaction {
+            var options = try options(), state = try optimizationState()
+            guard let report = state.report, report.valid, report.accepted else { throw OptimizationError.invalid }
+            let reviews = try optimizationReviews(), prepared = try FSRSOptimization.prepare(reviews)
+            guard try FSRSOptimization.digest(reviews) == report.digest,
+                  state.activeParameters == report.previousParameters,
+                  report.reviews == reviews.count, report.days == prepared.days, report.splitDate == prepared.split,
+                  report.standard.count == prepared.events.filter({ prepared.eligible.contains($0.id) && $0.date > prepared.split }).count
+            else { throw OptimizationError.stale }
+            state.changes.append(FSRSParameterChange(date: now, method: report.method, before: state.activeParameters, after: report.parameters))
+            state.changes = Array(state.changes.suffix(20)); state.activeParameters = report.parameters
+            options.fsrsOptimization = state; try persistOptimizationOptions(options)
+        }
+    }
+    func resetOptimization(now: Date) throws {
+        try transaction {
+            var options = try options(), state = try optimizationState()
+            guard state.activeParameters != nil else { return }
+            state.changes.append(FSRSParameterChange(date: now, method: OptimizationReport.method, before: state.activeParameters, after: nil))
+            state.changes = Array(state.changes.suffix(20)); state.activeParameters = nil
+            options.fsrsOptimization = state; try persistOptimizationOptions(options)
+        }
+    }
+    private func persistOptimizationOptions(_ options: StudyOptions) throws {
+        if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+            row.payload = try JSONEncoder().encode(options)
+        } else { context.insert(try ExtraPreferences(options: options)) }
+    }
+}
