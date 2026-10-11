@@ -43,6 +43,67 @@ final class StudyUITests: XCTestCase {
         app.buttons["resumeStudy"].tap()
         XCTAssertTrue(app.descendants(matching: .any)["reviewQuestion"].waitForExistence(timeout: 10))
     }
+
+    func testWeakPracticeRevealFinishLeavesNormalSessionAvailable() {
+        let app = app()
+        create(app, question: "Weak practice question", answer: "Weak practice answer")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["start-new"].tap()
+        app.buttons["revealAnswer"].tap()
+        app.buttons["grade-1"].tap()
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["openWeakCards"].tap()
+        XCTAssertTrue(app.staticTexts["直近の評価がAgain"].waitForExistence(timeout: 5))
+        app.buttons["startWeakPractice"].tap()
+        XCTAssertTrue(app.staticTexts["weakPracticeQuestion"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["weakPracticeAnswer"].exists)
+        app.buttons["revealWeakPractice"].tap()
+        XCTAssertEqual(app.staticTexts["weakPracticeAnswer"].label, "Weak practice answer")
+        app.buttons["nextWeakPractice"].tap()
+        app.buttons["finishWeakPractice"].tap()
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.buttons["resumeStudy"].exists || app.staticTexts["nextShortReview"].exists)
+    }
+
+    func testDeckLearningOverrideSavesAndSurvivesRelaunch() {
+        let app = app()
+        create(app, question: "Deck settings", answer: "A")
+        app.buttons["デッキ管理"].tap()
+        app.buttons["マイデッキを編集"].tap()
+        let limit = app.switches["新規上限を指定"]
+        scrollTo(limit, app: app); limit.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(limit.value as? String, "1")
+        let retention = app.switches["目標保持率を指定"]
+        scrollTo(retention, app: app); retention.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(retention.value as? String, "1")
+        app.buttons["保存"].tap()
+        app.terminate(); app.launch()
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.buttons["デッキ管理"].tap()
+        app.buttons["マイデッキを編集"].tap()
+        XCTAssertEqual(app.switches["新規上限を指定"].value as? String, "1")
+        XCTAssertEqual(app.switches["目標保持率を指定"].value as? String, "1")
+        XCTAssertTrue(app.staticTexts["新規上限：20枚／日"].exists)
+    }
+
+    func testHomeResponseSettingPersistsAndStartsTyping() {
+        let app = app()
+        create(app, question: "Mode snapshot", answer: "Tokyo")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["openSessionAnswerLimit"].tap()
+        app.buttons["sessionResponseMode"].tap()
+        app.buttons["文字入力"].tap()
+        app.buttons["閉じる"].tap()
+        app.terminate(); app.launch()
+        app.buttons["openSessionAnswerLimit"].tap()
+        XCTAssertTrue(app.buttons["sessionResponseMode"].label.contains("文字入力"))
+        app.buttons["閉じる"].tap()
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.textFields["typedAnswer"].waitForExistence(timeout: 10)
+            || app.textViews["typedAnswer"].exists)
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]
@@ -604,6 +665,62 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
     }
 
+    func testOptimizationInsufficientHistoryDoesNotChangeSettings() {
+        let app = app()
+        app.tabBars.buttons["設定"].tap()
+        let open = app.buttons["openFSRSOptimization"]
+        scrollTo(open, app: app); open.tap()
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
+        app.buttons["computeFSRSParameters"].tap()
+        XCTAssertTrue(app.staticTexts["optimizationFailure"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["optimizationFailure"].label.contains("400件"))
+        XCTAssertFalse(app.buttons["resetFSRSParameters"].isEnabled)
+        app.terminate(); app.launch()
+        app.tabBars.buttons["設定"].tap(); scrollTo(open, app: app); open.tap()
+        XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
+    }
+
+    func testForecastPeriodDeckAndAccessibleCountsLeaveLearningUnchanged() {
+        let app = app()
+        create(app, question: "Forecast new", answer: "A")
+        app.tabBars.buttons["記録"].tap()
+        app.buttons["openReviewForecast"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScheduled"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["forecastAnswers"].exists)
+        app.segmentedControls["forecastPeriod"].buttons["30日"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScheduled"].waitForExistence(timeout: 15))
+        app.buttons["forecastDeck"].tap(); app.buttons["マイデッキ"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastAnswers"].waitForExistence(timeout: 15))
+        attach(app, "forecast-normal-30-days")
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+    }
+
+    func testLibrarySelectionExitSearchAndCancelKeepTargets() {
+        let app = app()
+        create(app, question: "Selection one", answer: "One")
+        create(app, question: "Selection two", answer: "Two")
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.buttons["finishLibrarySelection"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        app.staticTexts["Selection one"].tap()
+        app.buttons["openBulkManagement"].tap()
+        app.buttons["closeBulkManagement"].tap()
+        XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains("1枚"))
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("two")
+        // iOS 26 hides navigation items while searching; the selection-only action remains visible.
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.staticTexts["Selection two"].tap()
+        XCTAssertTrue(app.buttons["openBulkManagement"].isEnabled)
+    }
+
     func testBulkSelectionTagsMoveSuspendResumeAndConfirmedDeleteKeepHistory() {
         let app = app()
         create(app, question: "Bulk one", answer: "Answer one")
@@ -616,8 +733,9 @@ final class StudyUITests: XCTestCase {
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["ライブラリ"].tap()
         func open(all: Bool = true) {
+            app.buttons["libraryActions"].tap()
             app.buttons["selectLibraryCards"].tap()
-            if all { app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
+            if all { app.buttons["選択"].tap(); app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
             XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains(all ? "2枚" : "1枚"))
             app.buttons["openBulkManagement"].tap()
         }

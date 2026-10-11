@@ -17,6 +17,10 @@ struct StudyOptions: Codable, Equatable {
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil
+    var fsrsOptimization: FSRSOptimizationState? = nil
+    var deckLearning: [DeckLearningOverride]? = nil
+    var deckNewUsage: [DeckNewUsage]? = nil
+    var sessionResponseMode: SessionResponseMode? = nil
     var activeSessionProgress: StudySessionProgressSnapshot? = nil
 }
 
@@ -25,6 +29,23 @@ struct StudyOptions: Codable, Equatable {
 struct StudySessionProgressSnapshot: Codable, Equatable {
     var startSequence: Int
     var answerLimit: Int
+    var responseMode: SessionResponseMode? = nil
+}
+
+enum SessionResponseMode: String, Codable, CaseIterable {
+    case cardDefault, mental, typing, ordering
+    var title: String {
+        switch self {
+        case .cardDefault: return "カードに合わせる"
+        case .mental: return "頭の中"
+        case .typing: return "文字入力"
+        case .ordering: return "並び替え"
+        }
+    }
+    var override: ResponseMode? { ResponseMode(rawValue: rawValue) }
+    init(from decoder: Decoder) throws {
+        self = Self(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .cardDefault
+    }
 }
 
 struct TagItem: Identifiable {
@@ -245,4 +266,19 @@ struct DeckContentsPreview {
     var changedNoteCount: Int { bulk?.changedNotes.count ?? 0 }
     var changedCardCount: Int { bulk?.changedCards.count ?? 0 }
     var canCommit: Bool { changedNoteCount > 0 }
+}
+
+struct DeckLearningOverride: Codable, Equatable {
+    var deckID: UUID
+    var newLimit: Int?
+    var retention: Double?
+    var isValid: Bool {
+        (newLimit.map { (0...500).contains($0) } ?? true) &&
+        (retention.map { $0.isFinite && (0.8...0.97).contains($0) } ?? true)
+    }
+}
+struct DeckNewUsage: Codable, Equatable {
+    var sequence: Int
+    var cardID: UUID
+    var quotaDeckIDs: [UUID]
 }
