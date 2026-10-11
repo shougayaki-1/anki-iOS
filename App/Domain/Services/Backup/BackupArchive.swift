@@ -17,7 +17,7 @@ struct ValidatedBackup: Sendable {
 struct BackupArchive {
     static func hash(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
     static func mediaPath(_ id: UUID, mediaType: String = "image/jpeg") -> String {
-        "media/\(id.uuidString).\(mediaType == "image/png" ? "png" : "jpg")"
+        "media/\(id.uuidString).\(AudioEncodingPolicy.extensions[mediaType] ?? (mediaType == "image/png" ? "png" : "jpg"))"
     }
 
     static func create(data: BackupData, media: [UUID: Data], now: Date, appVersion: String) throws -> Data {
@@ -28,7 +28,7 @@ struct BackupArchive {
             guard let bytes = media[asset.id] else { throw BackupError.invalidData }
             files[mediaPath(asset.id, mediaType: asset.mediaType)] = bytes
         }
-        let manifest = BackupManifest(createdAt: now, appVersion: appVersion, files: files.mapValues(hash))
+        let manifest = BackupManifest(schemaVersion: data.media.contains(where: { AudioEncodingPolicy.extensions[$0.mediaType] != nil }) ? 2 : 1, createdAt: now, appVersion: appVersion, files: files.mapValues(hash))
         files["manifest.json"] = try encoder.encode(manifest)
         return try StoredZIP.write(files)
     }
@@ -41,7 +41,8 @@ struct BackupArchive {
             manifest = try JSONDecoder().decode(BackupManifest.self, from: manifestData)
             snapshot = try JSONDecoder().decode(BackupData.self, from: data)
         } catch { throw BackupError.invalidData }
-        guard manifest.schemaVersion == 1, snapshot.schemaVersion == 1 else { throw BackupError.unsupportedVersion }
+        guard (1...2).contains(manifest.schemaVersion), snapshot.schemaVersion == 1 else { throw BackupError.unsupportedVersion }
+        guard manifest.schemaVersion == 2 || !snapshot.media.contains(where: { AudioEncodingPolicy.extensions[$0.mediaType] != nil }) else { throw BackupError.unsupportedVersion }
         try BackupValidation.dates(manifest.createdAt)
         guard !manifest.appVersion.isEmpty, manifest.appVersion.count <= 128,
               Set(manifest.files.keys) == Set(files.keys).subtracting(["manifest.json"]) else { throw BackupError.invalidArchive }

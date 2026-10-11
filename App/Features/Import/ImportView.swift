@@ -11,6 +11,7 @@ struct ImportView: View {
     @State private var dropTarget = false
     @State private var pendingFile: (url: URL, text: String)?
     @State private var replaceInput = false
+    @State private var imagePackage: ImageImportPackage?
     @State private var source = "貼り付け"
     @State private var format = "Q/A"
     @State private var hasHeader = true
@@ -43,14 +44,16 @@ struct ImportView: View {
             Form {
                 if let result {
                     Section("取り込み結果") {
-                        Text("成功 \(result.imported)件 / スキップ \(result.skipped)件 / エラー \(result.errors.count)件")
+                        Text(result.summary)
                             .accessibilityIdentifier("importResult")
+                        Text("ノートは問題と解答のまとまり、カードは出題単位です。同じノートを複数行で更新した場合、処理行数とノート数は異なります。")
+                            .font(.footnote).foregroundStyle(.secondary)
                         ForEach(result.errors, id: \.self) { Text($0).foregroundStyle(.red) }
                         Button("新しい取り込み") { self.result = nil; rows = []; text = "" }
                     }
                 } else {
                     Section {
-                        Button("CSV / TSV / TXTファイルを選択") { filePicker = true }.accessibilityIdentifier("selectImportFile")
+                        Button("CSV / TSV / TXT / 画像ZIPを選択") { filePicker = true }.accessibilityIdentifier("selectImportFile")
                         #if targetEnvironment(macCatalyst)
                         Text("FinderからCSV / TSV / TXTをこの画面へドロップできます。保存前にプレビューと確定が必要です。")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -175,10 +178,14 @@ struct ImportView: View {
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeImport") }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focused = false } }
             }
-            .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText]) { result in
+            .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText, .zip]) { result in
                 do {
                     let url = try result.get()
+                    if url.pathExtension.lowercased() == "zip" {
+                        imagePackage = try ImageImportPackage.read(LocalFileInput.read(url, extensions: ["zip"], maximumBytes: 200_000_000))
+                    } else {
                     acceptFile(url, data: try LocalFileInput.read(url, extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000))
+                    }
                 } catch { failure = error.localizedDescription }
             }
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTarget) { providers in
@@ -199,6 +206,7 @@ struct ImportView: View {
                 Button("ファイルの内容に置き換える") { applyPendingFile() }
                 Button("キャンセル", role: .cancel) { pendingFile = nil }
             } message: { Text("現在の入力とプレビューを置き換えます。登録済みカードは変更しません。") }
+            .sheet(item: $imagePackage) { package in ImageZIPImportView(store: store, package: package, deckID: deckID) }
             .confirmationDialog("\(rows.filter(\.included).count)件の取り込みを確定しますか？", isPresented: $confirming, titleVisibility: .visible) {
                 Button("確定して保存") { commit() }.accessibilityIdentifier("commitImport")
             } message: { Text("重複は「\(action.title)」。\(resetHistory && action == .update ? "更新対象の復習予定を初期化します。" : "既存の学習履歴を保持します。")") }
@@ -265,4 +273,95 @@ struct ImportView: View {
             try store.reload()
         } catch { failure = error.localizedDescription }
     }
+}
+
+
+struct ImageZIPImportView: View {
+    @Bindable var store: StudyStore
+    @State var package: ImageImportPackage
+    @State var deckID: UUID
+    @Environment(\.dismiss) private var dismiss
+    @State private var page = 0
+    @State private var duplicates = Set<UUID>()
+    @State private var action = DuplicateAction.skip
+    @State private var confirming = false
+    @State private var failure: String?
+    @State private var result: ImportResult?
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let result {
+                    Section("取り込み結果") {
+                        Text(result.summary).accessibilityIdentifier("imageImportResult")
+                        Text("ノートは問題と解答のまとまり、カードは出題単位です。同じノートを複数行で更新した場合、処理行数とノート数は異なります。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        ForEach(result.errors, id: \.self) { Text($0).foregroundStyle(.red) }
+                    }
+                } else {
+                    Section("画像ZIP") {
+                        Text("\(package.rows.count)行 / 重複 \(duplicates.count)行 / エラー \(package.rows.filter { $0.error != nil }.count)行。確定するまで保存されません。")
+                        Text("問題が空欄の行には「画像を見て答えてください」を補います。プレビューで変更できます。")
+                        Picker("デッキ指定がない行の登録先", selection: $deckID) {
+                            ForEach(store.decks) { Text($0.name).tag($0.id) }
+                        }
+                        Picker("同じデッキ・問題・解答・画像の重複", selection: $action) {
+                            ForEach(DuplicateAction.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        Text("更新は解説とタグを変更します。学習履歴・復習予定・カードIDは保持されます。デッキ列は / で階層を指定します。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    Section("プレビュー") {
+                        ForEach(page * 20..<min((page + 1) * 20, package.rows.count), id: \.self) { index in
+                            VStack(alignment: .leading) {
+                                Toggle("\(package.rows[index].line)行を取り込む", isOn: $package.rows[index].included)
+                                if let data = package.images[package.rows[index].imagePath], let image = UIImage(data: data) {
+                                    Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 140)
+                                }
+                                Text(package.rows[index].imagePath).font(.caption)
+                                if !package.rows[index].tags.isEmpty { Text("タグ: " + package.rows[index].tags.joined(separator: "、")).font(.caption) }
+                                TextField("問題", text: $package.rows[index].question, axis: .vertical)
+                                TextField("解答", text: $package.rows[index].answer, axis: .vertical)
+                                if !package.rows[index].deckPath.isEmpty { Text("デッキ: \(package.rows[index].deckPath)") }
+                                if duplicates.contains(package.rows[index].id) { Text("重複候補（選択した方針で処理）").foregroundStyle(.orange) }
+                                if let error = package.rows[index].error { Text(error).foregroundStyle(.red) }
+                            }
+                        }
+                        HStack {
+                            Button("前へ") { page -= 1 }.disabled(page == 0)
+                            Spacer(); Text("\(page + 1) / \(max(1, (package.rows.count + 19) / 20))"); Spacer()
+                            Button("次へ") { page += 1 }.disabled((page + 1) * 20 >= package.rows.count)
+                        }
+
+                    }
+                }
+            }
+            .safeAreaInset(edge: .bottom) {
+                if result == nil {
+                    Button("確認して取り込む") { confirming = true }
+                        .buttonStyle(.borderedProminent).frame(maxWidth: .infinity).padding()
+                        .background(.bar)
+                        .disabled(!package.rows.contains { $0.included && $0.error == nil })
+                        .accessibilityIdentifier("confirmImageImport")
+                }
+            }
+            .onAppear { refreshDuplicates() }
+            .onChange(of: deckID) { refreshDuplicates() }
+            .onChange(of: package.rows.map { $0.question + "\u{1f}" + $0.answer }) { refreshDuplicates() }
+            .navigationTitle("画像ZIPの取り込み")
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeImageImport") } }
+            .confirmationDialog("選択した行を保存しますか？", isPresented: $confirming, titleVisibility: .visible) {
+                Button("確定して保存") {
+                    do { result = try store.repository.importImagePackage(package, deckID: deckID, action: action, now: store.clock()); try store.reload() }
+                    catch { failure = error.localizedDescription }
+                }
+            }
+            .alert("取り込めませんでした", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+                Button("閉じる", role: .cancel) { failure = nil }
+            } message: { Text(failure ?? "") }
+        }
+    }
+    private func refreshDuplicates() {
+        duplicates = (try? store.repository.imageImportDuplicates(package, deckID: deckID)) ?? []
+    }
+
 }

@@ -20,26 +20,47 @@ struct StudyDay {
     }
 }
 
-struct QueueCard {
+struct QueueCard: Sendable {
     let id: UUID
     let state: String
     let due: Date
     let createdAt: Date
     let suspended: Bool
     var noteID: UUID? = nil
+    var deckLimits: [UUID: Int] = [:]
 }
 
-struct QueueLog {
+struct QueueLog: Sendable {
     let cardID: UUID
     let reviewedAt: Date
     let wasNew: Bool
     var noteID: UUID? = nil
+    var quotaDeckIDs: [UUID] = []
 }
 
 struct ReviewQueueBuilder {
     var calendar: Calendar = .current
     // Tie-breaking can be injected to keep tests deterministic.
     var shuffled: ([QueueCard]) -> [QueueCard] = { $0.shuffled() }
+
+    private func freshCards(_ cards: [QueueCard], today: [QueueLog]) -> [QueueCard] {
+        var selected: [QueueCard] = []
+        var consumed: [UUID: Int] = [:]
+        var used: [UUID: Set<UUID>] = [:]
+        for log in today where log.wasNew {
+            for key in log.quotaDeckIDs { used[key, default: []].insert(log.cardID) }
+        }
+        for card in cards.filter({ $0.state == "new" }).sorted(by: {
+            $0.createdAt == $1.createdAt ? $0.id.uuidString < $1.id.uuidString : $0.createdAt < $1.createdAt
+        }) {
+            guard card.deckLimits.allSatisfy({ key, limit in
+                return used[key, default: []].count + consumed[key, default: 0] < limit
+            }) else { continue }
+            selected.append(card)
+            for key in card.deckLimits.keys { consumed[key, default: 0] += 1 }
+        }
+        return selected
+    }
 
     func counts(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, now: Date) -> HomeCounts {
         let interval = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
@@ -51,11 +72,11 @@ struct ReviewQueueBuilder {
             guard let noteID = card.noteID else { return true }
             return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
         }
-        let fresh = available.filter { $0.state == "new" }.count
+        let fresh = freshCards(available, today: today).count
         return HomeCounts(
             due: available.filter { $0.state != "new" && $0.due <= now }.count,
             totalNew: cards.filter { !$0.suspended && $0.state == "new" }.count, newRemaining: min(fresh, max(0, settings.dailyNewLimit - used)),
-            learnedToday: Set(today.map(\.cardID)).count, answerCount: today.count, eligibleNew: fresh,
+            learnedToday: Set(today.map(\.cardID)).count, answerCount: today.count, eligibleNew: available.filter { $0.state == "new" }.count,
             suspendedNew: cards.filter { $0.suspended && $0.state == "new" }.count
         )
     }
@@ -79,10 +100,7 @@ struct ReviewQueueBuilder {
         let short = due.filter { $0.state == "learning" || $0.state == "relearning" }
         let reviews = due.filter { $0.state == "review" }
         let remaining = counts(cards: cards, logs: logs, settings: settings, now: now).newRemaining
-        let fresh = eligible.filter { $0.state == "new" }.sorted {
-            if $0.createdAt != $1.createdAt { return $0.createdAt < $1.createdAt }
-            return $0.id.uuidString < $1.id.uuidString
-        }.prefix(remaining)
+        let fresh = freshCards(eligible, today: today).prefix(remaining)
         switch mode {
         case .review: return (short + reviews).map(\.id)
         case .new: return (short.filter { touched.contains($0.id) } + fresh).map(\.id)

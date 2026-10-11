@@ -1,0 +1,82 @@
+import Foundation
+
+struct WidgetPoint: Codable, Equatable, Sendable {
+    let date: Date
+    let due: Int
+    let newAvailable: Int
+    let learnedToday: Int
+    let answersToday: Int
+}
+struct WidgetSnapshot: Codable, Equatable, Sendable {
+    static let group = "group.dev.shoug.AnkiIOS.widgets"
+    static let kind = "StudyProgressWidget"
+    var schemaVersion = 1
+    let generatedAt: Date
+    let expiresAt: Date
+    let timeZone: String
+    let dayStartHour: Int
+    let dailyGoal: Int?
+    let points: [WidgetPoint]
+
+    func valid() -> Bool {
+        guard schemaVersion == 1, generatedAt.timeIntervalSince1970.isFinite, expiresAt.timeIntervalSince1970.isFinite,
+              expiresAt > generatedAt, expiresAt.timeIntervalSince(generatedAt) <= 9 * 86400,
+              TimeZone(identifier: timeZone) != nil, (0...23).contains(dayStartHour),
+              dailyGoal == nil || (1...100_000).contains(dailyGoal!), !points.isEmpty, points.count <= 128,
+              points.first?.date == generatedAt else { return false }
+        var previous: Date?
+        for point in points {
+            guard point.date.timeIntervalSince1970.isFinite, point.date >= generatedAt, point.date < expiresAt,
+                  previous == nil || point.date > previous!, (0...300_000).contains(point.due),
+                  (0...300_000).contains(point.newAvailable), (0...300_000).contains(point.learnedToday),
+                  (0...1_000_000).contains(point.answersToday) else { return false }
+            previous = point.date
+        }
+        return true
+    }
+    func point(at now: Date, timeZone: TimeZone = .current) -> WidgetPoint? {
+        guard valid(), self.timeZone == timeZone.identifier, now >= generatedAt, now < expiresAt else { return nil }
+        return points.last { $0.date <= now }
+    }
+}
+
+// The extension only reads this file. It never links SwiftData, FSRS or repository code.
+struct WidgetSnapshotFile: Sendable {
+    static let maximumBytes = 64_000
+    let url: URL?
+    static func shared() -> Self {
+        Self(url: FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: WidgetSnapshot.group)?.appendingPathComponent("progress-v1.json"))
+    }
+    func read() -> WidgetSnapshot? {
+        guard let url, let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey, .isSymbolicLinkKey]),
+              values.isRegularFile == true, values.isSymbolicLink != true, (values.fileSize ?? Int.max) <= Self.maximumBytes,
+              let bytes = try? Data(contentsOf: url), let value = try? JSONDecoder().decode(WidgetSnapshot.self, from: bytes), value.valid() else { return nil }
+        return value
+    }
+    func write(_ value: WidgetSnapshot) throws {
+        guard let url, value.valid() else { throw WidgetSnapshotFailure.unavailable }
+        let bytes = try JSONEncoder().encode(value)
+        guard bytes.count <= Self.maximumBytes else { throw WidgetSnapshotFailure.unavailable }
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try bytes.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    }
+}
+enum WidgetSnapshotFailure: LocalizedError {
+    case unavailable
+    var errorDescription: String? { "ウィジェット用の情報を共有できませんでした。アプリ本体の学習は続けられます。" }
+}
+
+enum WidgetDestination: Equatable {
+    case home, review, progress
+    static func parse(_ url: URL) -> Self? {
+        guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              parts.scheme == "ankistudy", parts.host == "widget", parts.query == nil,
+              parts.fragment == nil, parts.user == nil, parts.password == nil, parts.port == nil else { return nil }
+        switch parts.path {
+        case "/home": return .home
+        case "/review": return .review
+        case "/progress": return .progress
+        default: return nil
+        }
+    }
+}
