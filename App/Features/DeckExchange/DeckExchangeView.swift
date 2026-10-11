@@ -38,10 +38,7 @@ struct DeckExchangeView: View {
     var body: some View {
         Form {
             Section("デッキを渡す") {
-                Picker("選択デッキ", selection: $rootID) {
-                    Text("選択してください").tag(UUID?.none)
-                    ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
-                }.disabled(working).accessibilityIdentifier("exchangeDeckPicker")
+                DeckSelectionField("選択デッキ", decks: store.decks, selection: $rootID, includesDescendants: true).disabled(working).accessibilityIdentifier("exchangeDeckPicker")
                 Button("共有内容を確認", action: prepareExport).disabled(rootID == nil || working)
                     .accessibilityIdentifier("previewDeckExport")
                 Text("選択デッキと子孫のノート・タグ・画像・音声を含みます。回答履歴、FSRS状態、個人設定、下書き、他のデッキは含みません。学習履歴の移行には完全バックアップを使用してください。")

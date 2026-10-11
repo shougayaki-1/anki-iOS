@@ -18,10 +18,7 @@ struct ReviewForecastView: View {
                 Picker("期間", selection: $days) {
                     Text("7日").tag(7); Text("30日").tag(30)
                 }.pickerStyle(.segmented).accessibilityIdentifier("forecastPeriod")
-                Picker("デッキ（子孫を含む）", selection: $deckID) {
-                    Text("すべてのデッキ").tag(UUID?.none)
-                    ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
-                }.accessibilityIdentifier("forecastDeck")
+                DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $deckID, nilTitle: "すべてのデッキ", includesDescendants: true).accessibilityIdentifier("forecastDeck")
                 Text("確定済み期日は現在の予定です。見込みは、全デッキで毎日学習日終了前に各カード1回・すべてGoodと仮定した回答数です。2つの数値は重複するため合計しません。")
                     .font(.footnote)
                 Text("新規は古い順、全体とデッキの上限・兄弟カード抑制を使用します。今日の使用枠を反映します。今日回答済みのカードと短期学習の同日再回答は含まず、実際の学習量は増減します。")

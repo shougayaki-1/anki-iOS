@@ -62,9 +62,7 @@ struct NoteEditorView: View {
         NavigationStack {
             Form {
                 Section {
-                    Picker("デッキ", selection: $input.deckID) {
-                        ForEach(store.decks) { Text($0.name).tag($0.id) }
-                    }.accessibilityIdentifier("noteDeckPicker")
+                    DeckSelectionField("デッキ", decks: store.decks, selection: $input.deckID).accessibilityIdentifier("noteDeckPicker")
                     Picker("形式", selection: $input.kind) {
                         ForEach(NoteKind.allCases, id: \.self) { Text($0.title).tag($0) }
                     }.accessibilityIdentifier("noteKindPicker")
