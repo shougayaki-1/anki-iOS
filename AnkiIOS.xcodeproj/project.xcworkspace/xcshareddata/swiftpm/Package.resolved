@@ -1,5 +1,5 @@
 {
-  "originHash" : "ad745a5c6fcb06d1824d5270c4871af4d66e1c06294b223ce2e46d3bb96e9858",
+  "originHash" : "dcf0e181450f1d539f02cf4795391389d94c6734a6a8a37c43f5e10310afd47d",
   "pins" : [
     {
       "identity" : "swift-fsrs",
@@ -7,6 +7,14 @@
       "location" : "https://github.com/open-spaced-repetition/swift-fsrs",
       "state" : {
         "revision" : "4fbaf20184d62f82a9f44f343337c61a2c5483e9"
+      }
+    },
+    {
+      "identity" : "zstd",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/facebook/zstd",
+      "state" : {
+        "revision" : "f8745da6ff1ad1e7bab384bd1f9d742439278e99"
       }
     }
   ],

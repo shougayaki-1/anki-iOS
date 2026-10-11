@@ -182,7 +182,7 @@ extension SpeechUITests {
         exchangeScroll(app.buttons["confirmDeckImport"], app: app); app.buttons["confirmDeckImport"].tap()
         app.buttons["commitDeckImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("3ノート"))
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("4ノート"))
         app.terminate(); app.launch()
         XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
