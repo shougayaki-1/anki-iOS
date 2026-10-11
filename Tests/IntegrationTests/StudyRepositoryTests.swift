@@ -58,6 +58,193 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(Set(try restored.cards().map(\.id)), Set(states.map { $0.0 }))
         XCTAssertEqual(try restored.logs().count, 1)
     }
+    func testWeakPracticeFiltersAndNeverChangesSchedulerHistoryOrDraft() throws {
+        let repo = try fixture()
+        let id = try create(repo)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .again, date: now)
+        let later = now.addingTimeInterval(60)
+        let before = try BackupData.capture(repo).canonical()
+        let rows = try repo.weakCards(scope: LearningScope(), days: 7, now: later)
+        XCTAssertEqual(rows.count, 1); XCTAssertEqual(rows.first?.card.noteID, id)
+        XCTAssertEqual(rows.first?.evidence.reasons, ["直近の評価がAgain"])
+        var practice = try repo.weakPractice(scope: LearningScope(), days: 7, now: later)
+        practice.next(); XCTAssertEqual(practice.index, 0)
+        practice.reveal(); practice.next(); XCTAssertNil(practice.current)
+        practice.previous(); XCTAssertEqual(practice.current?.noteID, id); XCTAssertFalse(practice.revealed)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let other = try repo.createDeck(name: "Other", now: now)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(deckID: other), days: nil, now: later).isEmpty)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(), days: 7, now: later.addingTimeInterval(10 * 86400)).isEmpty)
+        try repo.setSuspended(cardID: rows[0].id, value: true, now: later)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(), days: nil, now: later).isEmpty)
+        XCTAssertThrowsError(try repo.weakPractice(scope: LearningScope(), days: nil, now: later))
+    }
+
+    func testWeakPracticeKeepsSiblingSuppressionAndTagAndParentScopes() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        let note = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", tagNames: ["weak"], reverseEnabled: true), now: now)
+        let cards = try repo.cards().filter { $0.noteID == note }
+        // Build valid learned snapshots and histories for both siblings on a previous day.
+        let yesterday = now.addingTimeInterval(-86400)
+        let scheduler = try ReviewScheduler()
+        for card in cards {
+            let transition = try scheduler.review(repo.snapshot(card), grade: .again, now: yesterday)
+            let after = try JSONEncoder().encode(transition.after)
+            repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                mode: .mental, durationMs: 0, wasNew: true, sequence: card.id == cards[0].id ? 1 : 2))
+            card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+        }
+        try repo.context.save()
+        let tag = try repo.tags().first!.id
+        let scope = LearningScope(deckID: parent, tagIDs: [tag])
+        XCTAssertEqual(try repo.weakCards(scope: scope, days: 30, now: now).count, 2)
+        // Short learning siblings are the deliberate exception.
+        XCTAssertEqual(try repo.weakPractice(scope: scope, days: 30, now: now).cards.count, 2)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(tagIDs: [UUID()]), days: 30, now: now).count == 2) // normalized stale tag removed
+        var sequence = 2
+        for grade in [ReviewGrade.again, .easy] {
+            for card in cards {
+                sequence += 1
+                let time = yesterday.addingTimeInterval(Double(sequence) * 600)
+                let transition = try scheduler.review(repo.snapshot(card), grade: grade, now: time)
+                let after = try JSONEncoder().encode(transition.after)
+                repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                    mode: .mental, durationMs: 0, wasNew: false, sequence: sequence))
+                card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+            }
+        }
+        try repo.context.save()
+        XCTAssertTrue(try repo.noteItems().allSatisfy { $0.summary.state == "review" })
+        XCTAssertEqual(try repo.weakPractice(scope: scope, days: 30, now: now).cards.count, 1)
+        try repo.createNote(NoteInput(deckID: child, question: "Strong", answer: "A", tagNames: ["strong"]), now: now)
+        let strongTag = try repo.tags().first { $0.name == "strong" }!.id
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(deckID: parent, tagIDs: [strongTag]), days: 30, now: now).isEmpty)
+        var saved = try repo.options(); saved.siblingBuryEnabled = false
+        try repo.updateOptions(saved)
+        XCTAssertEqual(try repo.weakPractice(scope: scope, days: 30, now: now).cards.count, 2)
+    }
+
+    func testDeckLimitsInheritanceUndoMoveDeleteAndBackup() async throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        let other = try repo.createDeck(name: "Other", now: now)
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: parent, newLimit: 1, retention: 0.85))
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: child, newLimit: 2, retention: 0.95))
+        XCTAssertEqual(try repo.deckRetention(child), 0.95)
+        XCTAssertEqual(try repo.deckRetention(other), try repo.settings().desiredRetention)
+        for n in 0..<3 {
+            try repo.createNote(NoteInput(deckID: child, question: "Q\(n)", answer: "A"), now: now)
+        }
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .good, date: now)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 0)
+        XCTAssertTrue(try repo.presentation(now: now)?.emptyState?.message.contains("デッキまたは親デッキ") == true)
+        let bytes = try repo.cards().map(\.fsrsPayload)
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: child, newLimit: 2, retention: nil))
+        XCTAssertEqual(try repo.cards().map(\.fsrsPayload), bytes)
+        XCTAssertEqual(try repo.deckRetention(child), 0.85)
+        let archive = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        XCTAssertEqual(try JSONDecoder().decode(StudyOptions.self, from: archive.data.options[0].payload).deckNewUsage?.count, 1)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let restoredContainer = try BackupService.restore(archive,
+            location: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")), mediaStore: media, now: now)
+        let restored = StudyRepository(container: restoredContainer, mediaStore: media)
+        try restored.initialize(now: now)
+        XCTAssertEqual(try restored.deckRetention(child), 0.85)
+        XCTAssertEqual(try restored.homeSnapshot(now: now).counts.newRemaining, 0)
+        try restored.undo(now: now)
+        XCTAssertEqual(try restored.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.moveDeck(id: child, name: "Moved", parentID: other, now: now)
+        XCTAssertEqual(try repo.deckRetention(child), try repo.settings().desiredRetention)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.deleteDeck(id: child, moveNotesTo: other, now: now)
+        XCTAssertFalse(try repo.options().deckLearning!.contains { $0.deckID == child })
+        XCTAssertEqual(try repo.options().deckNewUsage?.count, 1)
+        _ = try await BackupService.export(repository: repo, now: now, appVersion: "after-delete")
+    }
+
+    func testDeckSettingsSaveFailureIsAtomicAndLimitsRejectInvalidValues() throws {
+        let repo = try fixture(), id = try repo.decks()[0].id
+        let before = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.moveDeck(id: id, name: "Changed", parentID: nil,
+            learning: DeckLearningOverride(deckID: id, newLimit: 0, retention: 0.97), now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        repo.save = { try $0.save() }
+        XCTAssertThrowsError(try repo.saveDeckLearning(DeckLearningOverride(deckID: id, newLimit: -1)))
+        XCTAssertThrowsError(try repo.saveDeckLearning(DeckLearningOverride(deckID: id, retention: 0.99)))
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: id, newLimit: 0))
+        try create(repo)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 0)
+        XCTAssertThrowsError(try repo.start(mode: .new, now: now))
+    }
+
+    func testSessionResponseSnapshotKeepsDraftUndoAndAnotherSet() throws {
+        let repo = try fixture()
+        try create(repo)
+        try create(repo)
+        var options = try repo.options()
+        options.sessionResponseMode = .typing
+        options.sessionAnswerLimit = 1
+        try repo.updateOptions(options)
+        try repo.start(mode: .new, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        try repo.updateDraft(text: "draft", now: now)
+        options = try repo.options(); options.sessionResponseMode = .mental
+        try repo.updateOptions(options)
+        try repo.setSessionActive(false, now: now)
+        try repo.resume(now: now)
+        XCTAssertEqual(try repo.session()?.typedDraft, "draft")
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.startAnotherSession(now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        XCTAssertTrue(try repo.notes().allSatisfy { $0.defaultResponseMode == "mental" })
+        let optionsData = try JSONEncoder().encode(repo.options())
+        let decoded = try JSONDecoder().decode(StudyOptions.self, from: optionsData)
+        XCTAssertEqual(decoded.activeSessionProgress?.responseMode, .typing)
+        let legacy = try JSONDecoder().decode(StudySessionProgressSnapshot.self,
+            from: Data(#"{"startSequence":0,"answerLimit":20}"#.utf8))
+        XCTAssertNil(legacy.responseMode)
+    }
+
+    func testOrderingOverrideFiltersCandidatesAndFailedStartKeepsSession() throws {
+        let repo = try fixture()
+        try create(repo)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "keep", now: now)
+        let before = try BackupData.capture(repo).canonical()
+        XCTAssertThrowsError(try repo.start(mode: .new, responseMode: .ordering, now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let id = try repo.createNote(NoteInput(deckID: repo.decks()[0].id,
+            question: "英語", answer: "I like green tea."), now: now)
+        var saved = try repo.options(); saved.sessionResponseMode = .ordering
+        try repo.updateOptions(saved)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        let unchanged = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.start(mode: .new, now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), unchanged)
+        repo.save = { try $0.save() }
+        try repo.start(mode: .new, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.card?.noteID, id)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .ordering)
+        try repo.updateDraft(mode: .mental, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .mental)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.responseMode, .ordering)
+    }
+
     func testAnotherSetUsesOriginalScopeAndLimitAndEmptyOrFailedStartKeepsUndo() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let other = try repo.createDeck(name: "Other", now: now)
@@ -96,6 +283,7 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         try create(repo)
         var options = try repo.options(); options.sessionAnswerLimit = 10
+        options.sessionResponseMode = .typing
         try repo.updateOptions(options)
         try repo.start(mode: .new, now: now)
         try repo.updateDraft(revealed: true, now: now)
@@ -948,4 +1136,76 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(orphanScoped.days[0].answers, 0)
     }
 
+}
+
+extension StudyRepositoryTests {
+    func testForecastScheduleVersusSimulationDeckQuotaUndoAndReadOnly() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Forecast child", parentID: root, now: now)
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: root, newLimit: 1, retention: 0.9))
+        var settings = try repo.settings(); settings.dailyNewLimit = 3; settings.dailyGoal = 2
+        try repo.updateSettings(settings)
+        for index in 0..<3 {
+            try repo.createNote(NoteInput(deckID: child, question: "Fresh \(index)", answer: "A"), now: now.addingTimeInterval(-Double(index)))
+        }
+        let scheduler = try ReviewScheduler(), past = now.addingTimeInterval(-86400 * 30)
+        for index in 0..<2 {
+            let note = try repo.createNote(NoteInput(deckID: root, question: "Due \(index)", answer: "A"), now: past)
+            let card = try XCTUnwrap(repo.cards().first { $0.noteID == note })
+            let transition = try scheduler.review(repo.snapshot(card), grade: .easy, now: past)
+            let before = card.fsrsPayload, after = try JSONEncoder().encode(transition.after)
+            try repo.transaction {
+                card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+                card.isSuspended = index == 1
+                repo.context.insert(StudyReviewLog(card: card, transition: transition, before: before, after: after,
+                                                 mode: .mental, durationMs: 1000, wasNew: true, sequence: index + 1))
+            }
+        }
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let before = try BackupData.capture(repo).canonical()
+        let report = try ReviewForecast.calculate(data: before, deckID: nil, days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(report.days.count, 7); XCTAssertEqual(report.scheduled, 1)
+        XCTAssertEqual(report.overdue, 1); XCTAssertEqual(report.dailyGoal, 2)
+        XCTAssertEqual(report.days[0].newCards, 1)
+        XCTAssertEqual(report.days.reduce(0) { $0 + $1.newCards }, 3)
+        XCTAssertEqual(report.remainingNew, 0)
+        XCTAssertEqual(report, try ReviewForecast.calculate(data: before, deckID: nil, days: 7, now: now, calendar: calendar))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let scoped = try ReviewForecast.calculate(data: before, deckID: child, days: 30, now: now, calendar: calendar)
+        XCTAssertEqual(scoped.scheduled, 0); XCTAssertEqual(scoped.days[0].newCards, 1)
+        XCTAssertEqual(scoped.days.reduce(0) { $0 + $1.newCards }, 3)
+        try repo.start(mode: .new, now: now); try revealAndGrade(repo, grade: .easy, date: now)
+        let after = try BackupData.capture(repo)
+        let graded = try ReviewForecast.calculate(data: after, deckID: nil, days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(graded.days[0].newCards, 0)
+        try repo.undo(now: now)
+        XCTAssertEqual(try ReviewForecast.calculate(data: BackupData.capture(repo), deckID: nil, days: 7, now: now, calendar: calendar), report)
+        try repo.createNote(NoteInput(deckID: child, question: "Added", answer: "A"), now: now)
+        let added = try ReviewForecast.calculate(data: BackupData.capture(repo), deckID: nil, days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(added.days.reduce(0) { $0 + $1.newCards }, 4)
+    }
+    func testForecastStudyBoundaryDSTTimeZoneSiblingBuryAndSharedGlobalQuota() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "Other", now: now)
+        for index in 0..<3 {
+            try repo.createNote(NoteInput(deckID: root, question: "Sibling \(index)", answer: "A", reverseEnabled: true), now: now)
+        }
+        try repo.createNote(NoteInput(deckID: other, question: "Other new", answer: "A"), now: now.addingTimeInterval(-100))
+        var settings = try repo.settings(); settings.dailyNewLimit = 2; settings.dayStartHour = 2
+        try repo.updateSettings(settings)
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let date = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 12))!
+        let data = try BackupData.capture(repo)
+        let report = try ReviewForecast.calculate(data: data, deckID: root, days: 7, now: date, calendar: calendar)
+        XCTAssertEqual(report.days[0].newCards, 1) // The other deck consumes the global first slot.
+        XCTAssertTrue(report.days.contains { $0.end.timeIntervalSince($0.start) == 23 * 3600 })
+        XCTAssertEqual(Set(report.days.map(\.start)).count, 7)
+        let early = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 1))!
+        let earlier = try ReviewForecast.calculate(data: data, deckID: nil, days: 7, now: early, calendar: calendar)
+        XCTAssertLessThan(earlier.days[0].start, report.days[0].start)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let tokyo = try ReviewForecast.calculate(data: data, deckID: nil, days: 7, now: date, calendar: calendar)
+        XCTAssertNotEqual(tokyo.days[0].start, report.days[0].start)
+        XCTAssertThrowsError(try ReviewForecast.calculate(data: data, deckID: UUID(), days: 7, now: date, calendar: calendar))
+    }
 }

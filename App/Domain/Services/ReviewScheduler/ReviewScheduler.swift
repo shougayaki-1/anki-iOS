@@ -42,13 +42,14 @@ struct ReviewScheduler {
     static let revision = "4fbaf20184d62f82a9f44f343337c61a2c5483e9"
     private let engine: FSRS
 
-    init(desiredRetention: Double = 0.9) throws {
+    init(desiredRetention: Double = 0.9, parameters: [Double]? = nil) throws {
+        if let parameters, !FSRSOptimization.validParameters(parameters) { throw OptimizationError.invalid }
         guard (0.8...0.97).contains(desiredRetention) else {
             throw SchedulerError.invalidRetention
         }
         engine = FSRS(parameters: FSRSParameters(
             requestRetention: desiredRetention,
-            w: FSRSDefaults.defaultWv6,
+            w: parameters ?? FSRSDefaults.defaultWv6,
             enableFuzz: false,
             enableShortTerm: true
         ))
@@ -63,9 +64,12 @@ struct ReviewScheduler {
 
     func review(_ input: SchedulerSnapshot, grade: ReviewGrade, now: Date) throws -> ReviewTransition {
         let result = try engine.next(card: decode(input), now: now, grade: Rating(rawValue: grade.rawValue)!)
+        var log = try JSONSerialization.jsonObject(with: JSONEncoder().encode(result.log)) as! [String: Any]
+        log["parameterProfile"] = engine.params.w
+        log["schedulerRevision"] = Self.revision
         return ReviewTransition(
             before: input, after: try snapshot(result.card), reviewedAt: now,
-            grade: grade, logData: try JSONEncoder().encode(result.log)
+            grade: grade, logData: try JSONSerialization.data(withJSONObject: log, options: .sortedKeys)
         )
     }
 
