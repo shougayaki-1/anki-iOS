@@ -58,6 +58,8 @@ struct TextContent: Codable, Equatable {
     var speechOverrides: [String: SpeechAutoplay]? = nil
     var speechQuestion: String? = nil
     var speechAnswer: String? = nil
+    var questionLayout: TextLayout? = nil
+    var answerLayout: TextLayout? = nil
 }
 
 struct NoteInput: Codable, Equatable {
@@ -77,6 +79,8 @@ struct NoteInput: Codable, Equatable {
     var speechOverrides: [String: SpeechAutoplay]? = nil
     var speechQuestion: String? = nil
     var speechAnswer: String? = nil
+    var questionLayout: TextLayout? = nil
+    var answerLayout: TextLayout? = nil
 }
 
 struct StudySettings: Equatable {
@@ -230,7 +234,7 @@ enum HomePrimaryAction: Equatable {
 }
 
 enum StudyError: LocalizedError {
-    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards
+    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards, noOrderingCards
     var errorDescription: String? {
         switch self {
         case .invalidContent: return "問題文と解答を入力してください。"
@@ -238,6 +242,7 @@ enum StudyError: LocalizedError {
         case .unsupportedContent: return "このデータ形式はまだ編集できません。"
         case .newLimitReached: return "今日の新規カード上限に達しました。"
         case .cannotUndo: return "直前の評価後に状態が変わったため、取り消せません。"
+        case .noOrderingCards: return "今は並び替えで学習できるカードがありません。英文の一問一答・記述式が対象です。学習設定の回答形式や学習対象を確認してください。"
         case .noAvailableCards: return "今はこの条件で学習できるカードがありません。学習対象を確認してください。"
         case .noSession: return "学習セッションがありません。"
         }

@@ -2,6 +2,20 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testWeakEvidenceThresholdsAndNoFutureOrInsufficientHistory() {
+        let now = Date(timeIntervalSince1970: 1000), id = UUID()
+        func log(_ grade: ReviewGrade, _ offset: Double = 0) -> StatisticLog {
+            StatisticLog(cardID: id, date: now.addingTimeInterval(offset), grade: grade, durationMs: 0)
+        }
+        XCTAssertNil(WeakCardEvidence.evaluate(logs: [], difficulty: 10, retrievability: 0.1, now: now))
+        XCTAssertNil(WeakCardEvidence.evaluate(logs: [log(.good)], difficulty: 10, retrievability: 0.1, now: now))
+        XCTAssertNil(WeakCardEvidence.evaluate(logs: [log(.again, 1)], difficulty: 10, retrievability: 0.1, now: now))
+        XCTAssertEqual(WeakCardEvidence.evaluate(logs: [log(.again)], difficulty: 1, retrievability: 1, now: now)?.reasons, ["直近の評価がAgain"])
+        let evidence = WeakCardEvidence.evaluate(logs: [log(.again, -2), log(.again, -1), log(.good)], difficulty: 8, retrievability: 0.74, now: now)
+        XCTAssertEqual(evidence?.reasons.count, 4)
+        XCTAssertNil(WeakCardEvidence.evaluate(logs: [log(.good, -2), log(.good, -1), log(.good)], difficulty: 7.9, retrievability: 0.75, now: now))
+    }
+
     func testFourAMUniqueCountsStreakRatingsAndRetention() {
         var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
         func date(_ day: Int, _ hour: Int) -> Date { calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour))! }
