@@ -71,6 +71,8 @@ struct ReviewView: View {
                                                  canFinish: store.review != nil, store: store)
                         }
                     }.padding()
+                        .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 760 : .infinity)
+                        .frame(maxWidth: .infinity)
                         .frame(minHeight: store.review?.card == nil ? geometry.size.height : 0)
                 }
                 .scrollDismissesKeyboard(.interactively)
@@ -121,6 +123,8 @@ struct ReviewView: View {
                             store.grade(grade)
                         }
                     )
+                    .frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 760 : .infinity)
+                    .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
                     .padding(.vertical, typingFocused ? 6 : 10)
                     .background(Color(uiColor: .systemBackground))
@@ -173,11 +177,13 @@ struct ReviewView: View {
                         speechPlayer.stop()
                         store.pause()
                     }
+                        .keyboardShortcut(.escape, modifiers: [])
                         .accessibilityIdentifier("pauseStudy")
                         .accessibilityHint("学習を中断し、セッションを保存してホームへ戻ります")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Undo") { speechPlayer.stop(); store.undo() }
+                        .keyboardShortcut("z", modifiers: .command)
                         .disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
                         .accessibilityLabel("直前の評価を取り消す")
                 }
@@ -488,6 +494,7 @@ private struct ReviewActionBar: View {
                 .buttonStyle(.borderedProminent)
                 .tint(Color("PrimaryAction"))
                 .foregroundStyle(.white)
+                .keyboardShortcut(.return, modifiers: .command)
                 .accessibilityIdentifier("revealAnswer")
                 .disabled(!isEnabled)
             }
@@ -531,6 +538,7 @@ private struct ReviewActionBar: View {
         .frame(minWidth: compact ? 72 : 0)
         .accessibilityLabel(gradeTitle(grade))
         .accessibilityHint(gradeHint(grade))
+        .keyboardShortcut(KeyEquivalent(Character(String(grade.rawValue))), modifiers: .command)
         .accessibilityIdentifier("grade-\(grade.rawValue)")
         .disabled(!isEnabled)
     }

@@ -3,6 +3,7 @@ import SwiftUI
 struct LibraryView: View {
     @Bindable var store: StudyStore
     @Binding var shortcutDeck: ShortcutDeckDestination?
+    var deckFilter: UUID? = nil
     @State private var adding = false
     @State private var ocr = false
     @State private var importing = false
@@ -15,8 +16,9 @@ struct LibraryView: View {
     @State private var bulkCommitted = false
 
     var filtered: [NoteItem] {
-        store.notes.filter {
-            search.isEmpty || "\($0.content.question) \($0.content.answer) \($0.deckName) \($0.tagNames.joined(separator: " "))".localizedCaseInsensitiveContains(search)
+        let decks = deckFilter.map { (try? store.repository.descendants(of: $0)) ?? Set([$0]) }
+        return store.notes.filter {
+            (decks?.contains($0.deckID) ?? true) && (search.isEmpty || "\($0.content.question) \($0.content.answer) \($0.deckName) \($0.tagNames.joined(separator: " "))".localizedCaseInsensitiveContains(search))
         }
     }
 
@@ -57,6 +59,7 @@ struct LibraryView: View {
                 }
             }
             .environment(\.editMode, $editMode)
+            .onChange(of: deckFilter) { _, _ in selection.removeAll(); editMode = .inactive }
             .onChange(of: search) { _, _ in selection.removeAll() }
             .onChange(of: editMode) { _, mode in if !mode.isEditing { selection.removeAll() } }
             .safeAreaInset(edge: .bottom) {
@@ -76,7 +79,7 @@ struct LibraryView: View {
                 }
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
-            .navigationTitle(editMode.isEditing ? "カードを選択" : "ライブラリ")
+            .navigationTitle(editMode.isEditing ? "カードを選択" : (deckFilter.flatMap { id in store.decks.first { $0.id == id }?.shortName } ?? "ライブラリ"))
             .onDisappear { selection.removeAll(); editMode = .inactive }
             .navigationDestination(item: $shortcutDeck) { destination in
                 ShortcutDeckContentsView(store: store, deckID: destination.id)
@@ -106,7 +109,7 @@ struct LibraryView: View {
                         Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
+                        Button("カード追加", systemImage: "plus") { adding = true }.keyboardShortcut("n", modifiers: .command).accessibilityIdentifier("addNote")
                     }
                 }
             }
@@ -118,7 +121,7 @@ struct LibraryView: View {
                     bulkEditing = false
                 }
             }
-            .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
+            .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: deckFilter) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
             .sheet(isPresented: $importing) { ImportView(store: store) }
             .sheet(isPresented: $ocr) { OCRImportView(store: store) }
