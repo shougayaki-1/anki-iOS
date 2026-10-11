@@ -49,7 +49,9 @@ actor StatisticsReader {
         // data error, not an answer that is silently excluded.
         guard logs.count == logRows.count else { throw StudyError.unsupportedContent }
 
-        let scheduler = try ReviewScheduler()
+        let extra = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
+        let optimization = try extra.flatMap { try JSONDecoder().decode(StudyOptions.self, from: $0.payload).fsrsOptimization }
+        let scheduler = try ReviewScheduler(parameters: optimization?.activeParameters)
         let retentionStates: [StatisticCardState] = try cards.map { card in
             try Task.checkCancellation()
             let note = notesByID[card.noteID]
@@ -78,7 +80,7 @@ extension StudyRepository {
             return StatisticLog(cardID: $0.cardID, date: $0.reviewedAt, grade: grade,
                                 durationMs: $0.durationMs, wasNew: $0.wasNew)
         }
-        let scheduler = try ReviewScheduler()
+        let scheduler = try ReviewScheduler(parameters: optimizationState().activeParameters)
         let retention = try cards().filter { !$0.isSuspended }.compactMap { card -> Double? in
             let snapshot = try snapshot(card)
             guard try scheduler.summary(snapshot).state != "new" else { return nil }

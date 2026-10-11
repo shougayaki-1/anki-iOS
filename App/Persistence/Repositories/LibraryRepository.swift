@@ -63,7 +63,7 @@ extension StudyRepository {
         }
         return names.joined(separator: " / ")
     }
-    func moveDeck(id: UUID, name: String, parentID: UUID?, now: Date) throws {
+    func moveDeck(id: UUID, name: String, parentID: UUID?, learning: DeckLearningOverride? = nil, now: Date) throws {
         let normalized = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else { throw StudyError.invalidContent }
         if let parentID {
@@ -72,6 +72,10 @@ extension StudyRepository {
         }
         try transaction {
             guard let deck = try decks().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
+            if let learning {
+                guard learning.deckID == id else { throw StudyError.invalidContent }
+                try setDeckLearningInTransaction(learning)
+            }
             deck.name = normalized; deck.parentID = parentID; deck.updatedAt = now
         }
     }
@@ -111,6 +115,9 @@ extension StudyRepository {
                 selected.deckID = moveNotesTo
                 try setScopeInTransaction(selected)
             }
+            var saved = try options()
+            saved.deckLearning?.removeAll { deleted.contains($0.deckID) }
+            try writeOptionsInTransaction(saved)
             for deck in try decks().filter({ deleted.contains($0.id) }) { context.delete(deck) }
             if try decks().isEmpty { context.insert(Deck(name: "マイデッキ", now: now)) }
         }
@@ -138,6 +145,16 @@ extension StudyRepository {
         }.map(\.id))
         return try (cards ?? queueCards()).filter { $0.noteID.map { eligible.contains($0) } ?? false }
     }
+    // Only an explicit ordering override restricts candidates. Use displayed answers
+    // so reverse cards follow the same eligibility rules as the study UI.
+    func responseEligibleCards(_ cards: [QueueCard], mode: SessionResponseMode) throws -> [QueueCard] {
+        guard mode == .ordering else { return cards }
+        let items = try noteItems()
+        let eligible = Set(items.filter {
+            OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) == nil
+        }.map(\.id))
+        return cards.filter { eligible.contains($0.id) }
+    }
     func scopedCounts(scope: LearningScope, now: Date) throws -> HomeCounts {
         var result = try ReviewQueueBuilder(calendar: calendar).counts(cards: scopedQueueCards(scope), logs: queueLogs(), settings: settings(), now: now)
         let global = try counts(now: now)
@@ -150,7 +167,8 @@ extension StudyRepository {
         let selected = try homeScope(), settings = try settings()
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let start = day.start, end = day.end
-        let all = try queueCards(), scoped = try scopedQueueCards(selected, cards: all)
+        let all = try queueCards()
+        let scoped = try responseEligibleCards(scopedQueueCards(selected, cards: all), mode: options().sessionResponseMode ?? .cardDefault)
         let today = try todayQueueLogs(cards: all, settings: settings, now: now)
         let builder = ReviewQueueBuilder(calendar: calendar)
         let global = builder.counts(cards: all, logs: today, settings: settings, now: now)
@@ -415,5 +433,117 @@ extension StudyRepository {
         else { throw BulkEditError.staleSelection }
         guard latest.changedNotes.count > 0 else { throw BulkEditError.emptySelection }
         return try applyBulkEdit(initial, now: now)
+    }
+}
+
+extension StudyRepository {
+    func deckAncestors(_ id: UUID) throws -> [UUID] {
+        let rows = try decks()
+        var result: [UUID] = [], current: UUID? = id
+        while let next = current, !result.contains(next) {
+            result.append(next)
+            current = rows.first { $0.id == next }?.parentID
+        }
+        return result
+    }
+    func deckRetention(_ id: UUID) throws -> Double {
+        let saved = try options().deckLearning ?? []
+        for ancestor in try deckAncestors(id) {
+            if let value = saved.first(where: { $0.deckID == ancestor })?.retention { return value }
+        }
+        return try settings().desiredRetention
+    }
+    func deckLimits(_ id: UUID) throws -> [UUID: Int] {
+        let ancestors = try deckAncestors(id)
+        return Dictionary(uniqueKeysWithValues: (try options().deckLearning ?? []).compactMap {
+            guard ancestors.contains($0.deckID), let limit = $0.newLimit else { return nil }
+            return ($0.deckID, limit)
+        })
+    }
+    func saveDeckLearning(_ value: DeckLearningOverride) throws {
+        try transaction { try setDeckLearningInTransaction(value) }
+    }
+    private func setDeckLearningInTransaction(_ value: DeckLearningOverride) throws {
+        guard value.isValid, try decks().contains(where: { $0.id == value.deckID }) else { throw StudyError.invalidContent }
+        var saved = try options()
+        var rows = saved.deckLearning ?? []
+        rows.removeAll { $0.deckID == value.deckID }
+        if value.newLimit != nil || value.retention != nil { rows.append(value) }
+        saved.deckLearning = rows
+        try writeOptionsInTransaction(saved)
+    }
+    func quotaMap() throws -> (usage: [Int: [UUID]], cards: [UUID: [UUID]]) {
+        let ancestors = try Dictionary(uniqueKeysWithValues: decks().map { ($0.id, try deckAncestors($0.id)) })
+        let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
+        let cards = try Dictionary(uniqueKeysWithValues: self.cards().map {
+            ($0.id, noteDecks[$0.noteID].flatMap { ancestors[$0] } ?? [])
+        })
+        let usage = Dictionary(uniqueKeysWithValues: (try options().deckNewUsage ?? []).map { ($0.sequence, $0.quotaDeckIDs) })
+        return (usage, cards)
+    }
+    func writeOptionsInTransaction(_ saved: StudyOptions) throws {
+        if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first { row.payload = try JSONEncoder().encode(saved) }
+        else { context.insert(try ExtraPreferences(options: saved)) }
+    }
+}
+
+extension StudyRepository {
+    func optimizationState() throws -> FSRSOptimizationState {
+        let state = try options().fsrsOptimization ?? FSRSOptimizationState()
+        guard state.valid else { throw OptimizationError.invalid }
+        return state
+    }
+    func optimizationReviews() throws -> [OptimizationReview] {
+        guard try context.fetchCount(FetchDescriptor<StudyReviewLog>()) <= 10000 else { throw OptimizationError.tooLarge }
+        let rows = try logs()
+        let scheduler = try ReviewScheduler()
+        return try rows.map { row in
+            let before = try JSONDecoder().decode(SchedulerSnapshot.self, from: row.fsrsBefore)
+            return OptimizationReview(id: row.id, cardID: row.cardID, date: row.reviewedAt, grade: row.grade,
+                                      sequence: row.sequence, startsNew: try scheduler.summary(before).state == "new")
+        }
+    }
+    func saveOptimizationReport(_ report: OptimizationReport) throws {
+        guard report.valid else { throw OptimizationError.invalid }
+        try transaction {
+            var options = try options(), state = try optimizationState()
+            let reviews = try optimizationReviews(), prepared = try FSRSOptimization.prepare(reviews)
+            guard try FSRSOptimization.digest(reviews) == report.digest,
+                  state.activeParameters == report.previousParameters,
+                  report.reviews == reviews.count, report.days == prepared.days, report.splitDate == prepared.split,
+                  report.standard.count == prepared.events.filter({ prepared.eligible.contains($0.id) && $0.date > prepared.split }).count
+            else { throw OptimizationError.stale }
+            state.report = report; options.fsrsOptimization = state
+            try persistOptimizationOptions(options)
+        }
+    }
+    func applyOptimization(now: Date) throws {
+        try transaction {
+            var options = try options(), state = try optimizationState()
+            guard let report = state.report, report.valid, report.accepted else { throw OptimizationError.invalid }
+            let reviews = try optimizationReviews(), prepared = try FSRSOptimization.prepare(reviews)
+            guard try FSRSOptimization.digest(reviews) == report.digest,
+                  state.activeParameters == report.previousParameters,
+                  report.reviews == reviews.count, report.days == prepared.days, report.splitDate == prepared.split,
+                  report.standard.count == prepared.events.filter({ prepared.eligible.contains($0.id) && $0.date > prepared.split }).count
+            else { throw OptimizationError.stale }
+            state.changes.append(FSRSParameterChange(date: now, method: report.method, before: state.activeParameters, after: report.parameters))
+            state.changes = Array(state.changes.suffix(20)); state.activeParameters = report.parameters
+            options.fsrsOptimization = state; try persistOptimizationOptions(options)
+        }
+    }
+    func resetOptimization(now: Date) throws {
+        try transaction {
+            var options = try options(), state = try optimizationState()
+            guard state.activeParameters != nil else { return }
+            state.changes.append(FSRSParameterChange(date: now, method: OptimizationReport.method, before: state.activeParameters, after: nil))
+            state.changes = Array(state.changes.suffix(20)); state.activeParameters = nil
+            options.fsrsOptimization = state; try persistOptimizationOptions(options)
+        }
+    }
+    private func persistOptimizationOptions(_ options: StudyOptions) throws {
+        if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
+            row.payload = try JSONEncoder().encode(options)
+        } else { context.insert(try ExtraPreferences(options: options)) }
     }
 }
