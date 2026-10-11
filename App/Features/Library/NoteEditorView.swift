@@ -28,6 +28,7 @@ struct NoteEditorView: View {
     @State private var preview = false
     @State private var saveFailure = false
     @State private var saveNext = false
+    @State private var saveNotice: NoteSaveNotice?
     @State private var audioSelecting = false
     @State private var audioSide = SpeechSide.question
     @State private var audioWorking = false
@@ -245,6 +246,13 @@ struct NoteEditorView: View {
             .sheet(isPresented: $crop) {
                 if let image { CropView(image: image) { applyCrop($0) } }
             }
+            .safeAreaInset(edge: .bottom) {
+                if let notice = saveNotice {
+                    NoteSaveNoticeView(notice: notice) {
+                        if saveNotice?.id == notice.id { saveNotice = nil }
+                    }
+                }
+            }
             .navigationTitle(item == nil ? "カード追加" : "カード編集")
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
@@ -309,10 +317,11 @@ struct NoteEditorView: View {
         return try? CardGeneration.variants(kind: input.kind, content: content)
     }
     private var canSave: Bool {
-        !audioWorking && !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        !committed && !audioWorking && !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
     private func requestSave(next: Bool) {
+        guard canSave, !historyChoice, !duplicateChoice else { return }
         saveNext = next
         if let item, (item.sourceContent.question != input.question || item.sourceContent.answer != input.answer || item.kind != input.kind || item.sourceContent.imageID != input.imageID || (item.sourceContent.masks ?? []) != input.masks || (item.sourceContent.reverseEnabled ?? false) != input.reverseEnabled) {
             do {
@@ -365,6 +374,8 @@ struct NoteEditorView: View {
     }
 
     private func save(reset: Bool, updateID: UUID? = nil) {
+        guard !committed else { return }
+        saveNotice = nil
         saveFailure = false
         pendingReset = reset
         pendingUpdateID = updateID
@@ -373,11 +384,16 @@ struct NoteEditorView: View {
             if let id = updateID ?? item?.noteID { try store.repository.updateNote(id: id, input: input, resetHistory: reset, clearingDraft: draftKey, now: store.clock()) }
             else { try store.repository.createNote(input, clearingDraft: draftKey, now: store.clock()) }
             committed = true
-            try store.reload()
+            do { try store.reload() }
+            catch { store.failure = "カードは保存済みですが、表示の更新に失敗しました: " + error.localizedDescription }
+            let notice = NoteSaveNotice(message: saveNext ? "保存しました・次のカードを追加できます" :
+                (updateID != nil || item != nil ? "変更を保存しました" : "カードを保存しました"))
+            store.haptics.play(.noteSaved, mode: store.settings.hapticsMode)
             if saveNext {
+                saveNotice = notice
                 input = NoteInput(deckID: input.deckID, kind: input.kind, question: "", answer: "", responseMode: input.responseMode)
                 tagText = ""; committed = false; saveNext = false
-            } else { dismiss() }
+            } else { store.noteSaveNotice = notice; dismiss() }
             do { try store.repository.cleanupUnusedMedia() }
             catch { store.failure = "カードは保存済みですが、不要な画像の清掃に失敗しました: " + error.localizedDescription }
         } catch { saveFailure = !committed; failure = error.localizedDescription }

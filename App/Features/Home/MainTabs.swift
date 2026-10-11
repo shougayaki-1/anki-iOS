@@ -82,6 +82,13 @@ struct MainTabs: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top) {
+            if let notice = store.noteSaveNotice {
+                NoteSaveNoticeView(notice: notice) {
+                    if store.noteSaveNotice?.id == notice.id { store.noteSaveNotice = nil }
+                }
+            }
+        }
         .onOpenURL { url in
             guard let destination = WidgetDestination.parse(url) else { return }
             switch destination {
@@ -504,5 +511,30 @@ struct LearningScopeSheet: View {
                 }
             }
         }
+    }
+}
+
+/// Kept above the destination view so dismissing the editor does not lose feedback.
+struct NoteSaveNoticeView: View {
+    let notice: NoteSaveNotice
+    let clear: () -> Void
+
+    var body: some View {
+        Label(notice.message, systemImage: "checkmark.circle.fill")
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding()
+            .background(.regularMaterial)
+            .accessibilityIdentifier("noteSaveNotice")
+            .task(id: notice.id) {
+                do {
+                    // Let the editor dismissal finish before VoiceOver announces success.
+                    try await Task.sleep(for: .milliseconds(500))
+                    UIAccessibility.post(notification: .announcement, argument: notice.message)
+                    try await Task.sleep(for: .seconds(4))
+                    clear()
+                } catch { } // A replaced notice cancels its old expiry task.
+            }
     }
 }

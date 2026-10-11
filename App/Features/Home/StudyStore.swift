@@ -2,6 +2,11 @@ import Foundation
 import SwiftData
 import Observation
 
+struct NoteSaveNotice: Identifiable {
+    let id = UUID()
+    let message: String
+}
+
 @MainActor @Observable
 final class StudyStore {
     var repository: StudyRepository
@@ -25,6 +30,7 @@ final class StudyStore {
     var sessionResponseMode = SessionResponseMode.cardDefault
     var review: ReviewPresentation?
     var failure: String?
+    var noteSaveNotice: NoteSaveNotice?
     var reviewRefreshFailed = false
     var showingReview = false
     var selectedTab = 0
