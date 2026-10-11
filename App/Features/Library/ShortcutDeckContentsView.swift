@@ -10,10 +10,11 @@ struct ShortcutDeckContentsView: View {
     let deckID: UUID
 
     private var deck: DeckItem? { store.decks.first { $0.id == deckID } }
-    private var cards: [NoteItem] {
-        let descendants = (try? store.repository.descendants(of: deckID)) ?? Set([deckID])
-        return store.notes.filter { descendants.contains($0.deckID) }
-    }
+    @State private var index: LibraryIndex?
+    @State private var results = LibraryResults()
+    @State private var cards: [LibraryCard] = []
+    @State private var loading = true
+    @State private var failure: String?
 
     var body: some View {
         Group {
@@ -23,18 +24,20 @@ struct ShortcutDeckContentsView: View {
                         Text(deck.name).font(.footnote).foregroundStyle(.secondary)
                             .accessibilityIdentifier("shortcutDeckPath")
                     }
-                    if cards.isEmpty {
+                    if loading { ProgressView("カードを読み込み中") }
+                    if let failure { Label(failure, systemImage: "exclamationmark.triangle") }
+                    if results.cardCount == 0 && !loading && failure == nil {
                         ContentUnavailableView("カードがありません", systemImage: "rectangle.on.rectangle",
                                                description: Text("このデッキと下位デッキにはカードがありません。"))
                     } else {
                         Section("カード（下位デッキを含む）") {
                             ForEach(cards) { card in
                                 NavigationLink {
-                                    NoteDetailView(store: store, cardID: card.cardID)
+                                    NoteDetailView(store: store, cardID: card.id)
                                 } label: {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Text(card.content.question).lineLimit(2)
-                                        Text(card.deckName).font(.caption).foregroundStyle(.secondary)
+                                        LibraryCardRow(card: card, index: index)
+                                        Text(index?.notes[card.noteID]?.deckName ?? "").font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
                             }
@@ -48,6 +51,21 @@ struct ShortcutDeckContentsView: View {
                 ContentUnavailableView("デッキが見つかりません", systemImage: "books.vertical",
                                        description: Text("デッキが削除または復元された可能性があります。"))
             }
+        }
+        .task(id: store.dataRevision) {
+            loading = true
+            defer { if !Task.isCancelled { loading = false } }
+            do {
+                let revision = store.dataRevision
+                let allowed = try store.repository.descendants(of: deckID)
+                let found = try await store.libraryReader.search("", revision: revision, deckIDs: allowed)
+                let loaded = try await store.libraryReader.load(revision: revision)
+                try Task.checkCancellation()
+                guard revision == store.dataRevision else { return }
+                cards = found.cardsByDeck.values.flatMap { $0 }.sorted { $0.createdAt > $1.createdAt }
+                index = loaded; results = found; failure = nil
+            } catch is CancellationError { }
+            catch { failure = error.localizedDescription }
         }
     }
 }

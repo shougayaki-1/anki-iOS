@@ -559,3 +559,90 @@ extension StudyRepository {
         } else { context.insert(try ExtraPreferences(options: options)) }
     }
 }
+
+/// The separate read context keeps projection decoding and search off the UI actor.
+actor LibraryReader {
+    private let container: ModelContainer
+    private var revision: Int?
+    private var cached: LibraryIndex?
+    private var searchText: [UUID: String] = [:]
+    private var loadedDecks = Set<UUID>()
+
+    init(container: ModelContainer) { self.container = container }
+
+    func load(revision: Int) throws -> LibraryIndex {
+        if self.revision == revision, let cached { return cached }
+        let index = try Self.read(context: ModelContext(container))
+        self.revision = revision; cached = index; searchText = [:]; loadedDecks = []
+        return index
+    }
+
+    func search(_ query: String, revision: Int, deckIDs: Set<UUID>?) throws -> LibraryResults {
+        let index = try contents(revision: revision, deckIDs: deckIDs)
+        let scope = index.results(deckIDs: deckIDs)
+        guard !query.isEmpty else { return scope }
+        var matches = Set<UUID>()
+        for card in scope.cardsByDeck.values.joined() {
+            try Task.checkCancellation()
+            let text: String
+            if let cached = searchText[card.id] { text = cached }
+            else {
+                let displayed = try index.displayed(card)
+                guard let note = index.notes[card.noteID] else { throw StudyError.missingRecord }
+                text = "\(displayed.question) \(displayed.answer) \(note.deckName) \(note.tagNames)"
+                searchText[card.id] = text
+            }
+            if text.localizedCaseInsensitiveContains(query) { matches.insert(card.id) }
+        }
+        return index.results(deckIDs: deckIDs, matching: matches)
+    }
+
+    private func contents(revision: Int, deckIDs: Set<UUID>?) throws -> LibraryIndex {
+        var index = try load(revision: revision)
+        let missing = (deckIDs ?? Set(index.cardsByDeck.keys)).subtracting(loadedDecks)
+        guard !missing.isEmpty else { return index }
+        let requested = Array(missing)
+        var fetch = FetchDescriptor<Note>(predicate: #Predicate { requested.contains($0.deckID) })
+        fetch.propertiesToFetch = [\.id, \.contentPayload]
+        struct Projection: Decodable {
+            let schemaVersion: Int
+            let question: String
+            let answer: String
+            let masks: [ImageMask]?
+        }
+        // Read only requested decks, once per revision. No detail or FSRS decoding.
+        for note in try ModelContext(container).fetch(fetch) {
+            try Task.checkCancellation()
+            guard index.siblingCounts[note.id] != nil else { continue }
+            let projection = try JSONDecoder().decode(Projection.self, from: note.contentPayload)
+            guard (1...2).contains(projection.schemaVersion) else { throw StudyError.unsupportedContent }
+            var content = TextContent(question: projection.question, answer: projection.answer, explanation: "")
+            content.masks = projection.masks
+            index.notes[note.id]?.content = content
+        }
+        cached = index; loadedDecks.formUnion(missing)
+        return index
+    }
+
+    static func read(context: ModelContext) throws -> LibraryIndex {
+        let paths = LibraryIndex.deckPaths(try context.fetch(FetchDescriptor<Deck>()))
+        let tags = Dictionary(uniqueKeysWithValues: try context.fetch(FetchDescriptor<Tag>()).map { ($0.id, $0.name) })
+        var noteFetch = FetchDescriptor<Note>()
+        noteFetch.propertiesToFetch = [\.id, \.deckID, \.type, \.tagIDs]
+        var index = LibraryIndex(), deckIDs: [UUID: UUID] = [:]
+        for note in try context.fetch(noteFetch) {
+            guard let kind = NoteKind(rawValue: note.type) else { throw StudyError.missingRecord }
+            index.notes[note.id] = LibraryNote(kind: kind, content: nil, deckName: paths[note.deckID] ?? "", tagNames: note.tagIDs.compactMap { tags[$0] }.joined(separator: " "))
+            deckIDs[note.id] = note.deckID
+        }
+        var cardFetch = FetchDescriptor<StudyCard>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        cardFetch.propertiesToFetch = [\.id, \.noteID, \.variantKey, \.isSuspended, \.createdAt]
+        for card in try context.fetch(cardFetch) {
+            guard let deck = deckIDs[card.noteID] else { throw StudyError.missingRecord }
+            index.cardsByDeck[deck, default: []].append(LibraryCard(id: card.id, noteID: card.noteID, deckID: deck, variantKey: card.variantKey, isSuspended: card.isSuspended, createdAt: card.createdAt))
+            index.siblingCounts[card.noteID, default: 0] += 1
+            index.cardCount += 1
+        }
+        return index
+    }
+}

@@ -219,10 +219,22 @@ final class StudyRepository {
 
     func noteItems(cardID: UUID? = nil) throws -> [NoteItem] {
         let scheduler = try ReviewScheduler()
-        let noteMap = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0) })
-        let deckMap = Dictionary(uniqueKeysWithValues: try decks().map { ($0.id, try deckPath($0.id)) })
+        let selectedCards: [StudyCard]
+        let selectedNotes: [Note]
+        if let cardID {
+            var fetch = FetchDescriptor<StudyCard>(predicate: #Predicate { $0.id == cardID })
+            fetch.fetchLimit = 1
+            selectedCards = try context.fetch(fetch)
+            if let noteID = selectedCards.first?.noteID {
+                var noteFetch = FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })
+                noteFetch.fetchLimit = 1
+                selectedNotes = try context.fetch(noteFetch)
+            } else { return [] }
+        } else { selectedCards = try cards(); selectedNotes = try notes() }
+        let noteMap = Dictionary(uniqueKeysWithValues: selectedNotes.map { ($0.id, $0) })
+        let deckMap = LibraryIndex.deckPaths(try decks())
         let tagMap = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
-        return try cards().filter { cardID == nil || $0.id == cardID }.sorted { $0.createdAt > $1.createdAt }.map { card in
+        return try selectedCards.sorted { $0.createdAt > $1.createdAt }.map { card in
             guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type) else { throw StudyError.missingRecord }
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
             guard (1...2).contains(content.schemaVersion) else { throw StudyError.unsupportedContent }
@@ -232,6 +244,16 @@ final class StudyRepository {
                             sourceContent: content, variantKey: card.variantKey,
                             responseMode: ResponseMode(rawValue: note.defaultResponseMode) ?? .mental, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
         }
+    }
+
+    func siblingCardCount(noteID: UUID) throws -> Int {
+        try context.fetchCount(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
+    }
+
+    func hasReviewedSibling(noteID: UUID) throws -> Bool {
+        let siblings = try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
+        let scheduler = try ReviewScheduler()
+        return try siblings.contains { try scheduler.summary(snapshot($0)).repetitions > 0 }
     }
 
     func queueCards() throws -> [QueueCard] {

@@ -84,12 +84,15 @@ final class QualityRepositoryTests: XCTestCase {
         repo.save = { _ in throw Failure.save }
         for _ in 0..<3 { date = date.addingTimeInterval(15); store.refreshHome() }
         XCTAssertNil(store.homeFailure); XCTAssertEqual(store.counts.newRemaining, 1)
-        XCTAssertEqual(store.notes.first?.content.question, "Q")
         XCTAssertEqual(store.statistics?.days.map(\.answers), stats)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(center.permissionReads, notifications)
-        XCTAssertThrowsError(try store.reload())
-        XCTAssertNotNil(store.homeFailure); XCTAssertFalse(store.canStart(.new))
+        try store.reload()
+        XCTAssertNil(store.homeFailure) // List content is now loaded only by the library reader.
+        do {
+            _ = try await store.libraryReader.search("", revision: store.dataRevision, deckIDs: nil)
+            XCTFail("Broken content must be reported by the library")
+        } catch { }
         // Broken settings fail the lightweight read too, keeping the last good counts.
         repo.save = { try $0.save() }
         var options = try repo.options(); options.schemaVersion = 99

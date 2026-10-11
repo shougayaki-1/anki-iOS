@@ -15,22 +15,28 @@ struct LibraryView: View {
     @State private var bulkEditing = false
     @State private var bulkCommitted = false
 
-    var filtered: [NoteItem] {
-        let decks = deckFilter.map { (try? store.repository.descendants(of: $0)) ?? Set([$0]) }
-        return store.notes.filter {
-            (decks?.contains($0.deckID) ?? true) && (search.isEmpty || "\($0.content.question) \($0.content.answer) \($0.deckName) \($0.tagNames.joined(separator: " "))".localizedCaseInsensitiveContains(search))
-        }
+    @State private var index: LibraryIndex?
+    @State private var results = LibraryResults()
+    @State private var loading = true
+    @State private var libraryFailure: String?
+    @State private var loadAttempt = 0
+
+    private struct Request: Equatable {
+        let revision: Int
+        let query: String
+        let deck: UUID?
+        let tab: Int
+        let attempt: Int
     }
 
     var body: some View {
-        let counts = Dictionary(grouping: store.notes, by: \.noteID).mapValues(\.count)
         NavigationStack {
             List(selection: $selection) {
                 Section("登録数") {
-                    Text("登録全体: \(counts.count)ノート / \(store.notes.count)枚")
+                    Text("登録全体: \(index?.noteCount ?? 0)ノート / \(index?.cardCount ?? 0)枚")
                         .accessibilityIdentifier("libraryTotalCounts")
                     if !search.isEmpty {
-                        Text("表示中: \(Set(filtered.map(\.noteID)).count)ノート / \(filtered.count)枚")
+                        Text("表示中: \(results.noteCount)ノート / \(results.cardCount)枚")
                             .accessibilityIdentifier("libraryFilteredCounts")
                     }
                     Text("ノートは問題と解答のまとまり、カードは出題単位です。反転・穴埋め番号・画像マスクにより1ノートから複数枚を作成します。登録枚数は今日のユニーク学習枚数や延べ回答回数とは別です。")
@@ -42,21 +48,45 @@ struct LibraryView: View {
                             .accessibilityIdentifier("openWeakCards")
                     }
                 }
-                if filtered.isEmpty {
+                if let libraryFailure {
+                    Section {
+                        Label(libraryFailure, systemImage: "exclamationmark.triangle")
+                        Button("再読み込み") { loadAttempt += 1 }
+                    }
+                }
+                if loading { ProgressView("カードを読み込み中") }
+                if results.cardCount == 0 && !loading && libraryFailure == nil {
                     ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
                                            description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
                 }
-                ForEach(store.decks) { deck in
+                ForEach(store.decks.filter { results.cardsByDeck[$0.id] != nil }) { deck in
                     Section(deck.name) {
-                        ForEach(filtered.filter { $0.deckID == deck.id }) { item in
+                        ForEach(results.cardsByDeck[deck.id] ?? []) { item in
                             if editMode.isEditing {
-                                cardRow(item, siblingCount: counts[item.noteID] ?? 1).tag(item.cardID)
+                                LibraryCardRow(card: item, index: index).tag(item.id)
                             } else {
-                                NavigationLink { NoteDetailView(store: store, cardID: item.cardID) } label: { cardRow(item, siblingCount: counts[item.noteID] ?? 1) }
+                                NavigationLink { NoteDetailView(store: store, cardID: item.id) } label: { LibraryCardRow(card: item, index: index) }
                             }
                         }
                     }
                 }
+            }
+            .task(id: Request(revision: store.dataRevision, query: search, deck: deckFilter, tab: store.selectedTab, attempt: loadAttempt)) {
+                guard store.selectedTab == 1 else { return }
+                let revision = store.dataRevision, query = search
+                loading = true
+                defer { if !Task.isCancelled { loading = false } }
+                do {
+                    if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
+                    let allowed = try deckFilter.map { try store.repository.descendants(of: $0) }
+                    let found = try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
+                    let loaded = try await store.libraryReader.load(revision: revision)
+                    try Task.checkCancellation()
+                    guard revision == store.dataRevision else { return }
+                    index = loaded; results = found; libraryFailure = nil
+                    selection.formIntersection(found.cardIDs)
+                } catch is CancellationError { }
+                catch { if !Task.isCancelled { libraryFailure = error.localizedDescription } }
             }
             .environment(\.editMode, $editMode)
             .onChange(of: deckFilter) { _, _ in selection.removeAll(); editMode = .inactive }
@@ -66,15 +96,15 @@ struct LibraryView: View {
                 if editMode.isEditing {
                     HStack {
                         Menu("選択", systemImage: "checkmark.circle") {
-                            Button("表示中を全選択") { selection = Set(filtered.map(\.cardID)) }
-                                .accessibilityIdentifier("selectAllLibraryCards")
+                            Button("表示中を全選択") { selection = results.cardIDs }
+                                .disabled(loading || libraryFailure != nil).accessibilityIdentifier("selectAllLibraryCards")
                             Button("選択を解除") { selection.removeAll() }
                                 .disabled(selection.isEmpty)
                         }
                         Spacer()
                         Button("一括操作") { bulkCommitted = false; bulkEditing = true }
                             .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                            .disabled(selection.isEmpty).accessibilityIdentifier("openBulkManagement")
+                            .disabled(selection.isEmpty || loading || libraryFailure != nil).accessibilityIdentifier("openBulkManagement")
                     }.padding().background(.regularMaterial)
                 }
             }
@@ -99,7 +129,7 @@ struct LibraryView: View {
                         Menu("ライブラリ操作", systemImage: "ellipsis.circle") {
                             Button("カードを選択", systemImage: "checkmark.circle") {
                                 selection.removeAll(); editMode = .active
-                            }.disabled(filtered.isEmpty).accessibilityIdentifier("selectLibraryCards")
+                            }.disabled(results.cardCount == 0 || loading || libraryFailure != nil).accessibilityIdentifier("selectLibraryCards")
                         }.accessibilityIdentifier("libraryActions")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
@@ -128,15 +158,23 @@ struct LibraryView: View {
 
         }
     }
-    private func cardRow(_ item: NoteItem, siblingCount: Int) -> some View {
+}
+
+/// List creates row bodies on demand; hidden decks never render generated text.
+struct LibraryCardRow: View {
+    let card: LibraryCard
+    let index: LibraryIndex?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(item.content.question).lineLimit(2)
-            if siblingCount > 1 { Text("同じノートから\(siblingCount)枚").font(.caption).foregroundStyle(.secondary) }
-            Text(item.kind.title + (item.isSuspended ? " · 停止中" : ""))
+            Text((try? index?.displayed(card).question) ?? "カードを表示できません").lineLimit(2)
+            if let count = index?.siblingCounts[card.noteID], count > 1 {
+                Text("同じノートから\(count)枚").font(.caption).foregroundStyle(.secondary)
+            }
+            Text((index?.notes[card.noteID]?.kind.title ?? "") + (card.isSuspended ? " · 停止中" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
-
 }
 
 struct NoteDetailView: View {
@@ -145,7 +183,9 @@ struct NoteDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editing = false
     @State private var confirmingDelete = false
-    var item: NoteItem? { store.notes.first { $0.cardID == cardID } }
+    @State private var item: NoteItem?
+    @State private var siblingCount = 0
+    @State private var detailFailure: String?
 
     var body: some View {
         Group {
@@ -173,7 +213,7 @@ struct NoteDetailView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                         Text(LearningStatePresentation(state: item.summary.state).availability(suspended: item.isSuspended, due: item.summary.dueDate, now: store.clock()))
                             .font(.footnote).foregroundStyle(.secondary).accessibilityIdentifier("noteAvailability")
-                        LabeledContent("このノートのカード", value: "\(store.notes.filter { $0.noteID == item.noteID }.count)枚")
+                        LabeledContent("このノートのカード", value: "\(siblingCount)枚")
                         LabeledContent("このカードの延べ回答回数", value: "\(item.summary.repetitions)回")
                         LabeledContent("忘却回数", value: "\(item.summary.lapses)")
                         if item.summary.state != "new" {
@@ -189,12 +229,21 @@ struct NoteDetailView: View {
                 .navigationTitle(item.kind.title)
                 .toolbar { Button("編集") { editing = true }.accessibilityIdentifier("editNote") }
                 .sheet(isPresented: $editing) { NoteEditorView(store: store, item: item) }
-                .confirmationDialog("このノートの\(store.notes.filter { $0.noteID == item.noteID }.count)枚のカードを削除しますか？", isPresented: $confirmingDelete, titleVisibility: .visible) {
+                .confirmationDialog("このノートの\(siblingCount)枚のカードを削除しますか？", isPresented: $confirmingDelete, titleVisibility: .visible) {
                     Button("削除", role: .destructive) {
                         if store.perform({ try store.repository.deleteNote(id: item.noteID) }) { dismiss() }
                     }
                 } message: { Text("同じノートの問題・解答とすべての兄弟カードを削除します。過去の回答履歴は残ります。") }
+            } else if let detailFailure {
+                ContentUnavailableView("カードを読み込めません", systemImage: "exclamationmark.triangle", description: Text(detailFailure))
             } else { ContentUnavailableView("カードがありません", systemImage: "rectangle") }
+        }
+        .task(id: store.dataRevision) {
+            do {
+                let loaded = try store.repository.noteItems(cardID: cardID).first
+                let count = try loaded.map { try store.repository.siblingCardCount(noteID: $0.noteID) } ?? 0
+                item = loaded; siblingCount = count; detailFailure = nil
+            } catch { detailFailure = error.localizedDescription; item = nil }
         }
     }
 }
