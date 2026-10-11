@@ -19,6 +19,7 @@ struct NotePreviewView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     if let variants = try? CardGeneration.variants(kind: input.kind, content: content), !variants.isEmpty {
+                        Text("このノートから\(variants.count)枚の学習カードを作成").accessibilityIdentifier("previewCardCount")
                         Picker("生成カード", selection: $selected) {
                             ForEach(variants, id: \.self) { Text("カード\((variants.firstIndex(of: $0) ?? 0) + 1)").tag($0) }
                         }

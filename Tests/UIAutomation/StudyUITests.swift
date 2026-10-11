@@ -944,3 +944,54 @@ final class StudyUITests: XCTestCase {
         app.buttons["grade-3"].tap()
     }
 }
+
+extension StudyUITests {
+    func testNoteCardCountsReversePreviewJapaneseStateSearchAndDelete() {
+        let app = app()
+        create(app, question: "Counts question", answer: "Counts answer")
+        let total = app.staticTexts["libraryTotalCounts"]
+        XCTAssertTrue(total.waitForExistence(timeout: 5))
+        XCTAssertTrue(total.label.contains("1ノート / 1枚"))
+        app.staticTexts["Counts question"].firstMatch.tap()
+        app.buttons["editNote"].tap()
+        let reverse = app.switches["裏表反転カードも作る"]
+        scrollTo(reverse, app: app)
+        reverse.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        let preview = app.buttons["previewNote"]
+        for _ in 0..<8 {
+            if preview.exists && preview.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(preview.exists && preview.isHittable)
+        XCTAssertEqual(app.staticTexts["generatedCardCount"].label, "このノートから2枚の学習カードを作成")
+        preview.tap()
+        XCTAssertEqual(app.staticTexts["previewCardCount"].label, "このノートから2枚の学習カードを作成")
+        attach(app, "Issue38-generated-count-preview")
+        app.buttons["closePreview"].tap()
+        app.buttons["saveNote"].tap()
+        let state = app.descendants(matching: .any)["noteState"]
+        scrollTo(state, app: app)
+        XCTAssertTrue(app.staticTexts["未学習"].exists || state.label.contains("未学習") || (state.value as? String ?? "").contains("未学習"))
+        let suspension = app.switches["学習を一時停止"]
+        scrollTo(suspension, app: app)
+        suspension.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["noteAvailability"].label.contains("停止中"))
+        attach(app, "Issue38-Japanese-state-and-suspension")
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        scrollTo(total, app: app)
+        XCTAssertTrue(total.label.contains("1ノート / 2枚"))
+        let search = app.searchFields.firstMatch
+        search.tap()
+        search.typeText("Counts question")
+        XCTAssertTrue(app.staticTexts["libraryFilteredCounts"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["libraryFilteredCounts"].label.contains("1ノート / 2枚"))
+        if app.buttons["キャンセル"].exists { app.buttons["キャンセル"].tap() }
+        app.staticTexts["Counts question"].firstMatch.tap()
+        let delete = app.buttons["カードを削除"]
+        scrollTo(delete, app: app)
+        delete.tap()
+        app.buttons["削除"].firstMatch.tap()
+        scrollTo(total, app: app)
+        XCTAssertTrue(total.label.contains("0ノート / 0枚"))
+    }
+}

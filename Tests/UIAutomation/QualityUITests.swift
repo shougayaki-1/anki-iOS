@@ -224,7 +224,7 @@ final class QualityUITests: XCTestCase {
         app.buttons["commitImport"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
         XCTAssertTrue(result.waitForExistence(timeout: 20))
-        XCTAssertFalse(result.label.hasPrefix("成功 0件"))
+        XCTAssertFalse(result.label.contains("処理 0行"))
         XCTAssertTrue(result.label.contains("エラー 0件"))
         app.buttons["closeImport"].tap()
         app.terminate(); app.launch()
@@ -253,7 +253,7 @@ final class QualityUITests: XCTestCase {
         let confirm = app.buttons["confirmImport"]; scrollTo(confirm, app: app); confirm.tap()
         app.buttons["commitImport"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
-        XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("成功 1件"))
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("新規 1ノート"))
         attach(app, name: "Phase5-native-CSV-import")
         app.buttons["closeImport"].tap(); XCTAssertTrue(app.staticTexts["CSV file question"].waitForExistence(timeout: 5))
         app.tabBars.buttons["設定"].tap()
@@ -352,7 +352,7 @@ extension QualityUITests {
         let confirm = app.buttons["confirmImageImport"]
         scrollTo(confirm, app: app); confirm.tap(); app.buttons["確定して保存"].firstMatch.tap()
         let result = app.staticTexts["imageImportResult"]
-        XCTAssertTrue(result.waitForExistence(timeout: 20)); XCTAssertTrue(result.label.contains("成功 100件"))
+        XCTAssertTrue(result.waitForExistence(timeout: 20)); XCTAssertTrue(result.label.contains("新規 100ノート"))
         app.buttons["closeImageImport"].tap(); app.buttons["closeImport"].tap()
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))

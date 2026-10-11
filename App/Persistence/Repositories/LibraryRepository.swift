@@ -177,7 +177,10 @@ extension StudyRepository {
     func importRows(_ rows: [ImportRow], deckID: UUID, kind: NoteKind, tagNames: [String],
                     action: DuplicateAction, resetHistory: Bool = false, source: String, now: Date) throws -> ImportResult {
         var valid: [(ImportRow, NoteInput, Data)] = [], errors: [String] = []
-        var skipped = 0
+        let initialNoteIDs = Set(try notes().map(\.id))
+        var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
+        let excluded = rows.filter { !$0.included }.count
+        var duplicates = 0, skipped = 0
         for row in rows {
             if !row.included { skipped += 1; continue }
             let requestedMode = row.responseMode ?? .mental
@@ -193,7 +196,7 @@ extension StudyRepository {
             var imported = 0
             for (row, input, content) in valid {
                 if let existing = try duplicate(of: input) {
-                    if action == .skip { skipped += 1; continue }
+                    if action == .skip { skipped += 1; duplicates += 1; continue }
                     if action == .update {
                         var merged = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
                         merged.question = input.question; merged.answer = input.answer
@@ -202,8 +205,12 @@ extension StudyRepository {
                         existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
                         if row.responseMode != nil { existing.defaultResponseMode = input.responseMode.rawValue }
                         existing.tagIDs = try tagIDs(for: tagNames)
+                        let existingCards = try cards().filter { $0.noteID == existing.id }
+                        if initialNoteIDs.contains(existing.id) {
+                            updatedNoteIDs.insert(existing.id); maintainedCardIDs.formUnion(existingCards.map(\.id))
+                        }
                         if resetHistory {
-                            for card in try cards().filter({ $0.noteID == existing.id }) {
+                            for card in existingCards {
                                 card.fsrsPayload = fresh; card.dueDate = now; card.updatedAt = now
                             }
                         }
@@ -211,15 +218,18 @@ extension StudyRepository {
                     }
                 }
                 let note = Note(input: input, content: content, now: now)
-                note.tagIDs = try tagIDs(for: tagNames); context.insert(note)
+                note.tagIDs = try tagIDs(for: tagNames); context.insert(note); createdNoteIDs.insert(note.id)
                 let value = try JSONDecoder().decode(TextContent.self, from: content)
                 for key in try CardGeneration.variants(kind: kind, content: value) {
-                    context.insert(StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now))
+                    let card = StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now)
+                    context.insert(card); createdCardIDs.insert(card.id)
                 }
                 imported += 1
             }
             context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))
-            return ImportResult(imported: imported, skipped: skipped, errors: errors)
+            return ImportResult(imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+                                updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
+                                duplicateRows: duplicates, excludedRows: excluded)
         }
     }
 }

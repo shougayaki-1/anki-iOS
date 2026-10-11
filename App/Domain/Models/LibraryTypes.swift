@@ -54,9 +54,19 @@ struct ImportRow: Identifiable, Equatable {
 }
 
 struct ImportResult {
+    // Kept for existing callers: successfully processed rows, not unique notes/cards.
     let imported: Int
     let skipped: Int
     let errors: [String]
+    var createdNotes = 0
+    var updatedNotes = 0
+    var createdCards = 0
+    var maintainedCards = 0
+    var duplicateRows = 0
+    var excludedRows = 0
+    var summary: String {
+        "新規 \(createdNotes)ノート / 更新 \(updatedNotes)ノート\n新規カード \(createdCards)枚 / 維持したカード \(maintainedCards)枚\n処理 \(imported)行 / 重複スキップ \(duplicateRows)行 / 除外 \(excludedRows)行 / エラー \(errors.count)行"
+    }
 }
 
 enum DuplicateAction: String, CaseIterable {
@@ -243,4 +253,33 @@ struct DeckContentsPreview {
     var changedNoteCount: Int { bulk?.changedNotes.count ?? 0 }
     var changedCardCount: Int { bulk?.changedCards.count ?? 0 }
     var canCommit: Bool { changedNoteCount > 0 }
+}
+
+
+struct LearningStatePresentation {
+    let state: String
+    var title: String {
+        switch state {
+        case "new": return "未学習"
+        case "learning": return "学習中"
+        case "review": return "復習待ち"
+        case "relearning": return "再学習中"
+        default: return "状態を確認できません"
+        }
+    }
+    var explanation: String {
+        switch state {
+        case "new": return "まだ自己評価していないカードです。"
+        case "learning": return "初回の短い間隔で覚えている段階です。"
+        case "review": return "長い間隔で定着を確認する段階です。"
+        case "relearning": return "忘れた内容を短い間隔で覚え直している段階です。"
+        default: return "カードの状態を読み込み直してください。"
+        }
+    }
+    func availability(suspended: Bool, due: Date, now: Date) -> String {
+        if suspended { return "停止中のため出題されません。停止を解除しても復習予定は変わりません。" }
+        if state == "new" { return "新規枠・学習対象・同日抑制に従って出題します。" }
+        if due > now { return "次回復習の時刻まで待機します。" }
+        return "復習の期日に達しています。学習モード・対象・同日抑制によっては出題対象外になることがあります。"
+    }
 }

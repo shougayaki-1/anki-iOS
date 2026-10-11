@@ -89,6 +89,9 @@ extension StudyRepository {
 
 extension StudyRepository {
     func importImagePackage(_ package: ImageImportPackage, deckID: UUID, action: DuplicateAction, now: Date) throws -> ImportResult {
+        let initialNoteIDs = Set(try notes().map(\.id))
+        var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
+        var duplicates = 0
         let selected = package.rows.filter { $0.included && $0.error == nil }
         guard try decks().contains(where: { $0.id == deckID }) else { throw StudyError.missingRecord }
         let fresh = try JSONEncoder().encode(ReviewScheduler(desiredRetention: settings().desiredRetention).newCard(now: now))
@@ -125,7 +128,7 @@ extension StudyRepository {
                               let image = known.first(where: { $0.id == content.imageID }) else { return false }
                         return image.sha256 == hash
                     }
-                    if existing != nil && action == .skip { skipped += 1; continue }
+                    if existing != nil && action == .skip { skipped += 1; duplicates += 1; continue }
                     let imageID: UUID
                     if let cached = imageCache[row.imagePath] { imageID = cached }
                     else if let asset = known.first(where: { $0.sha256 == hash }) { imageID = asset.id; imageCache[row.imagePath] = imageID }
@@ -137,19 +140,26 @@ extension StudyRepository {
                                           explanation: row.explanation, tagNames: row.tags, imageID: imageID)
                     let payload = try validate(input)
                     if let existing, action == .update {
+                        if initialNoteIDs.contains(existing.id) {
+                            updatedNoteIDs.insert(existing.id)
+                            maintainedCardIDs.formUnion(try cards().filter { $0.noteID == existing.id }.map(\.id))
+                        }
                         var content = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
                         content.explanation = row.explanation
                         existing.contentPayload = try JSONEncoder().encode(content)
                         existing.tagIDs = try tagIDs(for: row.tags); existing.updatedAt = now
                     } else {
                         let note = Note(input: input, content: payload, now: now)
-                        note.tagIDs = try tagIDs(for: row.tags); context.insert(note); allNotes.append(note)
-                        context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: fresh, now: now))
+                        note.tagIDs = try tagIDs(for: row.tags); context.insert(note); allNotes.append(note); createdNoteIDs.insert(note.id)
+                        let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: fresh, now: now)
+                        context.insert(card); createdCardIDs.insert(card.id)
                     }
                     imported += 1
                 }
                 context.insert(ImportBatch(source: "画像ZIP", now: now, success: imported, skipped: skipped, errors: errors))
-                return ImportResult(imported: imported, skipped: skipped, errors: errors)
+                return ImportResult(imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+                                    updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
+                                    duplicateRows: duplicates, excludedRows: package.rows.filter { !$0.included }.count)
             }
         } catch {
             for path in createdPaths { try? mediaStore.remove(path) }
