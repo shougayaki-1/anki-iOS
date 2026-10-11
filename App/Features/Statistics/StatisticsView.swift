@@ -124,6 +124,10 @@ struct StatisticsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink("復習負荷予測・学習計画") { ReviewForecastView(store: store) }
+                        .accessibilityIdentifier("openReviewForecast")
+                }
                 Section("集計条件") {
                     Picker("デッキ（子孫を含む）", selection: $store.statisticsScope.deckID) {
                         Text("すべてのデッキ").tag(UUID?.none)

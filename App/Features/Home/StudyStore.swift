@@ -28,6 +28,7 @@ final class StudyStore {
     var reviewRefreshFailed = false
     var showingReview = false
     var selectedTab = 0
+    var dataRevision = 0
     var statistics: StudyStatistics?
     var statisticsLoading = false
     var statisticsError: String?
@@ -80,6 +81,7 @@ final class StudyStore {
             statisticsScope.deckID = statisticsScope.deckID.flatMap { id in decks.contains { $0.id == id } ? id : nil }
             statisticsScope.tagIDs.removeAll { id in !tags.contains { $0.id == id } }
             if selectedTab == 2 { refreshStatistics() }
+            dataRevision += 1
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
             scheduleNotifications()

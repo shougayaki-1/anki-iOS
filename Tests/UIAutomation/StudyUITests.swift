@@ -630,6 +630,24 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
     }
 
+    func testForecastPeriodDeckAndAccessibleCountsLeaveLearningUnchanged() {
+        let app = app()
+        create(app, question: "Forecast new", answer: "A")
+        app.tabBars.buttons["記録"].tap()
+        app.buttons["openReviewForecast"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScheduled"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.descendants(matching: .any)["forecastAnswers"].exists)
+        app.segmentedControls["forecastPeriod"].buttons["30日"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScheduled"].waitForExistence(timeout: 15))
+        app.buttons["forecastDeck"].tap(); app.buttons["マイデッキ"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastAnswers"].waitForExistence(timeout: 15))
+        attach(app, "forecast-normal-30-days")
+        app.tabBars.buttons["ホーム"].tap()
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
+    }
+
     func testLibrarySelectionExitSearchAndCancelKeepTargets() {
         let app = app()
         create(app, question: "Selection one", answer: "One")

@@ -1033,3 +1033,75 @@ final class StudyRepositoryTests: XCTestCase {
     }
 
 }
+
+extension StudyRepositoryTests {
+    func testForecastScheduleVersusSimulationDeckQuotaUndoAndReadOnly() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Forecast child", parentID: root, now: now)
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: root, newLimit: 1, retention: 0.9))
+        var settings = try repo.settings(); settings.dailyNewLimit = 3; settings.dailyGoal = 2
+        try repo.updateSettings(settings)
+        for index in 0..<3 {
+            try repo.createNote(NoteInput(deckID: child, question: "Fresh \(index)", answer: "A"), now: now.addingTimeInterval(-Double(index)))
+        }
+        let scheduler = try ReviewScheduler(), past = now.addingTimeInterval(-86400 * 30)
+        for index in 0..<2 {
+            let note = try repo.createNote(NoteInput(deckID: root, question: "Due \(index)", answer: "A"), now: past)
+            let card = try XCTUnwrap(repo.cards().first { $0.noteID == note })
+            let transition = try scheduler.review(repo.snapshot(card), grade: .easy, now: past)
+            let before = card.fsrsPayload, after = try JSONEncoder().encode(transition.after)
+            try repo.transaction {
+                card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+                card.isSuspended = index == 1
+                repo.context.insert(StudyReviewLog(card: card, transition: transition, before: before, after: after,
+                                                 mode: .mental, durationMs: 1000, wasNew: true, sequence: index + 1))
+            }
+        }
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let before = try BackupData.capture(repo).canonical()
+        let report = try ReviewForecast.calculate(data: before, deckID: nil, days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(report.days.count, 7); XCTAssertEqual(report.scheduled, 1)
+        XCTAssertEqual(report.overdue, 1); XCTAssertEqual(report.dailyGoal, 2)
+        XCTAssertEqual(report.days[0].newCards, 1)
+        XCTAssertEqual(report.days.reduce(0) { $0 + $1.newCards }, 3)
+        XCTAssertEqual(report.remainingNew, 0)
+        XCTAssertEqual(report, try ReviewForecast.calculate(data: before, deckID: nil, days: 7, now: now, calendar: calendar))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let scoped = try ReviewForecast.calculate(data: before, deckID: child, days: 30, now: now, calendar: calendar)
+        XCTAssertEqual(scoped.scheduled, 0); XCTAssertEqual(scoped.days[0].newCards, 1)
+        XCTAssertEqual(scoped.days.reduce(0) { $0 + $1.newCards }, 3)
+        try repo.start(mode: .new, now: now); try revealAndGrade(repo, grade: .easy, date: now)
+        let after = try BackupData.capture(repo)
+        let graded = try ReviewForecast.calculate(data: after, deckID: nil, days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(graded.days[0].newCards, 0)
+        try repo.undo(now: now)
+        XCTAssertEqual(try ReviewForecast.calculate(data: BackupData.capture(repo), deckID: nil, days: 7, now: now, calendar: calendar), report)
+        try repo.createNote(NoteInput(deckID: child, question: "Added", answer: "A"), now: now)
+        let added = try ReviewForecast.calculate(data: BackupData.capture(repo), deckID: nil, days: 7, now: now, calendar: calendar)
+        XCTAssertEqual(added.days.reduce(0) { $0 + $1.newCards }, 4)
+    }
+    func testForecastStudyBoundaryDSTTimeZoneSiblingBuryAndSharedGlobalQuota() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "Other", now: now)
+        for index in 0..<3 {
+            try repo.createNote(NoteInput(deckID: root, question: "Sibling \(index)", answer: "A", reverseEnabled: true), now: now)
+        }
+        try repo.createNote(NoteInput(deckID: other, question: "Other new", answer: "A"), now: now.addingTimeInterval(-100))
+        var settings = try repo.settings(); settings.dailyNewLimit = 2; settings.dayStartHour = 2
+        try repo.updateSettings(settings)
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "America/New_York")!
+        let date = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 12))!
+        let data = try BackupData.capture(repo)
+        let report = try ReviewForecast.calculate(data: data, deckID: root, days: 7, now: date, calendar: calendar)
+        XCTAssertEqual(report.days[0].newCards, 1) // The other deck consumes the global first slot.
+        XCTAssertTrue(report.days.contains { $0.end.timeIntervalSince($0.start) == 23 * 3600 })
+        XCTAssertEqual(Set(report.days.map(\.start)).count, 7)
+        let early = calendar.date(from: DateComponents(year: 2026, month: 3, day: 7, hour: 1))!
+        let earlier = try ReviewForecast.calculate(data: data, deckID: nil, days: 7, now: early, calendar: calendar)
+        XCTAssertLessThan(earlier.days[0].start, report.days[0].start)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let tokyo = try ReviewForecast.calculate(data: data, deckID: nil, days: 7, now: date, calendar: calendar)
+        XCTAssertNotEqual(tokyo.days[0].start, report.days[0].start)
+        XCTAssertThrowsError(try ReviewForecast.calculate(data: data, deckID: UUID(), days: 7, now: date, calendar: calendar))
+    }
+}
