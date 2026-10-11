@@ -20,10 +20,10 @@ struct NoteEditorView: View {
     @State private var saveFailure = false
     @State private var saveNext = false
 
-    init(store: StudyStore, item: NoteItem?) {
+    init(store: StudyStore, item: NoteItem?, initialDeckID: UUID? = nil) {
         self.store = store; self.item = item
         _tagText = State(initialValue: item?.tagNames.joined(separator: ", ") ?? "")
-        _input = State(initialValue: NoteInput(deckID: item?.deckID ?? store.decks.first?.id ?? UUID(),
+        _input = State(initialValue: NoteInput(deckID: item?.deckID ?? initialDeckID ?? store.decks.first?.id ?? UUID(),
                                                kind: item?.kind ?? .basic,
                                                question: item?.sourceContent.question ?? "",
                                                answer: item?.sourceContent.answer ?? "",
@@ -147,6 +147,8 @@ struct NoteEditorView: View {
                     TextField("解説", text: $input.explanation, axis: .vertical).lineLimit(2...8)
                 }
             }
+.frame(maxWidth: UIDevice.current.userInterfaceIdiom == .pad ? 820 : .infinity)
+            .frame(maxWidth: .infinity)
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: tagText) { _, value in input.tagNames = value.components(separatedBy: ",") }
             .onChange(of: input) { _, _ in if !committed { persistDraft() } }
@@ -162,9 +164,9 @@ struct NoteEditorView: View {
                         Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
                     }
                 }
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.accessibilityIdentifier("closeEditor").accessibilityHint("入力中の下書きを保持します") }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.keyboardShortcut(.escape, modifiers: []).accessibilityIdentifier("closeEditor").accessibilityHint("入力中の下書きを保持します") }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { requestSave(next: false) }.accessibilityIdentifier("saveNote")
+                    Button("保存") { requestSave(next: false) }.keyboardShortcut("s", modifiers: .command).accessibilityIdentifier("saveNote")
                         .disabled(!canSave)
                 }
             }

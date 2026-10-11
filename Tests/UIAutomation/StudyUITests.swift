@@ -1,6 +1,88 @@
 import XCTest
+import UIKit
 
 final class StudyUITests: XCTestCase {
+    private func iPadFourFormatsInPortraitAndLandscape() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad simulator acceptance") }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-hints"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 20)); app.buttons["start-new"].tap()
+        var seen = Set<String>()
+        for index in 0..<7 {
+            XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+            seen.insert(app.staticTexts["reviewQuestion"].label)
+            XCUIDevice.shared.orientation = index.isMultiple(of: 2) ? .portrait : .landscapeLeft
+            app.buttons["revealAnswer"].tap()
+            XCTAssertTrue(app.buttons["grade-4"].isHittable); app.buttons["grade-4"].tap()
+        }
+        XCTAssertGreaterThanOrEqual(seen.count, 4)
+        XCTAssertTrue(app.buttons["finishReview"].waitForExistence(timeout: 10))
+        app.buttons["finishReview"].tap()
+    }
+
+    func testIPadHierarchyFilterAndAccessibleSidebar() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad simulator acceptance") }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-home-filters"]
+        app.launch()
+        XCTAssertTrue(app.buttons["sidebarTab-1"].waitForExistence(timeout: 20))
+        let expand = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "の子デッキを開閉")).firstMatch
+        XCTAssertTrue(expand.waitForExistence(timeout: 5)); expand.tap()
+        let child = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label ENDSWITH %@", "sidebarDeck-", "Child")).firstMatch
+        XCTAssertTrue(child.waitForExistence(timeout: 5)); child.tap()
+        XCTAssertTrue(app.staticTexts["Both tags"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["Other card"].exists)
+        try app.performAccessibilityAudit(for: .sufficientElementDescription)
+        app.buttons["sidebarTab-1"].tap()
+        XCTAssertTrue(app.staticTexts["Other card"].waitForExistence(timeout: 5))
+        app.terminate()
+        try iPadFourFormatsInPortraitAndLandscape()
+    }
+
+    func testIPadSidebarRotationEditAndStudy() throws {
+        guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad simulator acceptance") }
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-numeric-mask"]
+        app.launch()
+        let library = app.buttons["sidebarTab-1"]
+        XCTAssertTrue(library.waitForExistence(timeout: 20)); library.tap()
+        XCTAssertFalse(app.tabBars.firstMatch.exists)
+        XCTAssertTrue(app.buttons["openOCR"].exists)
+        XCTAssertTrue(app.buttons["openImport"].exists)
+        app.staticTexts["Numeric mask fixture"].tap()
+        app.buttons["editNote"].tap()
+        let question = app.descendants(matching: .any)["questionInput"]
+        XCTAssertTrue(question.waitForExistence(timeout: 10))
+        question.tap(); question.typeText(" iPad edited")
+        app.buttons["saveNote"].tap()
+        XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 10))
+        // Rotate while a pushed detail is present; the shared store must survive.
+        XCUIDevice.shared.orientation = .portrait
+        XCUIDevice.shared.orientation = .landscapeLeft
+        let home = app.buttons["sidebarTab-0"]
+        XCTAssertTrue(home.waitForExistence(timeout: 10)); home.tap()
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        let text = app.staticTexts["reviewQuestion"]
+        XCTAssertTrue(text.label.contains("iPad edited"))
+        XCTAssertLessThanOrEqual(text.frame.width, 760)
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].exists)
+        app.buttons["pauseStudy"].tap()
+        app.buttons["sidebarTab-2"].tap()
+        XCTAssertTrue(app.staticTexts["todayAnswerCount"].waitForExistence(timeout: 10))
+        let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Issue19-iPad-sidebar"
+        image.lifetime = .keepAlways; add(image)
+    }
+
     override func setUp() {
         super.setUp()
         addUIInterruptionMonitor(withDescription: "Dismiss incidental dictation setup") { alert in

@@ -1,15 +1,23 @@
 import XCTest
+import UIKit
 
 final class OperationsUITests: XCTestCase {
+    func tab(_ app: XCUIApplication, _ title: String) -> XCUIElement {
+        if app.tabBars.buttons[title].exists { return app.tabBars.buttons[title] }
+        let index = ["ホーム", "ライブラリ", "記録", "設定"].firstIndex(of: title)!
+        return app.buttons["sidebarTab-\(index)"]
+    }
     func launch() -> XCUIApplication {
+        if UIDevice.current.userInterfaceIdiom == .pad { XCUIDevice.shared.orientation = .landscapeLeft }
+
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 15))
         return app
     }
     func create(_ app: XCUIApplication) {
-        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
+        tab(app, "ライブラリ").tap(); app.buttons["addNote"].tap()
         let question = app.descendants(matching: .any)["questionInput"]
         XCTAssertTrue(question.waitForExistence(timeout: 5)); question.tap(); question.typeText("Backup question")
         let answer = app.descendants(matching: .any)["answerInput"]
@@ -23,6 +31,15 @@ final class OperationsUITests: XCTestCase {
             return element.frame.minY >= top && element.frame.maxY <= app.frame.maxY - 16
         }
         if visible() { return }
+        if UIDevice.current.userInterfaceIdiom == .pad {
+            let lists = (app.collectionViews.allElementsBoundByIndex + app.tables.allElementsBoundByIndex)
+                .filter { $0.isHittable && $0.frame.width > 200 && $0.frame.contains(CGPoint(x: app.frame.midX, y: app.frame.midY)) }
+            if let list = lists.min(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height }) {
+                for _ in 0..<6 { list.swipeDown(); if visible() { return } }
+                for _ in 0..<20 { list.swipeUp(); if visible() { return } }
+                XCTAssertTrue(visible(), "iPad modal control must be visible"); return
+            }
+        }
         for _ in 0..<6 {
             app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.3))
                 .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: 0.75)))
@@ -46,7 +63,7 @@ final class OperationsUITests: XCTestCase {
             return false
         }
         let app = launch(); create(app)
-        app.tabBars.buttons["設定"].tap()
+        tab(app, "設定").tap()
         let toggle = app.switches["notificationToggle"]
         scrollTo(toggle, in: app)
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
@@ -55,10 +72,10 @@ final class OperationsUITests: XCTestCase {
         waitForExpectations(timeout: 10)
         let count = app.staticTexts["notificationCount"]
         XCTAssertTrue(count.waitForExistence(timeout: 10)); XCTAssertTrue(count.label.contains("0件"))
-        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        tab(app, "ホーム").tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-1"].tap(); app.buttons["pauseStudy"].tap()
-        app.tabBars.buttons["設定"].tap(); scrollTo(toggle, in: app)
+        tab(app, "設定").tap(); scrollTo(toggle, in: app)
         let planned = NSPredicate(format: "label CONTAINS %@", "30件")
         expectation(for: planned, evaluatedWith: count)
         waitForExpectations(timeout: 15)
@@ -67,7 +84,7 @@ final class OperationsUITests: XCTestCase {
         expectation(for: NSPredicate(format: "label CONTAINS %@", "0件"), evaluatedWith: count)
         waitForExpectations(timeout: 10)
         app.terminate(); app.launch()
-        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15)); app.tabBars.buttons["設定"].tap()
+        XCTAssertTrue(tab(app, "設定").waitForExistence(timeout: 15)); tab(app, "設定").tap()
         scrollTo(toggle, in: app); XCTAssertEqual(toggle.value as? String, "0")
     }
     func testActualDueNotificationDeliveryAndTapReturnsHome() {
@@ -79,8 +96,8 @@ final class OperationsUITests: XCTestCase {
         let id = UUID().uuidString
         app.launchArguments = ["-study-test-store", id, "-study-test-notification-due"]
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["設定"].tap()
+        XCTAssertTrue(tab(app, "設定").waitForExistence(timeout: 15))
+        tab(app, "設定").tap()
         let toggle = app.switches["notificationToggle"]
         scrollTo(toggle, in: app)
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
@@ -88,7 +105,7 @@ final class OperationsUITests: XCTestCase {
         let count = app.staticTexts["notificationCount"]
         expectation(for: NSPredicate(format: "label CONTAINS %@", "30件"), evaluatedWith: count)
         waitForExpectations(timeout: 15)
-        app.tabBars.buttons["ライブラリ"].tap()
+        tab(app, "ライブラリ").tap()
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         if app.state == .runningForeground { XCUIDevice.shared.press(.home) }
@@ -105,34 +122,34 @@ final class OperationsUITests: XCTestCase {
         guard notification.waitForExistence(timeout: 10) else {
             attach(springboard, name: "notification-delivery-unconfirmed")
             // Cancel only this isolated store's pending notifications on failure.
-            app.activate(); app.tabBars.buttons["設定"].tap(); scrollTo(toggle, in: app)
+            app.activate(); tab(app, "設定").tap(); scrollTo(toggle, in: app)
             if toggle.value as? String == "1" { toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap() }
             XCTFail("期限到来の実通知を特定できませんでした。予約のみで配信成功にはしません。")
             return
         }
         notification.tap()
         XCTAssertTrue(app.buttons["start-review"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.tabBars.buttons["ホーム"].isSelected)
+        XCTAssertTrue(tab(app, "ホーム").isSelected)
         app.buttons["start-review"].tap()
         if app.buttons["復習するへ切り替える"].exists { app.buttons["復習するへ切り替える"].tap() }
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
-        app.tabBars.buttons["設定"].tap(); scrollTo(toggle, in: app)
+        tab(app, "設定").tap(); scrollTo(toggle, in: app)
         toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         expectation(for: NSPredicate(format: "label CONTAINS %@", "0件"), evaluatedWith: count)
         waitForExpectations(timeout: 15)
         app.terminate(); app.launch()
-        XCTAssertTrue(app.tabBars.buttons["設定"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["設定"].tap(); scrollTo(toggle, in: app)
+        XCTAssertTrue(tab(app, "設定").waitForExistence(timeout: 15))
+        tab(app, "設定").tap(); scrollTo(toggle, in: app)
         XCTAssertEqual(toggle.value as? String, "0")
     }
     func testNativeBackupExportAndImportPicker() {
         let app = launch(); create(app)
         let filename = "Study-UITest-\(UUID().uuidString.prefix(12))"
-        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        tab(app, "ホーム").tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
-        app.tabBars.buttons["設定"].tap()
+        tab(app, "設定").tap()
         let open = app.buttons["openBackup"]; scrollTo(open, in: app); open.tap()
         app.buttons["exportBackup"].tap()
         let filenameField = app.textFields.firstMatch
@@ -142,13 +159,15 @@ final class OperationsUITests: XCTestCase {
         filenameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + filename)
         if app.buttons["完了"].exists { app.buttons["完了"].tap() }
         else if app.keyboards.buttons["Done"].exists { app.keyboards.buttons["Done"].tap() }
+        if app.buttons["On My iPad"].exists { app.buttons["On My iPad"].tap() }
+        else if app.buttons["このiPad内"].exists { app.buttons["このiPad内"].tap() }
         let onPhone = app.buttons["On My iPhone"]
         if onPhone.waitForExistence(timeout: 10) { onPhone.tap() }
         else if app.buttons["このiPhone内"].exists { app.buttons["このiPhone内"].tap() }
-        let local = app.cells.matching(NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone"])).firstMatch
-        if local.exists { local.tap() }
-        let folder = app.cells.containing(.staticText, identifier: "暗記ノート").firstMatch
-        if folder.waitForExistence(timeout: 3) { folder.tap() }
+        let local = app.cells.matching(NSPredicate(format: "label IN %@", ["このiPhone内", "On My iPhone", "このiPad内", "On My iPad"])).firstMatch
+        if local.exists && local.isHittable { local.tap() }
+        let folder = app.cells.matching(NSPredicate(format: "identifier == %@", "暗記ノート, Container")).firstMatch
+        if folder.waitForExistence(timeout: 3) && folder.isHittable { folder.tap() }
         let save = app.buttons["Save"]
         if save.exists { save.tap() } else if app.buttons["保存"].exists { app.buttons["保存"].tap() }
         let result = app.staticTexts["backupResult"]
@@ -167,8 +186,8 @@ final class OperationsUITests: XCTestCase {
         XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("復元しました"))
         attach(app, name: "Phase4-backup-restored")
         app.terminate(); app.launch()
-        XCTAssertTrue(app.tabBars.buttons["記録"].waitForExistence(timeout: 15)); app.tabBars.buttons["記録"].tap()
+        XCTAssertTrue(tab(app, "記録").waitForExistence(timeout: 15)); tab(app, "記録").tap()
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
-        app.tabBars.buttons["ライブラリ"].tap(); XCTAssertTrue(app.staticTexts["Backup question"].exists)
+        tab(app, "ライブラリ").tap(); XCTAssertTrue(app.staticTexts["Backup question"].exists)
     }
 }

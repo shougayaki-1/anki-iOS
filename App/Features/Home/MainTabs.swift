@@ -9,14 +9,77 @@ struct MainTabs: View {
     @State private var shortcutDeck: ShortcutDeckDestination?
     @State private var shortcutNotice: String?
 
+    @State private var sidebarDeck: UUID?
+    @State private var expandedDecks = Set<UUID>()
+    @State private var compactColumn = NavigationSplitViewColumn.detail
+
+    private func sidebarButton(_ title: String, icon: String, tab: Int, key: KeyEquivalent) -> some View {
+        Button {
+            sidebarDeck = nil; store.selectedTab = tab; compactColumn = .detail
+        } label: {
+            Label(title, systemImage: icon).frame(maxWidth: .infinity, alignment: .leading)
+        }.keyboardShortcut(key, modifiers: .command)
+            .accessibilityIdentifier("sidebarTab-\(tab)")
+            .accessibilityAddTraits(store.selectedTab == tab && sidebarDeck == nil ? .isSelected : [])
+    }
+
     var body: some View {
-        TabView(selection: $store.selectedTab) {
-            HomeView(store: store).tabItem { Label("ホーム", systemImage: "house") }.tag(0)
-            LibraryView(store: store, shortcutDeck: $shortcutDeck)
-                .tabItem { Label("ライブラリ", systemImage: "books.vertical") }.tag(1)
-            StatisticsView(store: store).tabItem { Label("記録", systemImage: "chart.bar") }.tag(2)
-            SettingsView(store: store, probeContainer: probeContainer)
-                .tabItem { Label("設定", systemImage: "gearshape") }.tag(3)
+        Group {
+            if UIDevice.current.userInterfaceIdiom == .pad {
+                NavigationSplitView(preferredCompactColumn: $compactColumn) {
+                    List {
+                        Section("暗記ノート") {
+                            sidebarButton("ホーム", icon: "house", tab: 0, key: "1")
+                            sidebarButton("ライブラリ", icon: "books.vertical", tab: 1, key: "2")
+                            sidebarButton("記録", icon: "chart.bar", tab: 2, key: "3")
+                            sidebarButton("設定", icon: "gearshape", tab: 3, key: "4")
+                        }
+                        Section("階層デッキ") {
+                            ForEach(DeckTreeBuilder.visibleRows(roots: DeckTreeBuilder.roots(from: store.decks), expanded: expandedDecks)) { row in
+                                HStack(spacing: 4) {
+                                    if row.hasChildren {
+                                        Button { if !expandedDecks.insert(row.id).inserted { expandedDecks.remove(row.id) } } label: {
+                                            Image(systemName: expandedDecks.contains(row.id) ? "chevron.down" : "chevron.right")
+                                                .frame(width: 32, height: 36)
+                                        }.accessibilityLabel("\(row.path)の子デッキを開閉")
+                                    }
+                                    Button {
+                                        sidebarDeck = row.id; store.selectedTab = 1; compactColumn = .detail
+                                    } label: {
+                                        Label(row.name, systemImage: "folder")
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }.accessibilityLabel(row.path)
+                                        .accessibilityIdentifier("sidebarDeck-" + row.id.uuidString)
+                                        .accessibilityAddTraits(sidebarDeck == row.id && store.selectedTab == 1 ? .isSelected : [])
+                                }.padding(.leading, CGFloat(min(row.depth, 6)) * 12)
+                            }
+                        }
+                    }.buttonStyle(.borderless)
+                        .navigationTitle("暗記ノート")
+                        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 340)
+                } detail: {
+                    Group {
+                        switch store.selectedTab {
+                        case 1: LibraryView(store: store, shortcutDeck: $shortcutDeck, deckFilter: sidebarDeck)
+                        case 2: StatisticsView(store: store)
+                        case 3: SettingsView(store: store, probeContainer: probeContainer)
+                        default: HomeView(store: store)
+                        }
+                    }
+                }.navigationSplitViewStyle(.balanced)
+                    // SplitView owns its navigation container. Recreate that container
+                    // when switching root destinations so a pushed note cannot cover Home.
+                    .id("\(store.selectedTab)-\(sidebarDeck?.uuidString ?? "all")")
+            } else {
+                TabView(selection: $store.selectedTab) {
+                    HomeView(store: store).tabItem { Label("ホーム", systemImage: "house") }.tag(0)
+                    LibraryView(store: store, shortcutDeck: $shortcutDeck)
+                        .tabItem { Label("ライブラリ", systemImage: "books.vertical") }.tag(1)
+                    StatisticsView(store: store).tabItem { Label("記録", systemImage: "chart.bar") }.tag(2)
+                    SettingsView(store: store, probeContainer: probeContainer)
+                        .tabItem { Label("設定", systemImage: "gearshape") }.tag(3)
+                }
+            }
         }
         .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
         // One alert presenter avoids two .alert modifiers competing on TabView.
@@ -34,6 +97,9 @@ struct MainTabs: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .studyNotificationOpened)) { _ in
             store.pause(); store.selectedTab = 0
+        }
+        .onChange(of: store.decks.map(\.id)) { _, ids in
+            if let sidebarDeck, !ids.contains(sidebarDeck) { self.sidebarDeck = nil }
         }
         .onChange(of: store.selectedTab) { _, tab in
             if tab == 0 { store.refreshHome() }
@@ -83,6 +149,7 @@ struct MainTabs: View {
             store.refreshHome()
             store.refreshStatistics()
         case let .deck(id):
+            sidebarDeck = nil; compactColumn = .detail
             store.selectedTab = 1
             do { try store.reload() }
             catch {
