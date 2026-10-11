@@ -24,7 +24,7 @@ final class ImportUITests: XCTestCase {
         app.buttons["完了"].tap()
         app.buttons["confirmImport"].tap(); app.buttons["commitImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["importResult"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["importResult"].label.contains("成功 1件"))
+        XCTAssertTrue(app.staticTexts["importResult"].label.contains("新規 1ノート"))
         app.buttons["closeImport"].tap()
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.buttons["toggleHint"].waitForExistence(timeout: 5))
@@ -51,7 +51,7 @@ final class ImportUITests: XCTestCase {
         app.buttons["確定して保存"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
         XCTAssertTrue(result.waitForExistence(timeout: 10))
-        XCTAssertTrue(result.label.contains("成功 2件 / スキップ 1件 / エラー 1件"))
+        XCTAssertTrue(result.label.contains("処理 2行 / 重複スキップ 1行 / 除外 0行 / エラー 1行"))
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Phase2-import-results"
         image.lifetime = .keepAlways; add(image)
         app.buttons["閉じる"].tap()
@@ -118,7 +118,7 @@ final class ImportUITests: XCTestCase {
         app.buttons["確定して保存"].firstMatch.tap()
         let result = app.staticTexts["importResult"]
         XCTAssertTrue(result.waitForExistence(timeout: 15))
-        XCTAssertTrue(result.label.contains("成功 41件 / スキップ 0件 / エラー 0件"))
+        XCTAssertTrue(result.label.contains("処理 41行 / 重複スキップ 0行 / 除外 0行 / エラー 0行"))
         let image = XCTAttachment(screenshot: app.screenshot())
         image.name = "Large-CSV-import-result"; image.lifetime = .keepAlways; add(image)
     }

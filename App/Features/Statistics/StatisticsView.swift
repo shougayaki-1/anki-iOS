@@ -127,6 +127,8 @@ struct StatisticsView: View {
                 Section {
                     NavigationLink("保存したタイピング回答") { TypedAnswerHistoryView(store: store) }
                         .accessibilityIdentifier("typedAnswerHistory")
+                    NavigationLink("復習負荷予測・学習計画") { ReviewForecastView(store: store) }
+                        .accessibilityIdentifier("openReviewForecast")
                 }
                 Section("集計条件") {
                     Picker("デッキ（子孫を含む）", selection: $store.statisticsScope.deckID) {

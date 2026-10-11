@@ -64,7 +64,7 @@ enum SpeechReadout {
         let cleaned = kind == .cloze && side == .question
             ? source.replacingOccurrences(of: #"\[[^\]]*\]"#, with: " ", options: .regularExpression)
             : source
-        let normalized = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = RubyDocument.parse(cleaned).plain.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty, !normalized.contains("{{c"),
               !(kind == .cloze && side == .question && (normalized.contains("[") || normalized.contains("]"))),
               normalized.range(of: #"[A-Za-z]{2,}"#, options: .regularExpression) != nil,

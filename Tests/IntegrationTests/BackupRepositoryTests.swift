@@ -234,4 +234,30 @@ extension BackupRepositoryTests {
         XCTAssertEqual(expired.data.cards.first?.id, backup.data.cards.first?.id)
         XCTAssertEqual(expired.data.cards.first?.fsrsPayload, backup.data.cards.first?.fsrsPayload)
     }
+    func testImageZIPBackupRestoreAndCleanup() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let bytes = UIGraphicsImageRenderer(size: CGSize(width: 40, height: 40)).image { context in
+            UIColor.blue.setStroke(); context.cgContext.strokeEllipse(in: CGRect(x: 5, y: 5, width: 30, height: 30))
+        }.pngData()!
+        let csv = "answer,image\n名称,images/a.png"
+        let package = try ImageImportPackage.read(StoredZIP.write(["cards.csv": Data(csv.utf8), "images/a.png": bytes]))
+        _ = try source.importImagePackage(package, deckID: source.decks()[0].id, action: .add, now: now)
+        try source.start(mode: .new, now: now); try source.updateDraft(revealed: true, now: now); try source.grade(.good, now: now)
+        let backup = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.cards().map(\.id), try source.cards().map(\.id))
+        XCTAssertEqual(try reopened.logs().map(\.id), try source.logs().map(\.id))
+        XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: reopened.assets()[0].id)), bytes)
+        try reopened.undo(now: now)
+        XCTAssertTrue(try reopened.logs().isEmpty)
+        let note = try reopened.notes()[0]
+        try reopened.deleteNote(id: note.id)
+        try reopened.cleanupUnusedMedia()
+        XCTAssertTrue(try reopened.assets().isEmpty)
+    }
 }
