@@ -36,6 +36,23 @@ final class StudyUITests: XCTestCase {
         XCTAssertEqual(app.switches["目標保持率を指定"].value as? String, "1")
         XCTAssertTrue(app.staticTexts["新規上限：20枚／日"].exists)
     }
+
+    func testHomeResponseSettingPersistsAndStartsTyping() {
+        let app = app()
+        create(app, question: "Mode snapshot", answer: "Tokyo")
+        app.tabBars.buttons["ホーム"].tap()
+        app.buttons["openSessionAnswerLimit"].tap()
+        app.buttons["sessionResponseMode"].tap()
+        app.buttons["文字入力"].tap()
+        app.buttons["閉じる"].tap()
+        app.terminate(); app.launch()
+        app.buttons["openSessionAnswerLimit"].tap()
+        XCTAssertTrue(app.buttons["sessionResponseMode"].label.contains("文字入力"))
+        app.buttons["閉じる"].tap()
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.textFields["typedAnswer"].waitForExistence(timeout: 10)
+            || app.textViews["typedAnswer"].exists)
+    }
     func create(_ app: XCUIApplication, question: String, answer: String) {
         app.tabBars.buttons["ライブラリ"].tap()
         let add = app.buttons["addNote"]
@@ -613,6 +630,28 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["optimizationStatus"].label.contains("標準"))
     }
 
+    func testLibrarySelectionExitSearchAndCancelKeepTargets() {
+        let app = app()
+        create(app, question: "Selection one", answer: "One")
+        create(app, question: "Selection two", answer: "Two")
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.buttons["finishLibrarySelection"].tap()
+        XCTAssertFalse(app.buttons["openBulkManagement"].exists)
+        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        app.staticTexts["Selection one"].tap()
+        app.buttons["openBulkManagement"].tap()
+        app.buttons["closeBulkManagement"].tap()
+        XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains("1枚"))
+        let search = app.searchFields.firstMatch
+        search.tap(); search.typeText("two")
+        // iOS 26 hides navigation items while searching; the selection-only action remains visible.
+        XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
+        app.staticTexts["Selection two"].tap()
+        XCTAssertTrue(app.buttons["openBulkManagement"].isEnabled)
+    }
+
     func testBulkSelectionTagsMoveSuspendResumeAndConfirmedDeleteKeepHistory() {
         let app = app()
         create(app, question: "Bulk one", answer: "Answer one")
@@ -625,8 +664,9 @@ final class StudyUITests: XCTestCase {
         app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap(); app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["ライブラリ"].tap()
         func open(all: Bool = true) {
+            app.buttons["libraryActions"].tap()
             app.buttons["selectLibraryCards"].tap()
-            if all { app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
+            if all { app.buttons["選択"].tap(); app.buttons["selectAllLibraryCards"].tap() } else { app.staticTexts["Bulk one"].tap() }
             XCTAssertTrue(app.staticTexts["bulkSelectionCount"].label.contains(all ? "2枚" : "1枚"))
             app.buttons["openBulkManagement"].tap()
         }

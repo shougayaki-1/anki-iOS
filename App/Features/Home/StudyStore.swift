@@ -22,6 +22,7 @@ final class StudyStore {
     @ObservationIgnored private var homeTimeZone: String?
     var settings = StudySettings()
     var sessionAnswerLimit = 20
+    var sessionResponseMode = SessionResponseMode.cardDefault
     var review: ReviewPresentation?
     var failure: String?
     var reviewRefreshFailed = false
@@ -67,6 +68,7 @@ final class StudyStore {
             // never to the review/save/home reload path.
             // Publish together only after all reads succeed.
             self.decks = decks; self.notes = notes; self.tags = tags
+            self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
             self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
             statisticsTask?.cancel()
             statisticsGeneration += 1
@@ -184,6 +186,14 @@ final class StudyStore {
         case .mixed: return counts.due > 0 || counts.newRemaining > 0
         }
     }
+    func changeSessionResponseMode(_ mode: SessionResponseMode) {
+        perform {
+            var saved = try repository.options()
+            saved.sessionResponseMode = mode
+            try repository.updateOptions(saved)
+        }
+    }
+
     func changeSessionAnswerLimit(_ limit: Int) {
         guard [0, 10, 20, 30].contains(limit) else { failure = "回答数を選択し直してください。"; return }
         perform {
