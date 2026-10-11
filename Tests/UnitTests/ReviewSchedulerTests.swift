@@ -188,4 +188,69 @@ final class FSRSOptimizationTests: XCTestCase {
         XCTAssertNotEqual(shortage, stale)
         XCTAssertNotEqual(shortage, invalid)
     }
+
+    func testPresentationReadRecoveryAndActionAvailability() {
+        let report = OptimizationReport(
+            generatedAt: base, digest: String(repeating: "a", count: 64),
+            reviews: 400, days: 30, splitDate: base, parameters: FSRSOptimization.defaults,
+            previousParameters: nil,
+            standard: OptimizationMetrics(count: 80, logLoss: 1, rmse: 0.8),
+            candidate: OptimizationMetrics(count: 80, logLoss: 0.9, rmse: 0.7),
+            previous: nil, duration: 1
+        )
+        var standard = FSRSOptimizationState()
+        standard.report = report
+        var personalized = standard
+        personalized.activeParameters = report.parameters
+        var presentation = FSRSOptimizationPresentation()
+
+        // 9: Unverified state never enables actions, even when a cached report existed.
+        XCTAssertEqual(presentation.statusText, "未確認（再確認してください）")
+        XCTAssertFalse(presentation.canReset(computing: false))
+        XCTAssertFalse(presentation.canApply(report, computing: false))
+        XCTAssertNil(presentation.matchesActiveParameters(nil))
+
+        presentation.didRead(standard)
+        XCTAssertEqual(presentation.statusText, "標準パラメータ")
+        XCTAssertTrue(presentation.canApply(report, computing: false))
+        XCTAssertFalse(presentation.canReset(computing: false))
+        XCTAssertEqual(presentation.matchesActiveParameters(nil), true)
+
+        presentation.successNotice = "直前の成功"
+        // 8: A read failure removes stale success and forbids stale buttons.
+        presentation.readFailed("設定状態を確認できません")
+        XCTAssertNil(presentation.successNotice)
+        XCTAssertNotNil(presentation.readFailure)
+        XCTAssertEqual(presentation.statusText, "未確認（再確認してください）")
+        XCTAssertFalse(presentation.canApply(report, computing: false))
+        XCTAssertFalse(presentation.canReset(computing: false))
+
+        // 7: Retry succeeds, clears the read error and restores verified controls.
+        presentation.didRead(personalized)
+        XCTAssertNil(presentation.readFailure)
+        XCTAssertEqual(presentation.statusText, "個人パラメータ")
+        XCTAssertTrue(presentation.canReset(computing: false))
+        XCTAssertFalse(presentation.canApply(report, computing: false))
+        XCTAssertEqual(presentation.matchesActiveParameters(report.parameters), true)
+    }
+
+    func testPersistenceOutcomeCoversApplyResetAndReportPaths() {
+        typealias Outcome = FSRSOptimizationPersistenceOutcome
+        // 1 & 5: Saved, target verified, home updated.
+        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: true,
+                                        confirmedMatch: true), .completed)
+        // 2 & 6 & 10: Saved and verified, home update failed.
+        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
+                                        confirmedMatch: true), .savedHomeReloadFailed)
+        // 3: Saved but optimization readback failed.
+        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: false,
+                                        confirmedMatch: nil), .unverified)
+        // 4: Write itself failed, state could be read.
+        XCTAssertEqual(Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
+                                        confirmedMatch: false), .saveFailed)
+        XCTAssertEqual(Outcome.classify(repositorySucceeded: true, homeReloadSucceeded: true,
+                                        confirmedMatch: false), .mismatch)
+        XCTAssertEqual(Outcome.classify(repositorySucceeded: false, homeReloadSucceeded: false,
+                                        confirmedMatch: nil), .unverified)
+    }
 }
