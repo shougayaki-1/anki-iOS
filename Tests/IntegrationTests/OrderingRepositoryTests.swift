@@ -200,3 +200,31 @@ final class OrderingRepositoryTests: XCTestCase {
         return (card.id, card.fsrsPayload, log.id)
     }
 }
+
+extension OrderingRepositoryTests {
+    func testV4ToV5MigrationKeepsUUIDFSRSLogsAndPendingTypedDraft() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("Study.store"), expected = try makeTypedHistoryV4(url)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+        try repo.initialize(now: now)
+        XCTAssertEqual(try repo.cards().first?.id, expected.0)
+        XCTAssertEqual(try repo.cards().first?.fsrsPayload, expected.1)
+        XCTAssertEqual(try repo.logs().first?.id, expected.2)
+        XCTAssertEqual(try repo.session()?.typedDraft, "Legacy private draft")
+        XCTAssertNil(try repo.options().typedAnswerPolicy)
+        XCTAssertTrue(try repo.savedTypedAnswers(now: now).isEmpty)
+    }
+    private func makeTypedHistoryV4(_ url: URL) throws -> (UUID, Data, UUID) {
+        let schema = Schema(versionedSchema: StudySchemaV4.self)
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration("Study", schema: schema, url: url, cloudKitDatabase: .none)])
+        let repo = StudyRepository(container: container); try repo.initialize(now: now)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Legacy", answer: "Answer", responseMode: .typing), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(text: "Old evaluation", revealed: true, now: now)
+        try repo.grade(.good, now: now)
+        let card = try XCTUnwrap(repo.cards().first), log = try XCTUnwrap(repo.logs().first)
+        try repo.transaction { try repo.session()?.typedDraft = "Legacy private draft" }
+        return (card.id, card.fsrsPayload, log.id)
+    }
+}

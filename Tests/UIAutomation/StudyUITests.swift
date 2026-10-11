@@ -944,3 +944,37 @@ final class StudyUITests: XCTestCase {
         app.buttons["grade-3"].tap()
     }
 }
+
+extension StudyUITests {
+    func testOptionalTypedAnswerHistorySettingsSnapshotRestartAndUndo() {
+        let app = app()
+        create(app, question: "History question", answer: "Stored model answer")
+        create(app, question: "Next history question", answer: "Next model answer")
+        app.tabBars.buttons["設定"].tap()
+        let setting = app.buttons["typedAnswerSettings"]
+        scrollTo(setting, app: app); setting.tap()
+        let toggle = app.switches["typedAnswerSaveToggle"]
+        XCTAssertTrue(toggle.waitForExistence(timeout: 5)); XCTAssertEqual(toggle.value as? String, "0")
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        XCTAssertEqual(toggle.value as? String, "1")
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
+        app.segmentedControls.buttons["文字入力"].tap()
+        let input = app.descendants(matching: .any)["typedAnswer"]
+        XCTAssertTrue(input.waitForExistence(timeout: 5)); input.tap(); input.typeText("Private answer")
+        if app.buttons["完了"].exists { app.buttons["完了"].tap() }
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap(); app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap(); app.buttons["typedAnswerHistory"].tap()
+        XCTAssertTrue(app.staticTexts["Private answer"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Stored model answer"].exists)
+        attach(app, "Issue10-saved-typed-answer")
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["記録"].waitForExistence(timeout: 15)); app.tabBars.buttons["記録"].tap()
+        app.buttons["typedAnswerHistory"].tap()
+        XCTAssertTrue(app.staticTexts["Private answer"].waitForExistence(timeout: 10))
+        app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap(); app.buttons["undoReview"].tap(); app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap()
+        if app.buttons["typedAnswerHistory"].exists { app.buttons["typedAnswerHistory"].tap() }
+        XCTAssertTrue(app.descendants(matching: .any)["typedAnswerHistoryEmpty"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["Private answer"].exists)
+    }
+}

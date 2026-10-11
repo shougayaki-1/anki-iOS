@@ -14,6 +14,7 @@ struct StudyOptions: Codable, Equatable {
     var homeScope: LearningScope? = nil
     var reviewAppearance: ReviewAppearance? = nil
     var speech: SpeechPreferences? = nil
+    var typedAnswerPolicy: TypedAnswerPolicy? = nil
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil
@@ -243,4 +244,20 @@ struct DeckContentsPreview {
     var changedNoteCount: Int { bulk?.changedNotes.count ?? 0 }
     var changedCardCount: Int { bulk?.changedCards.count ?? 0 }
     var canCommit: Bool { changedNoteCount > 0 }
+}
+
+struct TypedAnswerPolicy: Codable, Equatable {
+    var enabled = false
+    // 0 explicitly means until manually deleted; default is 30 days.
+    var retentionDays = 30
+    static let supportedDays = [7, 30, 90, 0]
+}
+struct TypedAnswerRecord: Codable, Equatable, Sendable, Identifiable {
+    let id: UUID
+    let cardID: UUID
+    let reviewedAt: Date
+    let grade: Int
+    let question: String
+    let answer: String
+    let modelAnswer: String
 }

@@ -124,6 +124,10 @@ struct StatisticsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink("保存したタイピング回答") { TypedAnswerHistoryView(store: store) }
+                        .accessibilityIdentifier("typedAnswerHistory")
+                }
                 Section("集計条件") {
                     Picker("デッキ（子孫を含む）", selection: $store.statisticsScope.deckID) {
                         Text("すべてのデッキ").tag(UUID?.none)
@@ -234,5 +238,96 @@ struct StatisticsView: View {
             }
             .onChange(of: store.statisticsScope) { _, _ in store.refreshStatistics() }
         }
+    }
+}
+
+
+struct TypedAnswerSettingsView: View {
+    @Bindable var store: StudyStore
+    @State private var policy = TypedAnswerPolicy()
+    @State private var failure: String?
+    @State private var confirming = false
+    var body: some View {
+        Form {
+            Section("タイピング回答の保存") {
+                Toggle("評価時の回答本文を保存", isOn: Binding(get: { policy.enabled }, set: { value in save { $0.enabled = value } }))
+                    .accessibilityIdentifier("typedAnswerSaveToggle")
+                Picker("保存期間", selection: Binding(get: { policy.retentionDays }, set: { value in save { $0.retentionDays = value } })) {
+                    Text("7日").tag(7); Text("30日").tag(30); Text("90日").tag(90); Text("手動削除まで").tag(0)
+                }.accessibilityIdentifier("typedAnswerRetention")
+                Text("初期値はOFFです。ONの間に文字入力方式で自己評価した回答だけを、問題・模範解答・評価・時刻と一緒に保存します。AI採点は行いません。")
+                Text("端末内のみで保存し、外部送信しません。完全バックアップには回答本文も含まれます。通常のライブラリ検索には含めません。")
+                Text("期間を過ぎた回答は起動・評価・履歴表示・バックアップ時に削除します。期間を短くすると古い回答を削除します。OFFにしても保存済みの回答は期間まで残ります。")
+            }
+            Section {
+                NavigationLink("保存したタイピング回答") { TypedAnswerHistoryView(store: store) }
+                Button("保存した回答本文をすべて削除", role: .destructive) { confirming = true }
+                    .accessibilityIdentifier("deleteAllTypedAnswers")
+                Text("本文の削除ではFSRS・回答回数・復習予定は変わりません。書き出したバックアップには過去の本文が残るため、必要ならそのファイルも削除してください。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("回答の保存設定")
+        .task { do { policy = try store.repository.options().typedAnswerPolicy ?? TypedAnswerPolicy() } catch { failure = error.localizedDescription } }
+        .confirmationDialog("保存した回答本文をすべて削除しますか？", isPresented: $confirming, titleVisibility: .visible) {
+            Button("本文をすべて削除", role: .destructive) {
+                do { try store.repository.deleteTypedAnswers() } catch { failure = error.localizedDescription }
+            }
+        }
+        .alert("保存できませんでした", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("閉じる", role: .cancel) { failure = nil }
+        } message: { Text(failure ?? "") }
+    }
+    private func save(_ change: (inout TypedAnswerPolicy) -> Void) {
+        var value = policy; change(&value)
+        do { try store.repository.updateTypedAnswerPolicy(value, now: store.clock()); policy = value }
+        catch { failure = error.localizedDescription }
+    }
+}
+
+struct TypedAnswerHistoryView: View {
+    @Bindable var store: StudyStore
+    @State private var answers: [TypedAnswerRecord] = []
+    @State private var search = ""
+    @State private var failure: String?
+    private var filtered: [TypedAnswerRecord] {
+        search.isEmpty ? answers : answers.filter { [$0.question, $0.answer, $0.modelAnswer].contains { $0.localizedStandardContains(search) } }
+    }
+    var body: some View {
+        List {
+            Section {
+                Text("回答時点の問題・模範解答です。後のカード編集や削除では変わりません。本文を削除してもFSRSと評価履歴は保持します。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                NavigationLink("回答の保存設定") { TypedAnswerSettingsView(store: store) }
+            }
+            if filtered.isEmpty {
+                ContentUnavailableView("保存した回答がありません", systemImage: "text.bubble",
+                                       description: Text("設定をONにした後のタイピング回答を表示します。"))
+                    .accessibilityIdentifier("typedAnswerHistoryEmpty")
+            }
+            ForEach(filtered) { answer in
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(answer.question).font(.headline)
+                    Text(answer.reviewedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("自己評価: " + (ReviewGrade(rawValue: answer.grade).map { String(describing: $0).capitalized } ?? ""))
+                    Text("自分の回答").font(.caption).foregroundStyle(.secondary)
+                    Text(answer.answer.isEmpty ? "（未入力）" : answer.answer).accessibilityIdentifier("savedTypedAnswer-" + answer.id.uuidString)
+                    Text("模範解答").font(.caption).foregroundStyle(.secondary)
+                    Text(answer.modelAnswer).accessibilityIdentifier("savedModelAnswer-" + answer.id.uuidString)
+                }.textSelection(.enabled)
+            }
+            .onDelete { offsets in
+                let ids = Set(offsets.map { filtered[$0].id })
+                do { try store.repository.deleteTypedAnswers(ids: ids); answers.removeAll { ids.contains($0.id) } }
+                catch { failure = error.localizedDescription }
+            }
+        }
+        .navigationTitle("タイピング回答")
+        .searchable(text: $search, prompt: "保存した問題・回答・模範解答を検索")
+        .task { do { answers = try store.repository.savedTypedAnswers(now: store.clock()) } catch { failure = error.localizedDescription } }
+        .alert("履歴を読み込めませんでした", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("閉じる", role: .cancel) { failure = nil }
+        } message: { Text(failure ?? "") }
     }
 }

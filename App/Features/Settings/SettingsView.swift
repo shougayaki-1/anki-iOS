@@ -27,6 +27,10 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
                 StudySettingsSection(store: store)
+                Section("タイピング回答") {
+                    NavigationLink("回答の保存設定") { TypedAnswerSettingsView(store: store) }
+                        .accessibilityIdentifier("typedAnswerSettings")
+                }
                 Section {
                     Toggle("同じノートの兄弟カードを同日抑制", isOn: Binding(
                         get: { store.settings.siblingBuryEnabled }, set: { value in update { $0.siblingBuryEnabled = value } }

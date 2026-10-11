@@ -88,3 +88,44 @@ extension StudyRepository {
                                          calendar: calendar, startHour: try settings().dayStartHour)
     }
 }
+
+extension StudyRepository {
+    func savedTypedAnswerModels() throws -> [SavedTypedAnswer] {
+        try context.fetch(FetchDescriptor<SavedTypedAnswer>(sortBy: [SortDescriptor(\.reviewedAt, order: .reverse)]))
+    }
+    func savedTypedAnswers(now: Date) throws -> [TypedAnswerRecord] {
+        try pruneTypedAnswers(now: now)
+        return try savedTypedAnswerModels().map { try JSONDecoder().decode(TypedAnswerRecord.self, from: $0.payload) }
+    }
+    func pruneTypedAnswersInTransaction(now: Date) throws {
+        guard let policy = try options().typedAnswerPolicy else { return }
+        let days = policy.retentionDays
+        guard TypedAnswerPolicy.supportedDays.contains(days) else { throw StudyError.invalidContent }
+        guard days > 0 else { return }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        let expired = try context.fetch(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.reviewedAt < cutoff }))
+        for row in expired { context.delete(row) }
+    }
+    func pruneTypedAnswers(now: Date) throws {
+        guard let policy = try options().typedAnswerPolicy else { return }
+        let days = policy.retentionDays
+        guard days > 0 else { return }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        let count = try context.fetchCount(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.reviewedAt < cutoff }))
+        if count > 0 { try transaction { try pruneTypedAnswersInTransaction(now: now) } }
+    }
+    func updateTypedAnswerPolicy(_ policy: TypedAnswerPolicy, now: Date) throws {
+        guard TypedAnswerPolicy.supportedDays.contains(policy.retentionDays) else { throw StudyError.invalidContent }
+        try transaction {
+            var value = try options(); value.typedAnswerPolicy = policy
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first { row.payload = try JSONEncoder().encode(value) }
+            else { context.insert(try ExtraPreferences(options: value)) }
+            try pruneTypedAnswersInTransaction(now: now)
+        }
+    }
+    func deleteTypedAnswers(ids: Set<UUID>? = nil) throws {
+        try transaction {
+            for row in try savedTypedAnswerModels() where ids == nil || ids!.contains(row.id) { context.delete(row) }
+        }
+    }
+}
