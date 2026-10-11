@@ -205,13 +205,17 @@ struct HomeView: View {
                         HStack {
                             Text("学習設定")
                             Spacer()
-                            Text("\(store.sessionResponseMode.title)・" + (store.sessionAnswerLimit == 0 ? "上限なし" : "\(store.sessionAnswerLimit)問"))
+                            Text(HomeStudyPresentation.sessionSummary(answerLimit: store.sessionAnswerLimit, responseMode: store.sessionResponseMode))
+                                .fixedSize(horizontal: false, vertical: true)
                                 .foregroundStyle(Color("SecondaryText"))
                             Image(systemName: "chevron.down").font(.caption)
                         }
                     }
                     .accessibilityIdentifier("openSessionAnswerLimit")
                     .accessibilityHint("次の学習セッションの回答形式と回答数を選びます")
+                }
+                if store.homeFailure == nil {
+                    DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
                 }
                 if let error = store.homeFailure {
                     Section {
@@ -232,7 +236,6 @@ struct HomeView: View {
                 }
                 if store.homeFailure == nil {
                     OtherStudyModesSection(store: store, start: start)
-                    DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
                 }
                 if store.homeFailure == nil && store.hasCards && !store.canStart(.mixed) {
                     Section {
@@ -284,7 +287,7 @@ struct HomeView: View {
                         }
                     }
                 }
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
             }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
             .sheet(isPresented: $showingHelp) {
@@ -292,6 +295,10 @@ struct HomeView: View {
                     List {
                         ForEach(StudyMode.allCases) { mode in
                             Section(mode.title) { Text(mode.explanation) }
+                        }
+                        Section("1回の学習") {
+                            Text(HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
+                            Text("学習設定は次に開始する学習に適用します。中断中の学習は開始時の設定と残り回答数を保持します。今日の学習はユニークカード枚数で、回答回数とは別です。")
                         }
                         Section { Text("新規学習の短期復習も同じセッションで出題します。復習＋新規は復習3枚に新規1枚を基本に組み合わせます。新規枠は全デッキ・全モード共通です。") }
                     }.navigationTitle("学習モード")
@@ -379,10 +386,8 @@ struct ReviewHeroSection: View {
                 case let .start(mode, count):
                     Text(mode == .review ? "復習できるカード" : "新しく学べるカード").font(.headline)
                     Text("\(count)枚").font(.largeTitle.bold())
-                        .accessibilityIdentifier(mode == .review ? "dueCount" : "primaryNewCount")
+                        .accessibilityIdentifier(mode == .review ? "dueCount" : "newCount")
                         .accessibilityLabel(HomeStudyPresentation.cardPool(mode: mode, count: count))
-                    Text(HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
-                        .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 case .addCards:
                     Text("最初のカードを登録しましょう。").font(.headline)
                 case .unavailable:
@@ -395,7 +400,7 @@ struct ReviewHeroSection: View {
                 }
                 if executable {
                     Button(action: execute) {
-                        Text(action.buttonTitle(answerLimit: store.sessionAnswerLimit)).font(.headline)
+                        Text(action.title).font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, minHeight: 56)
                     }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
@@ -419,22 +424,23 @@ struct OtherStudyModesSection: View {
                 Button { start(mode) } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {
-                            Text((store.review == nil ? "" : "新しい学習：") + HomeStudyPresentation.startTitle(mode: mode, answerLimit: store.sessionAnswerLimit)).font(.headline)
+                            Text(mode.title).font(.headline)
                                 .foregroundStyle(Color.primary).fixedSize(horizontal: false, vertical: true)
                             Spacer()
                             Image(systemName: "chevron.right").font(.caption)
                         }
                         Text(HomeStudyPresentation.cardPool(mode: mode, count: store.homeCardCount(mode)))
                             .font(.subheadline).foregroundStyle(Color("SecondaryText"))
-                        Text(HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
-                            .font(.footnote).foregroundStyle(Color("SecondaryText"))
+                            .accessibilityIdentifier(mode == .new ? "newCount" : "pool-\(mode.rawValue)")
                     }.padding(.vertical, 6)
                 }.accessibilityIdentifier("start-\(mode.rawValue)").disabled(!store.canStart(mode))
                     .accessibilityLabel((store.review == nil ? "" : "新しい学習：") + HomeStudyPresentation.startTitle(mode: mode, answerLimit: store.sessionAnswerLimit) + "。" + HomeStudyPresentation.cardPool(mode: mode, count: store.homeCardCount(mode)))
                     .accessibilityHint((mode == .new ? store.newAvailabilityMessage : store.mixedAvailabilityMessage) + HomeStudyPresentation.explanation(answerLimit: store.sessionAnswerLimit))
                 if mode == .new {
-                    Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(Color("SecondaryText"))
-                        .accessibilityIdentifier("newAvailabilityMessage")
+                    if store.counts.newRemaining == 0 {
+                        Text(store.newAvailabilityMessage).font(.footnote).foregroundStyle(Color("SecondaryText"))
+                            .accessibilityIdentifier("newAvailabilityMessage")
+                    }
                     if store.isNewLimitReached {
                         Text(store.newLimitRemainingMessage).font(.footnote)
                             .fixedSize(horizontal: false, vertical: true)
@@ -444,8 +450,7 @@ struct OtherStudyModesSection: View {
                     }
                 }
             }
-            Text("今日学べる新規カード: \(store.counts.newRemaining)枚").accessibilityIdentifier("newCount")
-        } header: { Text(store.review == nil ? "ほかの学習" : "別の学習を開始").foregroundStyle(Color("SecondaryText")) }
+        } header: { Text("学習を始める").foregroundStyle(Color("SecondaryText")) }
     }
 }
 
@@ -454,14 +459,13 @@ struct DailyProgressSection: View {
     let goal: Int?
     var body: some View {
         Section {
-            if let goal {
+            if let goal, goal > 0 {
                 ProgressView(value: Double(min(goal, count)), total: Double(goal)) {
-                    Text("\(count) / \(goal)枚")
+                    Text(HomeStudyPresentation.dailyProgress(count: count, goal: goal))
                 }.accessibilityIdentifier("goalProgress")
                     .accessibilityLabel("今日の学習、全デッキ、ユニークカード")
                     .accessibilityValue("\(count)枚、目標\(goal)枚")
-                if count >= goal { Text("目標達成！引き続き学習できます。") }
-            } else { Text("今日の学習: \(count)枚") }
+            } else { Text(HomeStudyPresentation.dailyProgress(count: count, goal: nil)) }
         } header: { Text("今日の学習（全デッキ）").foregroundStyle(Color("SecondaryText")) }
     }
 }

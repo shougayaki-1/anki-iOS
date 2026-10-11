@@ -2,6 +2,18 @@ import XCTest
 @testable import AnkiIOS
 
 final class ReviewQueueTests: XCTestCase {
+    func testCompactHomeProgressAndSharedConditions() {
+        XCTAssertEqual(HomeStudyPresentation.dailyProgress(count: 25, goal: 20), "25枚・目標20枚 達成")
+        XCTAssertEqual(HomeStudyPresentation.dailyProgress(count: 12, goal: 20), "12 / 20枚")
+        XCTAssertEqual(HomeStudyPresentation.dailyProgress(count: 0, goal: nil), "0枚")
+        XCTAssertEqual(HomeStudyPresentation.dailyProgress(count: 25, goal: 0), "25枚")
+        for limit in [10, 20, 30, 0] {
+            let summary = HomeStudyPresentation.sessionSummary(answerLimit: limit, responseMode: SessionResponseMode.allCases[0])
+            XCTAssertTrue(summary.contains(limit == 0 ? "回答上限なし" : "最大\(limit)回答"))
+            XCTAssertFalse(summary.contains("枚"))
+        }
+    }
+
     func testHomeLabelsSeparateAnswerLimitFromCardPoolForEveryMode() {
         for mode in StudyMode.allCases {
             for limit in [10, 20, 30, 0] {

@@ -704,3 +704,83 @@ extension LibraryRepositoryTests {
         XCTAssertNil(try repo.optimizationState().activeParameters)
     }
 }
+
+extension LibraryRepositoryTests {
+    func testLibraryIndexScopesSearchVariantsAndRefreshesCommittedChanges() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "日本語", parentID: root, now: now)
+        let other = try repo.createDeck(name: "別", now: now)
+        let note = try repo.createNote(NoteInput(deckID: child, question: "東京", answer: "首都", tagNames: ["地理"], reverseEnabled: true), now: now)
+        let cloze = try repo.createNote(NoteInput(deckID: root, kind: .cloze, question: "{{c1::赤}} と {{c2::青}}"), now: now)
+        let hidden = try repo.createNote(NoteInput(deckID: other, question: "hidden", answer: "A"), now: now)
+        let original = try repo.noteItems()
+        let reader = LibraryReader(container: container)
+        let metadata = try await reader.load(revision: 1)
+        XCTAssertEqual(metadata.noteCount, 3); XCTAssertEqual(metadata.cardCount, 5)
+        XCTAssertEqual(metadata.siblingCounts[note], 2); XCTAssertEqual(metadata.siblingCounts[cloze], 2)
+        XCTAssertTrue(metadata.notes.values.allSatisfy { $0.content == nil })
+        let allowed = try repo.descendants(of: root)
+        let scoped = try await reader.search("", revision: 1, deckIDs: allowed)
+        XCTAssertEqual(scoped.noteCount, 2); XCTAssertEqual(scoped.cardCount, 4)
+        let loaded = try await reader.load(revision: 1)
+        XCTAssertNil(loaded.notes[hidden]?.content, "Hidden decks must not load content")
+        for card in scoped.cardsByDeck.values.joined() {
+            let expected = try XCTUnwrap(original.first { $0.cardID == card.id })
+            XCTAssertEqual(try loaded.displayed(card).question, expected.content.question)
+            XCTAssertEqual(try loaded.displayed(card).answer, expected.content.answer)
+        }
+        let byTag = try await reader.search("地理", revision: 1, deckIDs: allowed)
+        XCTAssertEqual(byTag.cardCount, 2)
+        let noMatch = try await reader.search("missing", revision: 1, deckIDs: allowed)
+        XCTAssertEqual(noMatch.cardCount, 0)
+        let reverse = try await reader.search("首都", revision: 1, deckIDs: [child])
+        XCTAssertEqual(reverse.cardCount, 2)
+        let selected = Set(original.filter { $0.noteID == note }.map(\.cardID))
+        let before = original.filter { $0.noteID == note }.map { ($0.cardID, $0.summary) }
+        _ = try repo.applyBulkEdit(repo.previewBulkEdit(cardIDs: selected, action: .move(other)), now: now)
+        let afterMove = try await reader.search("地理", revision: 2, deckIDs: [other])
+        XCTAssertEqual(afterMove.cardIDs, selected)
+        for (id, summary) in before {
+            let detail = try XCTUnwrap(repo.noteItems(cardID: id).first)
+            XCTAssertEqual(detail.deckID, other)
+            XCTAssertEqual(detail.summary, summary)
+        }
+        try repo.deleteNote(id: note)
+        let afterDelete = try await reader.search("地理", revision: 3, deckIDs: nil)
+        XCTAssertEqual(afterDelete.cardCount, 0)
+        let final = try await reader.load(revision: 3)
+        XCTAssertEqual(final.cardCount, 3); XCTAssertEqual(final.noteCount, 2)
+    }
+
+    func testLibraryHiddenPayloadAndUnrelatedFSRSDoNotBlockScopedReadOrDetail() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "非表示", now: now)
+        let visible = try repo.createNote(NoteInput(deckID: root, question: "Q", answer: "A"), now: now)
+        let hidden = try repo.createNote(NoteInput(deckID: other, question: "hidden", answer: "A"), now: now)
+        try repo.transaction {
+            try repo.notes().first { $0.id == hidden }?.contentPayload = Data("invalid".utf8)
+            try repo.cards().first { $0.noteID == hidden }?.fsrsPayload = Data("invalid".utf8)
+        }
+        let reader = LibraryReader(container: container)
+        let scope = try await reader.search("Q", revision: 1, deckIDs: [root])
+        XCTAssertEqual(scope.cardCount, 1)
+        let cardID = try XCTUnwrap(scope.cardIDs.first)
+        let detail = try XCTUnwrap(repo.noteItems(cardID: cardID).first)
+        XCTAssertEqual(detail.noteID, visible); XCTAssertEqual(detail.content.question, "Q")
+        XCTAssertEqual(try repo.siblingCardCount(noteID: visible), 1)
+        XCTAssertFalse(try repo.hasReviewedSibling(noteID: visible))
+        do {
+            _ = try await reader.search("", revision: 1, deckIDs: [other])
+            XCTFail("Requested corrupt content must be reported")
+        } catch { }
+        // Readers must not repair/delete data or write anything.
+        XCTAssertEqual(try repo.notes().count, 2); XCTAssertEqual(try repo.cards().count, 2)
+        XCTAssertEqual(try repo.notes().first { $0.id == hidden }?.contentPayload, Data("invalid".utf8))
+    }
+}

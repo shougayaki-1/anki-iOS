@@ -12,7 +12,14 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(review.label.contains("最大20問"))
         XCTAssertTrue(review.label.contains("復習できるカード：1枚"))
         XCTAssertLessThan(review.frame.maxY, app.tabBars.firstMatch.frame.minY)
-        attach(app, "Issue88-review-answer-limit-and-card-pool")
+        let progress = app.staticTexts["今日の学習（全デッキ）"]
+        XCTAssertTrue(progress.exists)
+        XCTAssertLessThan(progress.frame.minY, review.frame.minY)
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "同じカードへの再回答も数えます")).count, 0)
+        app.buttons["学習モードの説明"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "同じカードへの再回答も数えます")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["閉じる"].tap()
+        attach(app, "Issue110-compact-home-progress-and-review")
         review.tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
     }
@@ -701,7 +708,7 @@ final class StudyUITests: XCTestCase {
             app.switches["studyTag-\(tag)"].coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         }
         app.buttons["applyStudyFilter"].tap()
-        XCTAssertTrue(app.staticTexts["primaryNewCount"].label.contains("1枚"))
+        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
         XCTAssertFalse(app.buttons["start-review"].isEnabled)
         scrollTo(app.buttons["start-mixed"], app: app); app.buttons["start-mixed"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 5))

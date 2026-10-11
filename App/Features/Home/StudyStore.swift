@@ -10,7 +10,7 @@ final class StudyStore {
     var scope = LearningScope()
     var tags: [TagItem] = []
     var decks: [DeckItem] = []
-    var notes: [NoteItem] = []
+    @ObservationIgnored var libraryReader: LibraryReader
     var counts = HomeCounts()
     var globalCounts = HomeCounts()
     var nextShortDue: Date?
@@ -49,6 +49,7 @@ final class StudyStore {
         self.widgetSnapshots = widgetSnapshots
         repository = StudyRepository(container: container, mediaStore: mediaStore)
         statisticsReader = StatisticsReader(container: container)
+        libraryReader = LibraryReader(container: container)
         self.clock = clock
         self.storageLocation = storageLocation
         self.notifications = notifications ?? NotificationService()
@@ -62,8 +63,9 @@ final class StudyStore {
             repository.calendar = .current
             let now = clock()
             let snapshot = try repository.homeSnapshot(now: now)
-            let decks = try repository.decks().map { DeckItem(id: $0.id, name: try repository.deckPath($0.id), shortName: $0.name, parentID: $0.parentID) }
-            let notes = try repository.noteItems()
+            let deckModels = try repository.decks()
+            let paths = LibraryIndex.deckPaths(deckModels)
+            let decks = deckModels.map { DeckItem(id: $0.id, name: paths[$0.id] ?? $0.name, shortName: $0.name, parentID: $0.parentID) }
             let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
             let settings = try repository.settings()
             let answerLimit = try repository.options().sessionAnswerLimit ?? 20
@@ -71,7 +73,7 @@ final class StudyStore {
             // History scans and FSRS predictions belong to the statistics actor,
             // never to the review/save/home reload path.
             // Publish together only after all reads succeed.
-            self.decks = decks; self.notes = notes; self.tags = tags
+            self.decks = decks; self.tags = tags
             self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
             self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
             statisticsTask?.cancel()
@@ -360,6 +362,7 @@ final class StudyStore {
             statisticsError = nil
             statisticsScope = LearningScope()
             statisticsReader = StatisticsReader(container: container)
+            libraryReader = LibraryReader(container: container)
             repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
             showingReview = false
             do { scope = try repository.homeScope(); try reload() }

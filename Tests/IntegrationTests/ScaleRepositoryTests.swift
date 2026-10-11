@@ -43,7 +43,8 @@ final class ScaleRepositoryTests: XCTestCase {
         let reloadStart = Date()
         let store = try StudyStore(container: container, clock: { due.addingTimeInterval(1) }, mediaStore: repo.mediaStore)
         let reloadTime = Date().timeIntervalSince(reloadStart)
-        XCTAssertEqual(store.notes.count, 3000)
+        let library = try await store.libraryReader.load(revision: store.dataRevision)
+        XCTAssertEqual(library.cardCount, 3000)
         XCTAssertEqual(try repo.notes().count, 1000)
         XCTAssertEqual(try repo.logs().count, 10000)
         let statisticsReadStart = Date()
@@ -168,5 +169,79 @@ extension ScaleRepositoryTests {
         XCTAssertEqual(loaded.days[0].reviews, 3000)
         XCTAssertGreaterThan(loaded.projectedAnswers, 3000)
         XCTAssertEqual(try BackupData.capture(repo).canonical(), learnedBefore)
+    }
+}
+
+extension ScaleRepositoryTests {
+    func testLibraryProjectionScaleComparisons() async throws {
+        for (noteCount, variants, logCount) in [(3000, 1, 0), (1000, 3, 10000)] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Scale.store"))
+            let repo = StudyRepository(container: container)
+            let now = Date(timeIntervalSince1970: 1_700_000_000)
+            try repo.initialize(now: now)
+            let first = try repo.decks()[0].id
+            let decks = [first] + (1..<20).map { _ in UUID() }
+            let scheduler = try ReviewScheduler()
+            let before = try JSONEncoder().encode(scheduler.newCard(now: now))
+            let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
+            let after = try JSONEncoder().encode(transition.after)
+            var cards: [StudyCard] = []
+            try repo.transaction {
+                for id in decks.dropFirst() {
+                    let deck = Deck(name: "Scale deck", now: now); deck.id = id; repo.context.insert(deck)
+                }
+                for number in 0..<noteCount {
+                    let question = variants == 1 ? "Card \(number)" : "Card \(number) {{c1::one}} {{c2::two}} {{c3::three}}"
+                    let input = NoteInput(deckID: decks[number % decks.count], kind: variants == 1 ? .basic : .cloze, question: question, answer: "Answer")
+                    let content = try JSONEncoder().encode(TextContent(question: question, answer: "Answer", explanation: ""))
+                    let note = Note(input: input, content: content, now: now)
+                    repo.context.insert(note)
+                    for variant in 1...variants {
+                        let card = StudyCard(noteID: note.id, variantKey: variants == 1 ? "basic:front" : "cloze:\(variant)", payload: after, now: now)
+                        repo.context.insert(card); cards.append(card)
+                    }
+                }
+                for number in 0..<logCount {
+                    repo.context.insert(StudyReviewLog(card: cards[number % cards.count], transition: transition, before: before, after: after, mode: .mental, durationMs: 1000, wasNew: false, sequence: number + 1))
+                }
+            }
+            let legacyRepository = StudyRepository(container: container)
+            let legacyStart = Date()
+            let legacy = try legacyRepository.noteItems()
+            let legacyLoad = Date().timeIntervalSince(legacyStart)
+            let groupingStart = Date()
+            let siblingCounts = Dictionary(grouping: legacy, by: \.noteID).mapValues(\.count)
+            var legacyDisplayed = 0
+            for deck in decks {
+                legacyDisplayed += legacy.filter {
+                    "\($0.content.question) \($0.content.answer) \($0.deckName) \($0.tagNames.joined(separator: " "))".localizedCaseInsensitiveContains("Card")
+                }.filter { $0.deckID == deck }.count
+            }
+            let legacySearchGroups = Date().timeIntervalSince(groupingStart)
+            XCTAssertEqual(legacyDisplayed, 3000); XCTAssertEqual(siblingCounts.count, noteCount)
+            let reader = LibraryReader(container: container), metadataStart = Date()
+            let metadata = try await reader.load(revision: 1)
+            let metadataTime = Date().timeIntervalSince(metadataStart)
+            XCTAssertEqual(metadata.cardCount, 3000); XCTAssertEqual(metadata.noteCount, noteCount)
+            XCTAssertTrue(metadata.notes.values.allSatisfy { $0.content == nil })
+            let scopedStart = Date()
+            let scoped = try await reader.search("", revision: 1, deckIDs: [first])
+            let scopedTime = Date().timeIntervalSince(scopedStart)
+            XCTAssertEqual(scoped.cardCount, 150)
+            let scopedIndex = try await reader.load(revision: 1)
+            XCTAssertEqual(scopedIndex.notes.values.filter { $0.content != nil }.count, noteCount / 20)
+            let searchStart = Date()
+            let cold = try await reader.search("Card", revision: 1, deckIDs: nil)
+            let coldTime = Date().timeIntervalSince(searchStart)
+            let cachedStart = Date()
+            let cached = try await reader.search("Card", revision: 1, deckIDs: nil)
+            let cachedTime = Date().timeIntervalSince(cachedStart)
+            XCTAssertEqual(cold.cardCount, 3000); XCTAssertEqual(cached.cardIDs, Set(cards.map(\.id)))
+            XCTAssertEqual(try repo.logs().count, logCount)
+            print("Issue115 notes=\(noteCount) cards=3000 logs=\(logCount) decks=20 legacyFullDetails=\(legacyLoad)s legacySearchGroups=\(legacySearchGroups)s metadata=\(metadataTime)s scopedContent=\(scopedTime)s firstSearch=\(coldTime)s cachedSearch=\(cachedTime)s")
+        }
     }
 }

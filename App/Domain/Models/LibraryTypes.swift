@@ -336,3 +336,63 @@ struct DeckNewUsage: Codable, Equatable {
     var cardID: UUID
     var quotaDeckIDs: [UUID]
 }
+
+// Metadata is indexed once. Detailed content and FSRS snapshots are not list models.
+struct LibraryCard: Identifiable {
+    let id: UUID
+    let noteID: UUID
+    let deckID: UUID
+    let variantKey: String
+    let isSuspended: Bool
+    let createdAt: Date
+}
+
+struct LibraryNote {
+    let kind: NoteKind
+    var content: TextContent?
+    let deckName: String
+    let tagNames: String
+}
+
+struct LibraryIndex {
+    var notes: [UUID: LibraryNote] = [:]
+    var cardsByDeck: [UUID: [LibraryCard]] = [:]
+    var siblingCounts: [UUID: Int] = [:]
+    var cardCount = 0
+    var noteCount: Int { siblingCounts.count }
+
+    func displayed(_ card: LibraryCard) throws -> TextContent {
+        guard let note = notes[card.noteID], let content = note.content else { throw StudyError.missingRecord }
+        return try CardGeneration.displayed(kind: note.kind, content: content, variant: card.variantKey)
+    }
+
+    func results(deckIDs: Set<UUID>? = nil, matching: Set<UUID>? = nil) -> LibraryResults {
+        var groups: [UUID: [LibraryCard]] = [:], noteIDs = Set<UUID>(), count = 0
+        for (deck, cards) in cardsByDeck where deckIDs?.contains(deck) ?? true {
+            let included = matching.map { ids in cards.filter { ids.contains($0.id) } } ?? cards
+            guard !included.isEmpty else { continue }
+            groups[deck] = included
+            count += included.count
+            for card in included { noteIDs.insert(card.noteID) }
+        }
+        return LibraryResults(cardsByDeck: groups, noteCount: noteIDs.count, cardCount: count)
+    }
+
+    static func deckPaths(_ decks: [Deck]) -> [UUID: String] {
+        let byID = Dictionary(uniqueKeysWithValues: decks.map { ($0.id, $0) })
+        return Dictionary(uniqueKeysWithValues: decks.map { deck in
+            var names: [String] = [], current: UUID? = deck.id, seen = Set<UUID>()
+            while let id = current, seen.insert(id).inserted, let value = byID[id] {
+                names.append(value.name); current = value.parentID
+            }
+            return (deck.id, names.reversed().joined(separator: " / "))
+        })
+    }
+}
+
+struct LibraryResults {
+    var cardsByDeck: [UUID: [LibraryCard]] = [:]
+    var noteCount = 0
+    var cardCount = 0
+    var cardIDs: Set<UUID> { Set(cardsByDeck.values.joined().map(\.id)) }
+}

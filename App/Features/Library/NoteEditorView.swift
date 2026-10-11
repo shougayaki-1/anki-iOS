@@ -314,9 +314,12 @@ struct NoteEditorView: View {
     }
     private func requestSave(next: Bool) {
         saveNext = next
-        if let item, (item.sourceContent.question != input.question || item.sourceContent.answer != input.answer || item.kind != input.kind || item.sourceContent.imageID != input.imageID || (item.sourceContent.masks ?? []) != input.masks || (item.sourceContent.reverseEnabled ?? false) != input.reverseEnabled),
-           store.notes.contains(where: { $0.noteID == item.noteID && $0.summary.repetitions > 0 }) { historyChoice = true }
-        else if item == nil {
+        if let item, (item.sourceContent.question != input.question || item.sourceContent.answer != input.answer || item.kind != input.kind || item.sourceContent.imageID != input.imageID || (item.sourceContent.masks ?? []) != input.masks || (item.sourceContent.reverseEnabled ?? false) != input.reverseEnabled) {
+            do {
+                if try store.repository.hasReviewedSibling(noteID: item.noteID) { historyChoice = true; return }
+            } catch { failure = error.localizedDescription; return }
+        }
+        if item == nil {
             do {
                 if let existing = try store.repository.duplicate(of: input) { duplicateID = existing.id; duplicateChoice = true }
                 else { save(reset: false) }
