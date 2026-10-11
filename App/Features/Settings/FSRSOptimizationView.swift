@@ -136,11 +136,13 @@ struct FSRSOptimizationView: View {
             return
         }
         guard reload() else { return }
-        guard state.activeParameters == report.parameters else {
+        guard let message = FSRSOptimizationGuidance.appliedConfirmation(
+            expected: report.parameters, active: state.activeParameters
+        ) else {
             failure = "適用中の設定を確認できませんでした。画面を開き直して確認してください。"
             return
         }
-        showSuccess("個人最適化を適用しました。次回の回答から有効です")
+        showSuccess(message)
     }
 
     private func resetParameters() {
@@ -154,11 +156,13 @@ struct FSRSOptimizationView: View {
             return
         }
         guard reload() else { return }
-        guard state.activeParameters == nil else {
+        guard let message = FSRSOptimizationGuidance.resetConfirmation(
+            wasPersonalized: true, active: state.activeParameters
+        ) else {
             failure = "標準設定への復帰を確認できませんでした。画面を開き直して確認してください。"
             return
         }
-        showSuccess("標準パラメータに戻しました。次回の回答から有効です")
+        showSuccess(message)
     }
 
     private func cancelCalculation() {
@@ -169,23 +173,11 @@ struct FSRSOptimizationView: View {
 
     private func presentCalculationFailure(_ error: Error, reviews: [OptimizationReview]? = nil) {
         successNotice = nil
+        failure = FSRSOptimizationGuidance.failureDescription(error)
         unmetRequirements = []
-        switch error as? OptimizationError {
-        case .some(.insufficient):
-            failure = "最適化の計算に必要な学習履歴の条件を満たしていません。復習を続けてから再計算してください。"
-            if let reviews {
-                unmetRequirements = FSRSOptimizationGuidance.unmetRequirements(for: reviews)
-            }
-        case .some(.tooLarge):
-            failure = "履歴が上限の1万件を超えたため、この機能では計算できません。履歴を削除せず、現在の設定を引き続き使用できます。"
-        case .some(.stale):
-            failure = "履歴または設定が計算時から変わりました。もう一度「履歴から計算・比較」を実行してください。"
-        case .some(.invalid):
-            failure = "履歴または計算結果を検証できませんでした。アプリを開き直して再試行してください。"
-        case .some(.timedOut):
-            failure = "計算が60秒の上限に達しました。端末の負荷が少ないときに再計算してください。"
-        case .none:
-            failure = "計算できませんでした。もう一度試してください。（\(error.localizedDescription)）"
+        if let optimizationError = error as? OptimizationError,
+           case .insufficient = optimizationError, let reviews {
+            unmetRequirements = FSRSOptimizationGuidance.unmetRequirements(for: reviews)
         }
     }
 
@@ -231,6 +223,33 @@ struct FSRSOptimizationView: View {
 
 // Read-only diagnostics. FSRSOptimization.prepare remains the authority for eligibility.
 enum FSRSOptimizationGuidance {
+    static func appliedConfirmation(expected: [Double], active: [Double]?) -> String? {
+        guard active == expected else { return nil }
+        return "個人最適化を適用しました。次回の回答から有効です"
+    }
+
+    static func resetConfirmation(wasPersonalized: Bool, active: [Double]?) -> String? {
+        guard wasPersonalized && active == nil else { return nil }
+        return "標準パラメータに戻しました。次回の回答から有効です"
+    }
+
+    static func failureDescription(_ error: Error) -> String {
+        switch error as? OptimizationError {
+        case .some(.insufficient):
+            return "最適化の計算に必要な学習履歴の条件を満たしていません。復習を続けてから再計算してください。"
+        case .some(.tooLarge):
+            return "履歴が上限の1万件を超えたため、この機能では計算できません。履歴を削除せず、現在の設定を引き続き使用できます。"
+        case .some(.stale):
+            return "履歴または設定が計算時から変わりました。もう一度「履歴から計算・比較」を実行してください。"
+        case .some(.invalid):
+            return "履歴または計算結果を検証できませんでした。アプリを開き直して再試行してください。"
+        case .some(.timedOut):
+            return "計算が60秒の上限に達しました。端末の負荷が少ないときに再計算してください。"
+        case .none:
+            return "計算できませんでした。もう一度試してください。（\(error.localizedDescription)）"
+        }
+    }
+
     static func unmetRequirements(for reviews: [OptimizationReview]) -> [String] {
         let ordered = reviews.sorted {
             $0.date == $1.date ? $0.sequence < $1.sequence : $0.date < $1.date

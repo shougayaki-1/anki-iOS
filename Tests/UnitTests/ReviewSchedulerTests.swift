@@ -167,4 +167,25 @@ final class FSRSOptimizationTests: XCTestCase {
         XCTAssertTrue(messages.contains { $0.contains("検証用") && $0.contains("Again 0件") })
         XCTAssertFalse(messages.contains { $0.contains("必要400件") })
     }
+
+    func testGuidanceConfirmsOnlyVerifiedStateTransitions() {
+        let values = FSRSOptimization.defaults
+        XCTAssertNil(FSRSOptimizationGuidance.appliedConfirmation(expected: values, active: nil))
+        XCTAssertEqual(FSRSOptimizationGuidance.appliedConfirmation(expected: values, active: values),
+                       "個人最適化を適用しました。次回の回答から有効です")
+        XCTAssertNil(FSRSOptimizationGuidance.resetConfirmation(wasPersonalized: false, active: nil))
+        XCTAssertNil(FSRSOptimizationGuidance.resetConfirmation(wasPersonalized: true, active: values))
+        XCTAssertNotNil(FSRSOptimizationGuidance.resetConfirmation(wasPersonalized: true, active: nil))
+    }
+
+    func testGuidanceSeparatesHistoryShortageAndOtherErrors() {
+        let shortage = FSRSOptimizationGuidance.failureDescription(OptimizationError.insufficient)
+        let stale = FSRSOptimizationGuidance.failureDescription(OptimizationError.stale)
+        let invalid = FSRSOptimizationGuidance.failureDescription(OptimizationError.invalid)
+        XCTAssertTrue(shortage.contains("学習履歴"))
+        XCTAssertTrue(stale.contains("もう一度"))
+        XCTAssertTrue(invalid.contains("開き直して"))
+        XCTAssertNotEqual(shortage, stale)
+        XCTAssertNotEqual(shortage, invalid)
+    }
 }
