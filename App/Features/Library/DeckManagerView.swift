@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Use actual parent IDs for the manager; DeckItem.name remains the full path for pickers.
+// Build hierarchy from parent IDs; DeckItem.name remains the full path for context.
 struct DeckTreeNode: Identifiable {
     let id: UUID
     let name: String
@@ -38,6 +38,24 @@ enum DeckTreeBuilder {
         // Malformed legacy parent cycles must not make whole decks disappear.
         result.append(contentsOf: sorted.compactMap { build($0, ancestors: []) })
         return result
+    }
+
+    static func selectionAncestors(of id: UUID?, in decks: [DeckItem]) -> Set<UUID> {
+        let parents = Dictionary(uniqueKeysWithValues: decks.map { ($0.id, $0.parentID) })
+        var result = Set<UUID>(), current = id
+        while let value = current, let parent = parents[value] ?? nil {
+            guard result.insert(parent).inserted else { break }
+            current = parent
+        }
+        return result
+    }
+
+    static func selectionRows(from decks: [DeckItem], expanded: Set<UUID>, search: String) -> [DeckTreeRow] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let roots = roots(from: decks)
+        guard !query.isEmpty else { return visibleRows(roots: roots, expanded: expanded) }
+        return visibleRows(roots: roots, expanded: Set(decks.map(\.id)))
+            .filter { $0.path.localizedStandardContains(query) }
     }
 
     static func visibleRows(roots: [DeckTreeNode], expanded: Set<UUID>) -> [DeckTreeRow] {
@@ -158,10 +176,7 @@ struct DeckEditorView: View {
         Form {
             Section {
                 TextField("デッキ名", text: $name).accessibilityIdentifier("deckNameInput")
-                Picker("親デッキ", selection: $parentID) {
-                    Text("なし（最上位）").tag(UUID?.none)
-                    ForEach(store.decks.filter { !excluded.contains($0.id) }) { Text($0.name).tag(Optional($0.id)) }
-                }.accessibilityIdentifier("deckParentPicker")
+                DeckSelectionField("親デッキ", decks: store.decks, selection: $parentID, nilTitle: "なし（最上位）", excluded: excluded).accessibilityIdentifier("deckParentPicker")
             }
             if let deckID {
                 Section("学習設定") {
@@ -200,10 +215,7 @@ struct DeckEditorView: View {
             }
             if deckID != nil {
                 Section {
-                    Picker("ノート移動先", selection: $destination) {
-                        Text("選択してください").tag(UUID?.none)
-                        ForEach(store.decks.filter { !excluded.contains($0.id) }) { Text($0.name).tag(Optional($0.id)) }
-                    }
+                    DeckSelectionField("ノート移動先", decks: store.decks, selection: $destination, excluded: excluded)
                     Button("デッキを削除", role: .destructive) { deleting = true }
                 } header: { Text("削除時の移動先") } footer: { Text("子孫デッキも削除します。ノートを別のデッキへ移すか、カードと一緒に削除するか選べます。回答履歴は保持します。") }
             }
@@ -320,12 +332,7 @@ private struct DeckContentsOperationView: View {
                 }
                 if operation == .move {
                     Section("移動先") {
-                        Picker("移動先デッキ", selection: $destination) {
-                            Text("選択してください").tag(UUID?.none)
-                            ForEach(availableDestinations) { deck in
-                                Text(deck.name).tag(Optional(deck.id))
-                            }
-                        }
+                        DeckSelectionField("移動先デッキ", decks: store.decks, selection: $destination, excluded: Set(store.decks.map(\.id)).subtracting(availableDestinations.map(\.id)))
                         .accessibilityIdentifier("deckContentsDestination")
                         Text("移動元自身は選べません。子孫込みの場合、移動元配下のデッキも選べません。")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -443,6 +450,139 @@ private struct DeckContentsOperationView: View {
         } catch {
             self.preview = nil
             failure = error.localizedDescription + "\n対象が変更されていた場合は、プレビューを作り直してください。"
+        }
+    }
+}
+
+// Shared single-deck selection. Callers own persistence and nil semantics.
+struct DeckSelectionField: View {
+    let title: String
+    let decks: [DeckItem]
+    @Binding var selection: UUID?
+    var nilTitle: String? = nil
+    var excluded: Set<UUID> = []
+    var includesDescendants = false
+    @State private var showing = false
+
+    init(_ title: String, decks: [DeckItem], selection: Binding<UUID?>,
+         nilTitle: String? = nil, excluded: Set<UUID> = [], includesDescendants: Bool = false) {
+        self.title = title; self.decks = decks; self._selection = selection
+        self.nilTitle = nilTitle; self.excluded = excluded; self.includesDescendants = includesDescendants
+    }
+    init(_ title: String, decks: [DeckItem], selection: Binding<UUID>) {
+        self.init(title, decks: decks, selection: Binding<UUID?>(
+            get: { selection.wrappedValue },
+            set: { if let id = $0 { selection.wrappedValue = id } }))
+    }
+    private var selected: DeckItem? { decks.first { $0.id == selection } }
+    var body: some View {
+        Button { showing = true } label: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(selected?.shortName ?? (selection == nil ? nilTitle ?? "選択してください" : "選択先が見つかりません"))
+                    .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                Image(systemName: "chevron.right").font(.caption)
+            }
+            .foregroundStyle(.primary)
+        }
+        .accessibilityLabel(title + "、" + (selected?.name ?? (selection == nil ? nilTitle ?? "選択してください" : "選択先が見つかりません")))
+        .accessibilityHint(includesDescendants ? "選択したデッキとすべての子孫を対象にします" : "所属先のデッキを選びます")
+        .sheet(isPresented: $showing) {
+            DeckSelectionSheet(title: title, decks: decks, selection: $selection,
+                               nilTitle: nilTitle, excluded: excluded, includesDescendants: includesDescendants)
+        }
+    }
+}
+
+struct DeckSelectionSheet: View {
+    let title: String
+    let decks: [DeckItem]
+    @Binding var selection: UUID?
+    let nilTitle: String?
+    let excluded: Set<UUID>
+    let includesDescendants: Bool
+    @Environment(\.dismiss) private var dismiss
+    @State private var expanded = Set<UUID>()
+    @State private var search = ""
+    @State private var initialized = false
+
+    private var rows: [DeckTreeRow] {
+        DeckTreeBuilder.selectionRows(from: decks, expanded: expanded, search: search)
+    }
+    var body: some View {
+        NavigationStack {
+            ScrollViewReader { proxy in
+                List {
+                    if let nilTitle, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button { selection = nil; dismiss() } label: {
+                            HStack {
+                                Text(nilTitle); Spacer()
+                                if selection == nil { Image(systemName: "checkmark") }
+                            }
+                        }.accessibilityAddTraits(selection == nil ? .isSelected : [])
+                            .accessibilityIdentifier("selectAllDecks")
+                    }
+                    if rows.isEmpty {
+                        ContentUnavailableView(search.isEmpty ? "デッキがありません" : "該当するデッキがありません",
+                                               systemImage: "folder", description: Text("検索条件やデッキ管理を確認してください。"))
+                    }
+                    ForEach(rows) { row in
+                        HStack(spacing: 4) {
+                            if row.hasChildren && search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                                Button {
+                                    if !expanded.insert(row.id).inserted { expanded.remove(row.id) }
+                                } label: {
+                                    Image(systemName: expanded.contains(row.id) ? "chevron.down" : "chevron.right")
+                                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                                }.accessibilityLabel(row.path + (expanded.contains(row.id) ? "を折りたたむ" : "を展開する"))
+                                    .accessibilityIdentifier("selectDeckDisclosure-" + row.id.uuidString)
+                            } else if search.isEmpty {
+                                Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
+                            }
+                            Button { selection = row.id; dismiss() } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(row.name).foregroundStyle(Color.primary).fixedSize(horizontal: false, vertical: true)
+                                        if !search.isEmpty || row.depth >= 6 {
+                                            Text(row.path).font(.caption).foregroundStyle(Color("SecondaryText"))
+                                                .fixedSize(horizontal: false, vertical: true)
+                                        }
+                                    }
+                                    Spacer()
+                                    if selection == row.id { Image(systemName: "checkmark") }
+                                }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                    .contentShape(Rectangle())
+                            }.disabled(excluded.contains(row.id))
+                                .accessibilityLabel(row.path)
+                                .accessibilityValue(excluded.contains(row.id) ? "選択不可" : (selection == row.id ? "選択中" : "未選択"))
+                                .accessibilityHint(row.hasChildren ? "子デッキがあります" : "子デッキはありません")
+                                .accessibilityAddTraits(selection == row.id ? .isSelected : [])
+                                .accessibilityIdentifier("selectDeck-" + row.id.uuidString)
+                        }.padding(.leading, search.isEmpty ? CGFloat(min(row.depth, 6)) * 12 : 0)
+                            .id(row.id)
+                    }
+                    if includesDescendants {
+                        Text("選んだデッキとすべての子孫が対象です。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }.buttonStyle(.borderless)
+                    .scrollDismissesKeyboard(.interactively)
+                    .task {
+                        guard !initialized else { return }
+                        expanded = DeckTreeBuilder.selectionAncestors(of: selection, in: decks)
+                        initialized = true
+                        await Task.yield()
+                        if let selection { proxy.scrollTo(selection, anchor: .center) }
+                    }
+            }
+            .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "デッキ名を検索")
+            .navigationTitle(title)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { dismiss() }.accessibilityIdentifier("cancelDeckSelection")
+                }
+            }
         }
     }
 }

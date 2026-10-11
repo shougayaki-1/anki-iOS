@@ -1,6 +1,45 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testDeckSelectionSearchExpansionCancellationAndApply() {
+        deckSelectionScenario(accessibility: false)
+    }
+    func testDeckSelectionDarkLargestText() {
+        deckSelectionScenario(accessibility: true)
+    }
+    private func deckSelectionScenario(accessibility: Bool) {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-home-filters"]
+        if accessibility { app.launchArguments.append("-study-test-accessibility") }
+        app.launch()
+        let filter = app.buttons["openStudyFilter"]
+        XCTAssertTrue(filter.waitForExistence(timeout: 15)); filter.tap()
+        let field = app.buttons["studyDeckPicker"]
+        field.tap()
+        let expand = app.buttons["マイデッキを展開する"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 5)); expand.tap()
+        XCTAssertTrue(app.buttons["マイデッキ / Child"].waitForExistence(timeout: 5))
+        app.buttons["cancelDeckSelection"].tap()
+        XCTAssertTrue(field.label.contains("すべてのデッキ"))
+        field.tap()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("Child")
+        let child = app.buttons["マイデッキ / Child"]
+        XCTAssertTrue(child.waitForExistence(timeout: 5))
+        attach(app, name: accessibility ? "Issue107-dark-largest-search" : "Issue107-tree-search")
+        child.tap()
+        let selected = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@ AND hittable == true", "Child"), object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [selected], timeout: 5), .completed)
+        app.buttons["cancelStudyFilter"].tap()
+        XCTAssertTrue(filter.waitForExistence(timeout: 5)); XCTAssertTrue(filter.label.contains("全デッキ"))
+        filter.tap(); field.tap()
+        app.buttons["マイデッキ"].tap()
+        app.buttons["applyStudyFilter"].tap()
+        XCTAssertTrue(filter.waitForExistence(timeout: 5)); XCTAssertTrue(filter.label.contains("マイデッキ"))
+        app.terminate(); app.launch()
+        XCTAssertTrue(filter.waitForExistence(timeout: 15)); XCTAssertTrue(filter.label.contains("マイデッキ"))
+    }
+
     func testDeckManagerShowsFolderTreeAndSupportsChildCreation() {
         deckTreeScenario(accessibility: false)
     }
@@ -53,6 +92,14 @@ final class QualityUITests: XCTestCase {
         child.tap()
         XCTAssertTrue(app.textFields["deckNameInput"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.textFields["deckNameInput"].value as? String, "Final Draft")
+        let parentField = app.buttons["deckParentPicker"]
+        scrollTo(parentField, app: app); parentField.tap()
+        let parentExpand = app.buttons["英語を展開する"]
+        XCTAssertTrue(parentExpand.waitForExistence(timeout: 5)); parentExpand.tap()
+        let forbidden = app.buttons["英語 / Final Draft"]
+        XCTAssertTrue(forbidden.waitForExistence(timeout: 5)); XCTAssertFalse(forbidden.isEnabled)
+        app.buttons["cancelDeckSelection"].tap()
+        XCTAssertTrue(parentField.waitForExistence(timeout: 5)); XCTAssertTrue(parentField.label.contains("英語"))
     }
 
     func testNativeIdentityDeckCancellationAndEmptySearch() throws {

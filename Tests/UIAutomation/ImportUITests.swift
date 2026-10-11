@@ -145,10 +145,15 @@ final class ImportUITests: XCTestCase {
         XCTAssertTrue(child.waitForExistence(timeout: 5))
         app.buttons["閉じる"].tap()
         app.buttons["addNote"].tap()
-        app.buttons["noteDeckPicker"].tap(); app.buttons["Science / Biology"].firstMatch.tap()
+        app.buttons["noteDeckPicker"].tap()
+        app.buttons["Scienceを展開する"].tap()
+        app.buttons["Science / Biology"].firstMatch.tap()
         let q = app.descendants(matching: .any)["questionInput"]
+        for _ in 0..<8 where !q.exists || !q.isHittable { app.swipeUp() }
+        XCTAssertTrue(q.waitForExistence(timeout: 5))
         q.tap(); q.typeText("Cell question")
         let a = app.descendants(matching: .any)["answerInput"]
+        for _ in 0..<8 where !a.exists || !a.isHittable { app.swipeUp() }
         a.tap(); a.typeText("Cell answer")
         app.buttons["saveNote"].tap()
         app.tabBars.buttons["ホーム"].tap()

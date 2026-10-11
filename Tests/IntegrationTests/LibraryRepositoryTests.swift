@@ -255,6 +255,30 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.deckPath(lesson), "英語 / 変更後 / Lesson4")
     }
 
+    func testDeckSelectionSearchAndSelectedAncestorsAcrossLargeHierarchy() {
+        let root = UUID(), sibling = UUID()
+        var items = [DeckItem(id: root, name: "国語", shortName: "国語"),
+                     DeckItem(id: sibling, name: "英語", shortName: "英語")]
+        var parent = root
+        for index in 0..<120 {
+            let id = UUID()
+            items.append(DeckItem(id: id, name: "unused", shortName: "階層\(index)", parentID: parent))
+            parent = id
+        }
+        let duplicate = UUID()
+        items.append(DeckItem(id: duplicate, name: "unused", shortName: "階層119", parentID: sibling))
+        let ancestors = DeckTreeBuilder.selectionAncestors(of: parent, in: items)
+        XCTAssertEqual(ancestors.count, 120)
+        XCTAssertEqual(DeckTreeBuilder.selectionRows(from: items, expanded: ancestors, search: "").count, 122)
+        let found = DeckTreeBuilder.selectionRows(from: items, expanded: [], search: " 階層119 ")
+        XCTAssertEqual(Set(found.map(\.id)), [parent, duplicate])
+        XCTAssertTrue(found.contains { $0.path.hasPrefix("国語 / ") && $0.depth == 120 })
+        XCTAssertTrue(found.contains { $0.path == "英語 / 階層119" })
+        XCTAssertTrue(DeckTreeBuilder.selectionRows(from: items, expanded: [], search: "存在しない").isEmpty)
+        XCTAssertTrue(DeckTreeBuilder.selectionAncestors(of: UUID(), in: items).isEmpty)
+        XCTAssertTrue(DeckTreeBuilder.selectionAncestors(of: nil, in: items).isEmpty)
+    }
+
     func testDeepDeckTreeKeepsEveryLevelAndSameNamedDeckIdentity() {
         var items: [DeckItem] = [], parent: UUID?
         for depth in 0..<12 {

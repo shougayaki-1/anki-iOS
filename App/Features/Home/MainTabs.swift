@@ -478,10 +478,7 @@ struct LearningScopeSheet: View {
         NavigationStack {
             Form {
                 Section("デッキ（子孫を含む）") {
-                    Picker("デッキ", selection: $draft.deckID) {
-                        Text("すべて").tag(UUID?.none)
-                        ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
-                    }.accessibilityIdentifier("studyDeckPicker")
+                    DeckSelectionField("デッキ", decks: store.decks, selection: $draft.deckID, nilTitle: "すべてのデッキ", includesDescendants: true).accessibilityIdentifier("studyDeckPicker")
                 }
                 Section("タグ（選択したすべてを含む）") {
                     ForEach(store.tags) { tag in

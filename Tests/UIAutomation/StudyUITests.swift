@@ -815,23 +815,32 @@ final class StudyUITests: XCTestCase {
         input.tap(); input.typeText("Preserved draft")
         if app.keyboards.firstMatch.exists { app.buttons["完了"].firstMatch.tap() }
         app.buttons["pauseStudy"].tap()
+        func assertNewCount(_ count: Int) {
+            let countLabel = app.staticTexts["newCount"]
+            for _ in 0..<8 where !countLabel.exists || !countLabel.isHittable { app.swipeUp() }
+            XCTAssertTrue(app.staticTexts["newCount"].label.contains("\(count)枚"))
+        }
         func selectEmpty() {
-            app.buttons["openStudyFilter"].tap()
+            let filter = app.buttons["openStudyFilter"]
+            for _ in 0..<8 where !filter.isHittable { app.swipeDown() }
+            filter.tap()
             app.buttons["studyDeckPicker"].tap(); app.buttons["Empty deck"].tap()
         }
         selectEmpty(); app.buttons["cancelStudyFilter"].tap()
-        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        assertNewCount(1)
         selectEmpty(); app.buttons["applyStudyFilter"].tap()
-        XCTAssertTrue(app.staticTexts["newCount"].label.contains("0枚"))
+        assertNewCount(0)
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
-        XCTAssertTrue(app.staticTexts["newCount"].label.contains("0枚"))
-        app.buttons["resumeStudy"].tap()
+        assertNewCount(0)
+        let resume = app.buttons["resumeStudy"]
+        for _ in 0..<8 where !resume.isHittable { app.swipeDown() }
+        resume.tap()
         XCTAssertFalse(app.buttons["新しく覚えるへ切り替える"].exists)
         XCTAssertTrue(input.waitForExistence(timeout: 5)); XCTAssertEqual(input.value as? String, "Preserved draft")
         app.buttons["pauseStudy"].tap(); app.buttons["openStudyFilter"].tap()
         app.buttons["resetStudyFilter"].tap(); app.buttons["applyStudyFilter"].tap()
-        XCTAssertTrue(app.staticTexts["newCount"].label.contains("1枚"))
+        assertNewCount(1)
     }
 
     func testOptimizationInsufficientHistoryDoesNotChangeSettings() {

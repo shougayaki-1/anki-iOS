@@ -131,10 +131,7 @@ struct StatisticsView: View {
                         .accessibilityIdentifier("openReviewForecast")
                 }
                 Section("集計条件") {
-                    Picker("デッキ（子孫を含む）", selection: $store.statisticsScope.deckID) {
-                        Text("すべてのデッキ").tag(UUID?.none)
-                        ForEach(store.decks) { deck in Text(deck.name).tag(Optional(deck.id)) }
-                    }
+                    DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $store.statisticsScope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
                     Menu {
                         Button("すべてのタグ") { store.statisticsScope.tagIDs = [] }
                         ForEach(store.tags) { tag in

@@ -92,7 +92,7 @@ struct ImportView: View {
                             .disabled(text.isEmpty)
                     } header: { Text("入力") } footer: { Text("通常の文章から問いや解答を自動生成しません。プレビューで編集できます。") }
                     Section("登録先") {
-                        Picker("デッキ", selection: $deckID) { ForEach(store.decks) { Text($0.name).tag($0.id) } }
+                        DeckSelectionField("デッキ", decks: store.decks, selection: $deckID)
                         Picker("カード形式", selection: $kind) {
                             ForEach([NoteKind.basic, .written, .cloze], id: \.self) { Text($0.title).tag($0) }
                         }
@@ -301,9 +301,7 @@ struct ImageZIPImportView: View {
                     Section("画像ZIP") {
                         Text("\(package.rows.count)行 / 重複 \(duplicates.count)行 / エラー \(package.rows.filter { $0.error != nil }.count)行。確定するまで保存されません。")
                         Text("問題が空欄の行には「画像を見て答えてください」を補います。プレビューで変更できます。")
-                        Picker("デッキ指定がない行の登録先", selection: $deckID) {
-                            ForEach(store.decks) { Text($0.name).tag($0.id) }
-                        }
+                        DeckSelectionField("デッキ指定がない行の登録先", decks: store.decks, selection: $deckID)
                         Picker("同じデッキ・問題・解答・画像の重複", selection: $action) {
                             ForEach(DuplicateAction.allCases, id: \.self) { Text($0.title).tag($0) }
                         }

@@ -250,10 +250,7 @@ private struct BulkManagementView: View {
                             ForEach(BulkOperation.allCases, id: \.self) { Text($0.title).tag($0) }
                         }.accessibilityIdentifier("bulkOperation")
                         if operation == .move {
-                            Picker("移動先", selection: $destination) {
-                                Text("選択してください").tag(UUID?.none)
-                                ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
-                            }.accessibilityIdentifier("bulkDestination")
+                            DeckSelectionField("移動先", decks: store.decks, selection: $destination).accessibilityIdentifier("bulkDestination")
                         } else if operation == .addTags {
                             TextField("追加タグ（カンマ区切り）", text: $tagText).accessibilityIdentifier("bulkTagInput")
                         } else if operation == .removeTags {
@@ -341,10 +338,7 @@ private struct WeakCardListView: View {
     var body: some View {
         List {
             Section("絞り込み") {
-                Picker("デッキ（子孫を含む）", selection: $scope.deckID) {
-                    Text("すべて").tag(UUID?.none)
-                    ForEach(store.decks) { Text($0.name).tag(Optional($0.id)) }
-                }
+                DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $scope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
                 Picker("履歴の期間", selection: $days) {
                     ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
                 }
