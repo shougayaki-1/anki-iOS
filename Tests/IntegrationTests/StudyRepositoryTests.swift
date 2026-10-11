@@ -83,6 +83,64 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertThrowsError(try repo.start(mode: .new, now: now))
     }
 
+    func testSessionResponseSnapshotKeepsDraftUndoAndAnotherSet() throws {
+        let repo = try fixture()
+        try create(repo)
+        try create(repo)
+        var options = try repo.options()
+        options.sessionResponseMode = .typing
+        options.sessionAnswerLimit = 1
+        try repo.updateOptions(options)
+        try repo.start(mode: .new, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        try repo.updateDraft(text: "draft", now: now)
+        options = try repo.options(); options.sessionResponseMode = .mental
+        try repo.updateOptions(options)
+        try repo.setSessionActive(false, now: now)
+        try repo.resume(now: now)
+        XCTAssertEqual(try repo.session()?.typedDraft, "draft")
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.startAnotherSession(now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .typing)
+        XCTAssertTrue(try repo.notes().allSatisfy { $0.defaultResponseMode == "mental" })
+        let optionsData = try JSONEncoder().encode(repo.options())
+        let decoded = try JSONDecoder().decode(StudyOptions.self, from: optionsData)
+        XCTAssertEqual(decoded.activeSessionProgress?.responseMode, .typing)
+        let legacy = try JSONDecoder().decode(StudySessionProgressSnapshot.self,
+            from: Data(#"{"startSequence":0,"answerLimit":20}"#.utf8))
+        XCTAssertNil(legacy.responseMode)
+    }
+
+    func testOrderingOverrideFiltersCandidatesAndFailedStartKeepsSession() throws {
+        let repo = try fixture()
+        try create(repo)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "keep", now: now)
+        let before = try BackupData.capture(repo).canonical()
+        XCTAssertThrowsError(try repo.start(mode: .new, responseMode: .ordering, now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let id = try repo.createNote(NoteInput(deckID: repo.decks()[0].id,
+            question: "英語", answer: "I like green tea."), now: now)
+        var saved = try repo.options(); saved.sessionResponseMode = .ordering
+        try repo.updateOptions(saved)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        let unchanged = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.start(mode: .new, now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), unchanged)
+        repo.save = { try $0.save() }
+        try repo.start(mode: .new, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.card?.noteID, id)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .ordering)
+        try repo.updateDraft(mode: .mental, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.responseMode, .mental)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.responseMode, .ordering)
+    }
+
     func testAnotherSetUsesOriginalScopeAndLimitAndEmptyOrFailedStartKeepsUndo() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let other = try repo.createDeck(name: "Other", now: now)
@@ -121,6 +179,7 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         try create(repo)
         var options = try repo.options(); options.sessionAnswerLimit = 10
+        options.sessionResponseMode = .typing
         try repo.updateOptions(options)
         try repo.start(mode: .new, now: now)
         try repo.updateDraft(revealed: true, now: now)

@@ -12,6 +12,7 @@ struct LibraryView: View {
     @State private var editMode = EditMode.inactive
     @State private var selection = Set<UUID>()
     @State private var bulkEditing = false
+    @State private var bulkCommitted = false
 
     var filtered: [NoteItem] {
         store.notes.filter {
@@ -42,48 +43,62 @@ struct LibraryView: View {
             .onChange(of: search) { _, _ in selection.removeAll() }
             .onChange(of: editMode) { _, mode in if !mode.isEditing { selection.removeAll() } }
             .safeAreaInset(edge: .bottom) {
-                if !store.notes.isEmpty {
-                    VStack(spacing: 8) {
-                        HStack {
-                            if editMode.isEditing {
-                                Text("選択: \(selection.count)枚").accessibilityIdentifier("bulkSelectionCount")
-                            } else { Text("一括操作").font(.subheadline) }
-                            Spacer()
-                            EditButton().environment(\.editMode, $editMode).accessibilityIdentifier("selectLibraryCards")
+                if editMode.isEditing {
+                    HStack {
+                        Menu("選択", systemImage: "checkmark.circle") {
+                            Button("表示中を全選択") { selection = Set(filtered.map(\.cardID)) }
+                                .accessibilityIdentifier("selectAllLibraryCards")
+                            Button("選択を解除") { selection.removeAll() }
+                                .disabled(selection.isEmpty)
                         }
-                        if editMode.isEditing {
-                            HStack {
-                                Button("表示中を全選択") { selection = Set(filtered.map(\.cardID)) }.accessibilityIdentifier("selectAllLibraryCards")
-                                Spacer()
-                                Button("解除") { selection.removeAll() }
-                            }
-                            Button("一括操作") { bulkEditing = true }
-                                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                                .disabled(selection.isEmpty).accessibilityIdentifier("openBulkManagement")
-                        }
+                        Spacer()
+                        Button("一括操作") { bulkCommitted = false; bulkEditing = true }
+                            .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(Color.white)
+                            .disabled(selection.isEmpty).accessibilityIdentifier("openBulkManagement")
                     }.padding().background(.regularMaterial)
                 }
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
-            .navigationTitle("ライブラリ")
+            .navigationTitle(editMode.isEditing ? "カードを選択" : "ライブラリ")
+            .onDisappear { selection.removeAll(); editMode = .inactive }
             .navigationDestination(item: $shortcutDeck) { destination in
                 ShortcutDeckContentsView(store: store, deckID: destination.id)
             }
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("文字認識", systemImage: "text.viewfinder") { ocr = true }.accessibilityIdentifier("openOCR")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
+                if editMode.isEditing {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Text("選択: \(selection.count)枚").accessibilityIdentifier("bulkSelectionCount")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("完了") { selection.removeAll(); editMode = .inactive }
+                            .accessibilityIdentifier("finishLibrarySelection")
+                    }
+                } else {
+                    ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu("ライブラリ操作", systemImage: "ellipsis.circle") {
+                            Button("カードを選択", systemImage: "checkmark.circle") {
+                                selection.removeAll(); editMode = .active
+                            }.disabled(filtered.isEmpty).accessibilityIdentifier("selectLibraryCards")
+                        }.accessibilityIdentifier("libraryActions")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("文字認識", systemImage: "text.viewfinder") { ocr = true }.accessibilityIdentifier("openOCR")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("カード追加", systemImage: "plus") { adding = true }.accessibilityIdentifier("addNote")
+                    }
                 }
             }
-            .sheet(isPresented: $bulkEditing, onDismiss: { selection.removeAll(); editMode = .inactive }) {
-                BulkManagementView(store: store, selection: selection) {
-                    selection.removeAll(); editMode = .inactive; bulkEditing = false
+            .sheet(isPresented: $bulkEditing, onDismiss: {
+                if bulkCommitted { selection.removeAll(); editMode = .inactive }
+            }) {
+                BulkManagementView(store: store, selection: selection, didCommit: { bulkCommitted = true }) { committed in
+                    if committed { selection.removeAll(); editMode = .inactive }
+                    bulkEditing = false
                 }
             }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil) }
@@ -175,7 +190,8 @@ private enum BulkOperation: String, CaseIterable {
 private struct BulkManagementView: View {
     @Bindable var store: StudyStore
     let selection: Set<UUID>
-    let close: () -> Void
+    let didCommit: () -> Void
+    let close: (Bool) -> Void
     @State private var operation = BulkOperation.move
     @State private var destination: UUID?
     @State private var tagText = ""
@@ -199,7 +215,7 @@ private struct BulkManagementView: View {
             Form {
                 if let result {
                     Section("結果") { Text(result).accessibilityIdentifier("bulkResult") }
-                    Button("閉じる") { close() }.accessibilityIdentifier("closeBulkResult")
+                    Button("閉じる") { close(true) }.accessibilityIdentifier("closeBulkResult")
                 } else {
                     Section {
                         Text("選択カード: \(selection.count)枚")
@@ -252,7 +268,7 @@ private struct BulkManagementView: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("一括操作")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close() }.accessibilityIdentifier("closeBulkManagement") }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close(result != nil) }.accessibilityIdentifier("closeBulkManagement") }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }.accessibilityIdentifier("dismissBulkKeyboard") }
             }
             .onChange(of: operation) { _, _ in preview = nil }
@@ -277,6 +293,7 @@ private struct BulkManagementView: View {
         var receipt: BulkEditResult?
         let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
         if let receipt {
+            didCommit()
             result = "変更済み: \(receipt.changedNotes)ノート・\(receipt.changedCards)枚"
             if !refreshed { result! += "。表示を更新できません。閉じてアプリを開き直してください。" }
             preview = nil
