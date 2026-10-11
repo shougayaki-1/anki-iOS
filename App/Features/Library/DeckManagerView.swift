@@ -69,6 +69,7 @@ struct DeckManagerView: View {
     var body: some View {
         NavigationStack {
             List {
+                NavigationLink("デッキファイルの共有・取込") { DeckExchangeView(store: store) }.accessibilityIdentifier("openDeckExchange")
                 ForEach(visibleRows) { row in
                     HStack(spacing: 4) {
                         if row.hasChildren {
