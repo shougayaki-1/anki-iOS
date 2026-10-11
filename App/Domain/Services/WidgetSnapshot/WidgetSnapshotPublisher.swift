@@ -66,7 +66,7 @@ enum WidgetProjection {
         self.file = file; self.reload = reload
     }
     func publish(repository: StudyRepository, snapshot: HomeSnapshot, settings: StudySettings, now: Date,
-                 force: Bool, completion: @escaping (String?) -> Void) {
+                 force: Bool, cards suppliedCards: [QueueCard]? = nil, logs suppliedLogs: [QueueLog]? = nil, completion: @escaping (String?) -> Void) {
         let key = Key(counts: snapshot.globalCounts, next: snapshot.nextRefresh, start: snapshot.dayStart,
                       zone: repository.calendar.timeZone.identifier, goal: settings.dailyGoal)
         guard force || previous != key else { return }
@@ -74,8 +74,8 @@ enum WidgetProjection {
         let generation = generation
         do {
             guard file.url != nil else { throw WidgetSnapshotFailure.unavailable }
-            let cards = try repository.queueCards()
-            let logs = try repository.todayQueueLogs(cards: cards, settings: settings, now: now)
+            let cards = try suppliedCards ?? repository.queueCards()
+            let logs = try suppliedLogs ?? repository.todayQueueLogs(cards: cards, settings: settings, now: now)
             let calendar = repository.calendar, projected = WidgetProjectionSettings(settings)
             job = Task { [weak self] in
                 let task = Task.detached(priority: .utility) {

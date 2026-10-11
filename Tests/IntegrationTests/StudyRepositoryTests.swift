@@ -22,6 +22,77 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testQueueStateCacheTracksGradeUndoRollbackAndRemoval() throws {
+        let repo = try fixture()
+        try create(repo); try create(repo)
+        let original = try repo.queueCards()
+        XCTAssertEqual(repo.queueStateDecodeCount, 2)
+        _ = try repo.queueCards()
+        XCTAssertEqual(repo.queueStateDecodeCount, 2)
+        try repo.start(mode: .new, now: now)
+        let id = try XCTUnwrap(repo.session()?.cardID)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        XCTAssertEqual(try repo.queueCards().first { $0.id == id }?.state, "review")
+        XCTAssertEqual(repo.queueStateDecodeCount, 3)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.queueCards().first { $0.id == id }?.state, "new")
+        XCTAssertEqual(repo.queueStateDecodeCount, 4)
+        try repo.updateDraft(revealed: true, now: now)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.grade(.good, now: now))
+        XCTAssertEqual(try repo.queueCards().map(\.state), original.map(\.state))
+        XCTAssertEqual(try repo.logs().count, 0)
+        repo.save = { try $0.save() }
+        try repo.transaction { repo.context.delete(try XCTUnwrap(repo.card(id))) }
+        XCTAssertFalse(try repo.queueCards().contains { $0.id == id })
+    }
+
+    func testThreeThousandBasicCardsReviewRefreshMeasurement() throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let deckID = try XCTUnwrap(repo.decks().first?.id)
+        let scheduler = try ReviewScheduler()
+        let before = try scheduler.newCard(now: now)
+        let transition = try scheduler.review(before, grade: .easy, now: now)
+        let payload = try JSONEncoder().encode(transition.after)
+        let due = try scheduler.summary(transition.after).dueDate
+        try repo.transaction {
+            for index in 0..<3000 {
+                let input = NoteInput(deckID: deckID, kind: .basic, question: "Question \(index)", answer: "Answer")
+                let content = try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: ""))
+                let note = Note(input: input, content: content, now: now)
+                repo.context.insert(note)
+                let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now)
+                card.dueDate = due
+                repo.context.insert(card)
+            }
+        }
+        let date = due.addingTimeInterval(1)
+        let start = Date()
+        let store = try StudyStore(container: container, clock: { date })
+        let launch = Date().timeIntervalSince(start)
+        let revision = store.dataRevision
+        let sessionStart = Date()
+        store.start(.review)
+        let session = Date().timeIntervalSince(sessionStart)
+        XCTAssertNotNil(store.review?.card)
+        let cardID = store.review?.card?.cardID
+        store.draft(revealed: true)
+        let gradeStart = Date()
+        store.grade(.good)
+        let grade = Date().timeIntervalSince(gradeStart)
+        XCTAssertNil(store.failure)
+        let undoStart = Date()
+        store.undo()
+        let undo = Date().timeIntervalSince(undoStart)
+        XCTAssertNil(store.failure)
+        XCTAssertEqual(store.review?.card?.cardID, cardID)
+        XCTAssertEqual(try store.repository.logs().count, 0)
+        XCTAssertGreaterThanOrEqual(store.dataRevision, revision)
+        print("Issue116 3000 notes/cards: launch=\(launch)s start=\(session)s grade=\(grade)s undo=\(undo)s")
+    }
+
     func testTextLayoutsDraftEditingCSVAndBackupKeepIDsAndSchedule() async throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         var input = NoteInput(deckID: deck, question: "｜東京《とうきょう》", answer: "Capital", reverseEnabled: true, questionLayout: .vertical, answerLayout: .horizontal)
