@@ -124,7 +124,7 @@ final class StudyRepository {
     @discardableResult
     func createNote(_ input: NoteInput, clearingDraft key: String? = nil, now: Date) throws -> UUID {
         let content = try validate(input)
-        let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+        let scheduler = try ReviewScheduler(desiredRetention: deckRetention(input.deckID))
         let payload = try JSONEncoder().encode(scheduler.newCard(now: now))
         return try transaction {
             let note = Note(input: input, content: content, now: now)
@@ -230,15 +230,18 @@ final class StudyRepository {
 
     func queueCards() throws -> [QueueCard] {
         let scheduler = try ReviewScheduler()
+        let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
+        let limits = try Dictionary(uniqueKeysWithValues: decks().map { ($0.id, try deckLimits($0.id)) })
         return try cards().map { card in
             let state = try scheduler.summary(snapshot(card)).state
             return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
-                             suspended: card.isSuspended, noteID: card.noteID)
+                             suspended: card.isSuspended, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
         }
     }
     func queueLogs() throws -> [QueueLog] {
         let map = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
-        return try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: map[$0.cardID]) }
+        let quotas = try quotaMap()
+        return try logs().map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: map[$0.cardID], quotaDeckIDs: quotas.usage[$0.sequence] ?? quotas.cards[$0.cardID] ?? []) }
     }
     // Queue eligibility and daily quotas only inspect this study day's logs.
     func todayQueueLogs(cards: [QueueCard], settings: StudySettings, now: Date) throws -> [QueueLog] {
@@ -248,7 +251,8 @@ final class StudyRepository {
         let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
             $0.reviewedAt >= start && $0.reviewedAt < end
         }))
-        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID]) }
+        let quotas = try quotaMap()
+        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID], quotaDeckIDs: quotas.usage[$0.sequence] ?? quotas.cards[$0.cardID] ?? []) }
     }
     func counts(now: Date) throws -> HomeCounts {
         try ReviewQueueBuilder(calendar: calendar).counts(cards: queueCards(), logs: queueLogs(),
@@ -394,10 +398,15 @@ final class StudyRepository {
                 throw StudyError.noSession
             }
             let progressBefore = try sessionProgress()
-            let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
+            guard let note = try notes().first(where: { $0.id == card.noteID }) else { throw StudyError.missingRecord }
+            let scheduler = try ReviewScheduler(desiredRetention: deckRetention(note.deckID))
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
-            if summary.state == "new", try counts(now: now).newRemaining == 0 { throw StudyError.newLimitReached }
+            if summary.state == "new" {
+                let single = try queueCards().filter { $0.id == cardID }
+                let available = try ReviewQueueBuilder(calendar: calendar).counts(cards: single, logs: queueLogs(), settings: settings(), now: now)
+                guard available.newRemaining > 0 else { throw StudyError.newLimitReached }
+            }
             let transition = try scheduler.review(before, grade: grade, now: now)
             let after = try JSONEncoder().encode(transition.after)
             let duration = draft.elapsedMs + (draft.activeSince.map { max(0, Int(now.timeIntervalSince($0) * 1000)) } ?? 0)
@@ -409,6 +418,13 @@ final class StudyRepository {
                                      durationMs: duration, wasNew: summary.state == "new",
                                      sequence: try lastReviewSequence() + 1)
             context.insert(log)
+            if summary.state == "new" {
+                var saved = try options()
+                var usage = saved.deckNewUsage ?? []
+                usage.append(DeckNewUsage(sequence: log.sequence, cardID: card.id, quotaDeckIDs: try deckAncestors(note.deckID)))
+                saved.deckNewUsage = usage
+                try writeOptionsInTransaction(saved)
+            }
             card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
             card.updatedAt = now
             draft.undoLogID = log.id
@@ -441,6 +457,9 @@ final class StudyRepository {
             draft.reviewStreak = 0
             try prepareOrderingDraft(draft)
             if latest.wasNew { draft.touchedCardIDs.removeAll { $0 == card.id } }
+            var saved = try options()
+            saved.deckNewUsage?.removeAll { $0.sequence == latest.sequence }
+            try writeOptionsInTransaction(saved)
             context.delete(latest)
         }
     }
@@ -488,15 +507,18 @@ final class StudyRepository {
         }
         let limit = mode != .review && counts.eligibleNew > 0 && counts.newRemaining == 0
         let global = builder.counts(cards: try queueCards(), logs: logs, settings: settings, now: now)
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let globalUsed = Set(logs.filter { $0.wasNew && $0.reviewedAt >= day.start && $0.reviewedAt < day.end }.map(\.cardID)).count
+        let capMessage = counts.eligibleNew > 0 && globalUsed < settings.dailyNewLimit ? "デッキまたは親デッキの新規上限に達しました。ライブラリ > デッキ管理 > デッキ編集で確認できます。" : "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。設定 > 学習で変更できます。"
         let remaining = "未学習カードはあと\(global.totalNew)枚（全デッキ・停止中を除く）。現在の学習対象内は\(counts.totalNew)枚です。"
         if short != nil {
             return ReviewEmptyState(reason: .waiting, title: "今出題できるカードはありません",
-                                    message: "期限が来ると自動で出題を再確認します。このセッションで続けるか、今回はここまでにできます。" + (limit ? "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。" + remaining : ""),
+                                    message: "期限が来ると自動で出題を再確認します。このセッションで続けるか、今回はここまでにできます。" + (limit ? capMessage + remaining : ""),
                                     suggestsSettings: limit, canRetry: true)
         }
         if limit {
             return ReviewEmptyState(reason: .newLimit, title: "今日の新規学習は上限です",
-                                    message: "上限\(settings.dailyNewLimit)枚。" + remaining + "設定 > 学習で変更できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsSettings: true, canRetry: true)
+                                    message: capMessage + remaining + "学習日の切替は\(settings.dayStartHour)時です。", suggestsSettings: true, canRetry: true)
         }
         // Match queue()'s mode membership before asking why eligible cards are blocked.
         // In .new, touching a card does not make its long-term review state eligible.
