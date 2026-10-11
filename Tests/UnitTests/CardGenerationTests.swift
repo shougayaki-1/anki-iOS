@@ -2,6 +2,36 @@ import XCTest
 @testable import AnkiIOS
 
 final class CardGenerationTests: XCTestCase {
+    func testKanbunStructuredMarksBothSidesRereadingAndSafeFallback() throws {
+        let source = "｜未《いま》［＃「未」の左に「ザル」のルビ］［＃（ダ）］［＃レ］知［＃（ラ）］。\n自［＃二］女王國［＃一レ］12年"
+        let parsed = KanbunDocument.parse(source)
+        XCTAssertNil(parsed.warning)
+        guard case .glyph(let first) = parsed.units.first else { return XCTFail("Missing annotated glyph") }
+        XCTAssertEqual(first.base, "未"); XCTAssertEqual(first.rightRuby, "いま")
+        XCTAssertEqual(first.leftRuby, "ザル"); XCTAssertEqual(first.okuri, "ダ"); XCTAssertEqual(first.returnMark, "レ")
+        let ruby = RubyDocument.parse(source)
+        XCTAssertNil(ruby.warning); XCTAssertTrue(ruby.hasRuby)
+        let html = ruby.html(layout: .vertical, fontSize: 24)
+        XCTAssertTrue(html.contains("kg-left")); XCTAssertTrue(html.contains("kg-right"))
+        XCTAssertFalse(html.contains("［＃")); XCTAssertTrue(html.contains("<span class=\"tcy\">12</span>"))
+        XCTAssertTrue(ruby.spoken.contains("再読の左の読み ザル"))
+        for mark in KanbunDocument.returnMarks {
+            XCTAssertNil(KanbunDocument.parse("漢［＃\(mark)］").warning)
+        }
+        for source in ["［＃レ］字", "字［＃未対応］", "字［＃レ", "字［＃レ］［＃一］", "字［＃（）］", "字［＃「別」の左に「よみ」のルビ］", "字［＃（\(String(repeating: "カ", count: 33))）］"] {
+            let invalid = RubyDocument.parse(source)
+            XCTAssertNotNil(invalid.warning); XCTAssertEqual(invalid.plain, source)
+        }
+        let attack = RubyDocument.parse("字［＃（<img src=evil>）］")
+        XCTAssertTrue(attack.html(layout: .vertical, fontSize: 24).contains("&lt;img src=evil&gt;"))
+        XCTAssertFalse(attack.html(layout: .vertical, fontSize: 24).contains("<img"))
+        let bulk = String(repeating: "字［＃（カナ）］［＃二］", count: 2000)
+        XCTAssertNil(KanbunDocument.parse(bulk).warning)
+        XCTAssertNotNil(KanbunDocument.parse(String(repeating: "字", count: 70_000)).warning)
+        let cloze = TextContent(question: "{{c1::不}}［＃（ズ）］［＃レ］知［＃（ラ）］", answer: "", explanation: "")
+        let shown = try CardGeneration.displayed(kind: .cloze, content: cloze, variant: "cloze:1")
+        XCTAssertFalse(shown.question.contains("ズ")); XCTAssertTrue(shown.question.contains("知［＃（ラ）］"))
+    }
     func testRubyParsingSafeHTMLFallbackAndVerticalDigits() throws {
         let document = RubyDocument.parse("｜春暁《しゅんぎょう》 12年。\n｜東京《とうきょう》<script>alert(1)</script>")
         XCTAssertNil(document.warning); XCTAssertTrue(document.hasRuby)
