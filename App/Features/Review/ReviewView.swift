@@ -151,7 +151,10 @@ struct ReviewView: View {
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .onAppear { speechEventChanged(speechEvent) }
             .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
-            .onChange(of: scenePhase) { _, phase in if phase != .active { speechPlayer.stop() } }
+            .onChange(of: scenePhase) { _, phase in
+                if phase != .active { speechPlayer.stop() }
+                else { speechEventChanged(speechEvent) }
+            }
             .onChange(of: voiceOver) { _, enabled in if enabled { speechPlayer.stop() } }
             .onChange(of: store.review?.answerRevealed) { _, revealed in
                 swipeGate.invalidate()
@@ -219,13 +222,22 @@ struct ReviewView: View {
 
     /// Invoked only for a visible card-side transition, never for ordinary SwiftUI redraws.
     private func speechEventChanged(_ event: SpeechPresentationKey?) {
-        speechPlayer.stop()
         guard event != lastSpeechEvent else { return }
+        speechPlayer.stop()
+        guard let event else { lastSpeechEvent = nil; return }
+        guard scenePhase == .active else { SpeechDiagnostics.record("autoplaySkipped reason=inactive"); return }
         lastSpeechEvent = event
-        guard let event, scenePhase == .active, !autoSpeechPaused, !voiceOver,
-              let item = store.review?.card, item.cardID == event.cardID,
-              store.settings.speech.autoplay(deckID: item.deckID,
-                                             noteOverride: item.sourceContent.speechOverrides?[item.variantKey]).includes(event.side) else { return }
+        guard let item = store.review?.card, item.cardID == event.cardID else { return }
+        guard !autoSpeechPaused, !voiceOver else {
+            SpeechDiagnostics.record(autoSpeechPaused ? "autoplaySkipped reason=paused" : "autoplaySkipped reason=voiceOver")
+            return
+        }
+        let autoplay = store.settings.speech.autoplay(deckID: item.deckID,
+            noteOverride: item.sourceContent.speechOverrides?[item.variantKey])
+        guard autoplay.includes(event.side) else {
+            SpeechDiagnostics.record("autoplaySkipped setting=\(autoplay.rawValue) side=\(event.side.rawValue)")
+            return
+        }
         playPreferredAudio(event.side, item: item)
     }
 
@@ -239,8 +251,14 @@ struct ReviewView: View {
 
     private func playSpeech(_ side: SpeechSide, item: NoteItem) {
         // An answer can be read manually only after it has been revealed.
-        guard side == .question || store.review?.answerRevealed == true,
-              let text = SpeechReadout.text(kind: item.kind, displayed: item.content, side: side) else { return }
+        guard side == .question || store.review?.answerRevealed == true else {
+            SpeechDiagnostics.record("requestRejected reason=unrevealedAnswer"); return
+        }
+        let result = SpeechReadout.assessment(kind: item.kind, displayed: item.content, side: side)
+        guard let text = result.text else {
+            if let failure = result.failure { speechPlayer.unavailableReadout(failure) }
+            return
+        }
         speechPlayer.play(text: text, settings: store.settings.speech)
     }
 
@@ -248,7 +266,7 @@ struct ReviewView: View {
         let hasQuestion = item.content.questionAudioID != nil || SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil
         let hasAnswer = review.answerRevealed &&
             (item.content.answerAudioID != nil || SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil)
-        if hasQuestion || hasAnswer {
+        if hasQuestion || hasAnswer || speechPlayer.notice != nil {
             VStack(alignment: .leading, spacing: 6) {
                 ViewThatFits(in: .horizontal) {
                     HStack(spacing: 12) { speechButtons(hasQuestion: hasQuestion, hasAnswer: hasAnswer, item: item) }
@@ -258,10 +276,18 @@ struct ReviewView: View {
                 }
                 .buttonStyle(.borderless)
                 .font(.subheadline)
+                if speechPlayer.phase == .requested {
+                    Text("読み上げを開始しています…").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("speechRequested")
+                }
                 if let notice = speechPlayer.notice {
                     Text(notice).font(.caption).foregroundStyle(.secondary)
                         .accessibilityIdentifier("speechNotice")
                 }
+                DisclosureGroup("音が聞こえないとき") {
+                    Text("消音モードでは音を鳴らしません。消音を解除し、音量とBluetoothなどの出力先を確認してください。開始しない場合はiPhoneのアクセシビリティ設定で英語音声を確認できます。自動再生がオフでも再生ボタンは使えます。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.accessibilityIdentifier("speechOutputHelp")
             }
         }
     }
