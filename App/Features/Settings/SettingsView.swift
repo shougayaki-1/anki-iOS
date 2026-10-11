@@ -27,6 +27,12 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
                 StudySettingsSection(store: store)
+                Section("ウィジェット") {
+                    Text("ホーム画面の追加メニューから「暗記ノート」を選べます。全デッキの件数と進捗のみ共有し、問題文・答えは共有しません。更新の頻度や時刻はiOSが制御します。")
+                        .font(.footnote)
+                    Button("ウィジェットの更新をリクエスト") { store.refreshWidget() }.accessibilityIdentifier("refreshWidget")
+                    if let failure = store.widgetFailure { Text(failure).font(.footnote) }
+                }
                 Section("タイピング回答") {
                     NavigationLink("回答の保存設定") { TypedAnswerSettingsView(store: store) }
                         .accessibilityIdentifier("typedAnswerSettings")

@@ -37,13 +37,16 @@ final class StudyStore {
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration = 0
     var notificationPermission = NotificationPermission.unknown
+    var widgetFailure: String?
+    @ObservationIgnored private let widgetSnapshots: WidgetSnapshotPublisher?
     var notificationFailure: String?
     let notifications: NotificationService
     var scheduledNotificationCount = 0
     let haptics = HapticsService()
     @ObservationIgnored private var notificationJob: Task<Void, Never>?
 
-    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil) throws {
+    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil, widgetSnapshots: WidgetSnapshotPublisher? = nil) throws {
+        self.widgetSnapshots = widgetSnapshots
         repository = StudyRepository(container: container, mediaStore: mediaStore)
         statisticsReader = StatisticsReader(container: container)
         self.clock = clock
@@ -84,6 +87,7 @@ final class StudyStore {
             dataRevision += 1
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
+            publishWidget(snapshot, force: true)
             scheduleNotifications()
         } catch { homeFailure = error.localizedDescription; throw error }
     }
@@ -111,8 +115,17 @@ final class StudyStore {
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due
             applyHomeSnapshot(snapshot)
+            publishWidget(snapshot, force: false)
             if reconcileNotifications || changed { scheduleNotifications() }
         } catch { homeFailure = error.localizedDescription }
+    }
+    private func publishWidget(_ snapshot: HomeSnapshot, force: Bool) {
+        widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force) { [weak self] message in
+            self?.widgetFailure = message
+        }
+    }
+    func refreshWidget() {
+        do { try reload() } catch { failure = error.localizedDescription }
     }
     func refreshStatistics() {
         statisticsTask?.cancel()
