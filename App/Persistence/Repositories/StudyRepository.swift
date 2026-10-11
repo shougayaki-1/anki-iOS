@@ -3,7 +3,7 @@ import SwiftData
 
 extension PersistenceController {
     static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: StudySchemaV4.self)
+        let schema = Schema(versionedSchema: StudySchemaV5.self)
         let config: ModelConfiguration
         if let storeURL {
             config = ModelConfiguration("Study", schema: schema, url: try StudyStorageLocation(canonicalStore: storeURL).activeStore(), cloudKitDatabase: .none)
@@ -49,6 +49,7 @@ final class StudyRepository {
             if try context.fetch(FetchDescriptor<StudyPreferences>()).isEmpty {
                 context.insert(StudyPreferences())
             }
+            try pruneTypedAnswersInTransaction(now: now)
             // Process restart must not count time spent while the app was absent.
             if let draft = try session() { draft.activeSince = nil }
         }
@@ -418,6 +419,13 @@ final class StudyRepository {
                                      durationMs: duration, wasNew: summary.state == "new",
                                      sequence: try lastReviewSequence() + 1)
             context.insert(log)
+            try pruneTypedAnswersInTransaction(now: now)
+            if responseMode == .typing, try options().typedAnswerPolicy?.enabled == true,
+               let item = try noteItems(cardID: card.id).first {
+                let answer = TypedAnswerRecord(id: log.id, cardID: card.id, reviewedAt: log.reviewedAt, grade: log.grade,
+                                              question: item.content.question, answer: draft.typedDraft, modelAnswer: item.content.answer)
+                context.insert(try SavedTypedAnswer(answer))
+            }
             if summary.state == "new" {
                 var saved = try options()
                 var usage = saved.deckNewUsage ?? []
@@ -457,6 +465,7 @@ final class StudyRepository {
             draft.reviewStreak = 0
             try prepareOrderingDraft(draft)
             if latest.wasNew { draft.touchedCardIDs.removeAll { $0 == card.id } }
+            if let answer = try context.fetch(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.id == logID })).first { context.delete(answer) }
             var saved = try options()
             saved.deckNewUsage?.removeAll { $0.sequence == latest.sequence }
             try writeOptionsInTransaction(saved)

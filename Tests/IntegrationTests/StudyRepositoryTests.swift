@@ -1139,6 +1139,99 @@ final class StudyRepositoryTests: XCTestCase {
 }
 
 extension StudyRepositoryTests {
+    func testTypedAnswerDefaultOffAndOnlyTypingIsCapturedWithSnapshot() throws {
+        let repo = try fixture()
+        try create(repo, mode: .typing); try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "OFF response", revealed: true, now: now); try repo.grade(.good, now: now)
+        XCTAssertTrue(try repo.savedTypedAnswers(now: now).isEmpty)
+        XCTAssertEqual(try repo.logs().count, 1)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 30), now: now)
+        let noteID = try create(repo, mode: .typing)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "とうきょう\n入力時の本文", revealed: true, now: now); try repo.grade(.hard, now: now)
+        let record = try XCTUnwrap(repo.savedTypedAnswers(now: now).first)
+        XCTAssertEqual(record.answer, "とうきょう\n入力時の本文")
+        XCTAssertEqual(record.question, "日本の首都は？"); XCTAssertEqual(record.modelAnswer, "東京")
+        XCTAssertEqual(record.id, try repo.logs().last?.id); XCTAssertEqual(record.cardID, try repo.logs().last?.cardID)
+        try repo.updateNote(id: noteID, input: NoteInput(deckID: repo.decks()[0].id, question: "編集後", answer: "別の解答"), now: now)
+        XCTAssertEqual(try repo.savedTypedAnswers(now: now).first, record)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: false, retentionDays: 30), now: now)
+        try create(repo, mode: .typing); try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "OFF again", revealed: true, now: now); try repo.grade(.easy, now: now)
+        XCTAssertEqual(try repo.savedTypedAnswers(now: now), [record])
+    }
+    func testTypedAnswerUndoAndFailedGradeAreAtomic() throws {
+        let repo = try fixture(); try create(repo, mode: .typing)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 0), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "saved", revealed: true, now: now)
+        let before = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.grade(.good, now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        repo.save = { try $0.save() }
+        try repo.grade(.good, now: now)
+        XCTAssertEqual(try repo.savedTypedAnswers(now: now).count, 1)
+        let graded = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.undo(now: now))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), graded)
+        repo.save = { try $0.save() }
+        try repo.undo(now: now)
+        XCTAssertTrue(try repo.savedTypedAnswers(now: now).isEmpty)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertEqual(try repo.cards().first?.fsrsPayload, before.cards.first?.fsrsPayload)
+        XCTAssertEqual(try repo.session()?.answerMode, "typing")
+    }
+    func testTypedAnswerRetentionAndDeletionDoNotChangeReviewHistory() throws {
+        let repo = try fixture(); try create(repo, mode: .typing)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 30), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(text: "private", revealed: true, now: now)
+        try repo.grade(.good, now: now)
+        let cards = try repo.cards().map { ($0.id, $0.fsrsPayload) }, logIDs = try repo.logs().map(\.id)
+        XCTAssertEqual(try repo.savedTypedAnswers(now: now.addingTimeInterval(7 * 86400)).count, 1)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: false, retentionDays: 7), now: now.addingTimeInterval(8 * 86400))
+        XCTAssertTrue(try repo.savedTypedAnswers(now: now.addingTimeInterval(8 * 86400)).isEmpty)
+        XCTAssertEqual(try repo.logs().map(\.id), logIDs)
+        XCTAssertEqual(try repo.cards().first?.id, cards[0].0); XCTAssertEqual(try repo.cards().first?.fsrsPayload, cards[0].1)
+        XCTAssertThrowsError(try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: -1), now: now))
+        try repo.deleteTypedAnswers() // Repeated deletion is safe.
+        XCTAssertEqual(try repo.logs().map(\.id), logIDs)
+    }
+    func testTypedAnswerMentalModeNeverStoresStaleDraftAndDeletionFailureKeepsAnswer() throws {
+        let repo = try fixture(); try create(repo, mode: .typing)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 0), now: now)
+        try repo.start(mode: .new, now: now); try repo.updateDraft(text: "private", revealed: true, now: now); try repo.grade(.good, now: now)
+        let before = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.deleteTypedAnswers())
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        repo.save = { try $0.save() }
+        try repo.deleteTypedAnswers(ids: [try repo.savedTypedAnswers(now: now)[0].id])
+        XCTAssertTrue(try repo.savedTypedAnswers(now: now).isEmpty); XCTAssertEqual(try repo.logs().count, 1)
+        try create(repo); try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "stale text", revealed: true, now: now); try repo.grade(.good, now: now)
+        XCTAssertTrue(try repo.savedTypedAnswers(now: now).isEmpty)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testTypedAnswerCapturesActualClozeVariantInsteadOfEmptySourceAnswer() throws {
+        let repo = try fixture()
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, kind: .cloze, question: "{{c1::東京}}と{{c2::京都}}"), now: now)
+        try repo.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 30), now: now)
+        try repo.start(mode: .new, now: now)
+        let presented = try XCTUnwrap(repo.presentation(now: now)?.card)
+        XCTAssertTrue(["東京", "京都"].contains(presented.content.answer))
+        try repo.updateDraft(mode: .typing, text: "変種への回答", revealed: true, now: now)
+        try repo.grade(.good, now: now)
+        let saved = try XCTUnwrap(repo.savedTypedAnswers(now: now).first)
+        XCTAssertEqual(saved.cardID, presented.cardID)
+        XCTAssertEqual(saved.question, presented.content.question)
+        XCTAssertEqual(saved.modelAnswer, presented.content.answer)
+        XCTAssertEqual(saved.answer, "変種への回答")
+    }
+
     func testForecastScheduleVersusSimulationDeckQuotaUndoAndReadOnly() throws {
         let repo = try fixture(), root = try repo.decks()[0].id
         let child = try repo.createDeck(name: "Forecast child", parentID: root, now: now)

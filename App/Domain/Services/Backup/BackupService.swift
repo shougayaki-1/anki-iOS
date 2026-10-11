@@ -12,6 +12,7 @@ struct BackupService {
         }.value
     }
     static func export(repository: StudyRepository, now: Date, appVersion: String) async throws -> Data {
+        try repository.pruneTypedAnswers(now: now)
         let snapshot = try BackupData.capture(repository)
         let urls = try repository.assets().map { ($0.id, try repository.mediaStore.url(for: $0.relativePath)) }
         return try await Task.detached(priority: .utility) {
@@ -82,11 +83,14 @@ extension BackupData {
         for row in scopes { try row.insert(into: context) }
         for row in sessions { try row.insert(into: context) }
         for row in orderingDrafts ?? [] { row.insert(into: context) }
+        for row in typedAnswers ?? [] { context.insert(try SavedTypedAnswer(row)) }
         for row in imports { try row.insert(into: context) }
         for row in editorDrafts { try row.insert(into: context) }
     }
     func canonical() -> Self {
         var value = self
+        if value.typedAnswers?.isEmpty == true { value.typedAnswers = nil }
+        value.typedAnswers?.sort { $0.id.uuidString < $1.id.uuidString }
         if value.orderingDrafts?.isEmpty == true { value.orderingDrafts = nil }
         value.orderingDrafts?.sort { $0.key < $1.key }
         value.decks.sort { $0.id.uuidString < $1.id.uuidString }; value.notes.sort { $0.id.uuidString < $1.id.uuidString }
