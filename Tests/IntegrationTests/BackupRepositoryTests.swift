@@ -322,3 +322,105 @@ extension BackupRepositoryTests {
         XCTAssertTrue(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
     }
 }
+
+extension BackupRepositoryTests {
+    func testDeckExchangeExportsOnlySelectedContentAndImportsFreshCardsWithMedia() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let child = try XCTUnwrap(source.decks().first(where: { $0.parentID != nil }))
+        let audio = try source.addAudio(AudioEncodingPolicy.prepare(SpeechReadoutTests.silence()), now: now)
+        let note = try XCTUnwrap(source.notes().first)
+        try source.transaction {
+            var content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            content.questionAudioID = audio; content.answerAudioID = audio; content.speechOverrides = ["basic:front": .both]
+            note.contentPayload = try JSONEncoder().encode(content)
+        }
+        try source.createNote(NoteInput(deckID: source.decks()[0].id, question: "Private unrelated", answer: "Do not share"), now: now)
+        let before = try BackupData.capture(source)
+        let bytes = try await DeckExchange.export(repository: source, rootID: child.id)
+        XCTAssertEqual(try BackupData.capture(source), before)
+        let validated = try DeckExchange.decode(bytes)
+        XCTAssertEqual(validated.package.notes.count, 4)
+        XCTAssertEqual(validated.cardCount, 6)
+        XCTAssertEqual(validated.package.decks.count, 1)
+        XCTAssertNil(validated.package.decks[0].parentID)
+        XCTAssertEqual(Set(validated.package.notes.map(\.kind)), Set(NoteKind.allCases))
+        XCTAssertTrue(validated.package.notes.allSatisfy { $0.content.speechOverrides == nil })
+        XCTAssertEqual(validated.bytes[audio], SpeechReadoutTests.silence())
+        let files = try StoredZIP.read(bytes)
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: files["deck.json"]!) as? [String: Any])
+        XCTAssertEqual(Set(json.keys), ["schemaVersion", "rootID", "decks", "notes", "media"])
+        XCTAssertNil(files["data.json"])
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        try destination.createDeck(name: child.name, now: now)
+        try destination.createNote(NoteInput(deckID: destination.decks()[0].id, question: "Existing", answer: "Keep"), now: now)
+        try destination.start(mode: .new, now: now); try destination.updateDraft(revealed: true, now: now)
+        try destination.grade(.good, now: now.addingTimeInterval(1))
+        let savedLogs = try destination.logs().map(\.id), savedSettings = try destination.settings()
+        let savedCard = try XCTUnwrap(destination.cards().first)
+        let savedPayload = savedCard.fsrsPayload
+        let preview = try destination.previewDeckImport(validated)
+        XCTAssertTrue(preview.duplicates.isEmpty); XCTAssertEqual(preview.destinationName, "子デッキ（取込 2）")
+        XCTAssertEqual(try destination.importDeckPackage(validated, skipDuplicates: true, now: now), 4)
+        XCTAssertEqual(try destination.logs().map(\.id), savedLogs)
+        XCTAssertEqual(try destination.settings(), savedSettings)
+        XCTAssertEqual(savedCard.fsrsPayload, savedPayload)
+        let imported = try destination.cards().filter { $0.id != savedCard.id }
+        XCTAssertEqual(imported.count, 6)
+        for card in imported {
+            XCTAssertFalse(card.isSuspended)
+            let summary = try ReviewScheduler().summary(JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload))
+            XCTAssertEqual(summary.repetitions, 0)
+        }
+        let audioIDs = try destination.noteItems().flatMap { $0.sourceContent.audioIDs }
+        XCTAssertFalse(audioIDs.isEmpty)
+        XCTAssertFalse(audioIDs.contains(audio))
+        for id in audioIDs { XCTAssertEqual(try Data(contentsOf: destination.assetURL(id: id)), validated.bytes[audio]) }
+        let repeated = try destination.previewDeckImport(validated)
+        XCTAssertEqual(repeated.duplicates.count, 4)
+        let after = try BackupData.capture(destination)
+        XCTAssertEqual(try destination.importDeckPackage(validated, skipDuplicates: true, now: now), 0)
+        XCTAssertEqual(try BackupData.capture(destination), after)
+        XCTAssertEqual(try destination.importDeckPackage(validated, skipDuplicates: false, now: now), 4)
+        _ = try BackupArchive.decode(await BackupService.export(repository: destination, now: now, appVersion: "test"))
+    }
+    func testDeckExchangeRejectsCorruptionAndRollsBackAllModelsAndFiles() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let child = try XCTUnwrap(source.decks().first(where: { $0.parentID != nil }))
+        let bytes = try await DeckExchange.export(repository: source, rootID: child.id)
+        let validated = try DeckExchange.decode(bytes)
+        var version = validated.package; version.schemaVersion = 2
+        XCTAssertThrowsError(try DeckExchange.validate(version, bytes: validated.bytes))
+        let cycle = DeckPackage(rootID: child.id, decks: [SharedDeck(id: child.id, name: child.name, parentID: child.id)], notes: validated.package.notes, media: validated.package.media)
+        XCTAssertThrowsError(try DeckExchange.validate(cycle, bytes: validated.bytes))
+        var invalidNotes = validated.package.notes
+        invalidNotes[0].content.questionAudioID = validated.package.media[0].id
+        let invalidRole = DeckPackage(rootID: child.id, decks: validated.package.decks, notes: invalidNotes, media: validated.package.media)
+        XCTAssertThrowsError(try DeckExchange.validate(invalidRole, bytes: validated.bytes))
+        var damaged = validated.bytes; damaged[validated.package.media[0].id] = Data("broken".utf8)
+        XCTAssertThrowsError(try DeckExchange.validate(validated.package, bytes: damaged))
+        XCTAssertThrowsError(try DeckExchange.decode(Data(bytes.dropLast())))
+        var files = try StoredZIP.read(bytes)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: files["deck.json"]!) as? [String: Any])
+        json["logs"] = []
+        files["deck.json"] = try JSONSerialization.data(withJSONObject: json)
+        files["manifest.json"] = try JSONEncoder().encode(DeckFileManifest(files: files.filter { $0.key != "manifest.json" }.mapValues(BackupArchive.hash)))
+        XCTAssertThrowsError(try DeckExchange.decode(StoredZIP.write(files)))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let before = try BackupData.capture(destination)
+        destination.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try destination.importDeckPackage(validated, skipDuplicates: false, now: now))
+        XCTAssertEqual(try BackupData.capture(destination), before)
+        if let enumerator = FileManager.default.enumerator(at: destination.mediaStore.root, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in enumerator { XCTAssertNotEqual(try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile, true) }
+        }
+        destination.save = { try $0.save() }
+        let task = Task { try destination.importDeckPackage(validated, skipDuplicates: false, now: now) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled import must not succeed") } catch is CancellationError {} catch { XCTFail("\(error)") }
+        XCTAssertEqual(try BackupData.capture(destination), before)
+    }
+}

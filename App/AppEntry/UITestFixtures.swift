@@ -127,6 +127,12 @@ enum UITestFixtures {
         guard UUID(uuidString: name) != nil else { throw StudyError.invalidContent }
         let documents = URL.documentsDirectory
         try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        let deckID = UUID(), noteID = UUID(), audioID = UUID(), audio = silentAudio()
+        let content = TextContent(question: "Shared audio question", answer: "Shared audio answer", explanation: "", reverseEnabled: true, questionAudioID: audioID, answerAudioID: audioID)
+        let package = DeckPackage(rootID: deckID, decks: [SharedDeck(id: deckID, name: "共有サンプル", parentID: nil)],
+            notes: [SharedNote(id: noteID, deckID: deckID, kind: .basic, content: content, responseMode: .mental, tags: ["共有タグ"])],
+            media: [SharedMedia(id: audioID, mediaType: "audio/wav", width: 0, height: 0, sha256: BackupArchive.hash(audio))])
+        try DeckExchange.encode(package, bytes: [audioID: audio]).write(to: documents.appendingPathComponent("Deck-\(name).studydeck"), options: .atomic)
         try silentAudio().write(to: documents.appendingPathComponent("Audio-\(name).wav"), options: .atomic)
         try Data("question,answer\nCSV file question,CSV file answer\n".utf8)
             .write(to: documents.appendingPathComponent("UITest-\(name).csv"), options: .atomic)
