@@ -7,6 +7,13 @@ struct NoteEditorView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @FocusedValue(\.numericSettingEditing) private var numericSettingEditing
+    @State private var kanbunBase = ""
+    @State private var kanbunOkuri = ""
+    @State private var kanbunMark = "レ"
+    @State private var kanbunLeft = ""
+    @State private var rubySide = false
+    @State private var rubyBase = ""
+    @State private var rubyReading = ""
     @State private var input: NoteInput
     @State private var tagText: String
     @State private var historyChoice = false
@@ -42,7 +49,7 @@ struct NoteEditorView: View {
                                                speechOverrides: item?.sourceContent.speechOverrides ?? [:],
                                                speechQuestion: item?.sourceContent.speechQuestion,
                                                speechAnswer: item?.sourceContent.speechAnswer, questionAudioID: item?.sourceContent.questionAudioID,
-                                               answerAudioID: item?.sourceContent.answerAudioID))
+                                               answerAudioID: item?.sourceContent.answerAudioID, questionLayout: item?.sourceContent.questionLayout, answerLayout: item?.sourceContent.answerLayout))
         do {
             if let saved = try store.repository.editorDraft(key: item.map { "edit:\($0.noteID.uuidString)" } ?? "new") {
                 _input = State(initialValue: saved)
@@ -72,6 +79,51 @@ struct NoteEditorView: View {
                 if input.kind == .cloze {
                     Text("例：日本の首都は {{c1::東京}}。番号ごとにカードを作ります。既存の番号を維持すると学習履歴も維持できます。")
                         .font(.footnote).foregroundStyle(.secondary)
+                }
+                Section("本文の表示") {
+                    Picker("問題面", selection: Binding(get: { input.questionLayout ?? .horizontal }, set: { input.questionLayout = $0 })) {
+                        ForEach(TextLayout.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.accessibilityIdentifier("questionLayout")
+                    Picker("解答面", selection: Binding(get: { input.answerLayout ?? .horizontal }, set: { input.answerLayout = $0 })) {
+                        ForEach(TextLayout.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.accessibilityIdentifier("answerLayout")
+                    Text("ルビ：｜漢字《かんじ》。明示した語に付けます。縦書きは右から左に列が進み、2桁数字は縦中横にします。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    if let warning = RubyDocument.parse(input.question).warning ?? RubyDocument.parse(input.answer).warning {
+                        Text(warning).font(.footnote).foregroundStyle(.orange)
+                    }
+                    DisclosureGroup("ルビを末尾に追加") {
+                        Toggle("解答面に追加", isOn: $rubySide)
+                        TextField("親文字", text: $rubyBase)
+                        TextField("読み", text: $rubyReading)
+                        Button("ルビを追加") {
+                            let value = "｜\(rubyBase)《\(rubyReading)》"
+                            if rubySide { input.answer += value } else { input.question += value }
+                            rubyBase = ""; rubyReading = ""
+                        }.disabled(rubyBase.isEmpty || rubyReading.isEmpty || (rubyBase + rubyReading).contains(where: { "｜|《》\n".contains($0) }))
+                    }
+                }
+                Section("漢文の訓点") {
+                    Text("例：不［＃（ズ）］［＃レ］知［＃（ラ）］。返り点は左下、送り仮名は右下へ配置します。訓点付き本文は縦書きを推奨します。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    DisclosureGroup("訓点付きの字を末尾に追加") {
+                        Toggle("解答面に追加", isOn: $rubySide)
+                        TextField("漢字1字", text: $kanbunBase)
+                        TextField("送り仮名（任意）", text: $kanbunOkuri)
+                        Picker("返り点", selection: $kanbunMark) {
+                            Text("なし").tag("")
+                            ForEach(KanbunDocument.returnMarks, id: \.self) { Text($0).tag($0) }
+                        }
+                        TextField("再読の左ルビ（任意）", text: $kanbunLeft)
+                        Button("訓点付きの字を追加") {
+                            var value = kanbunBase
+                            if !kanbunOkuri.isEmpty { value += "［＃（\(kanbunOkuri)）］" }
+                            if !kanbunMark.isEmpty { value += "［＃\(kanbunMark)］" }
+                            if !kanbunLeft.isEmpty { value += "［＃「\(kanbunBase)」の左に「\(kanbunLeft)」のルビ］" }
+                            if rubySide { input.answer += value } else { input.question += value }
+                            kanbunBase = ""; kanbunOkuri = ""; kanbunLeft = ""
+                        }.disabled(kanbunBase.count != 1 || kanbunOkuri.count > 32 || kanbunLeft.count > 32 || (kanbunBase + kanbunOkuri + kanbunLeft).contains(where: { "［］「」\n".contains($0) }))
+                    }
                 }
                 Section("問題") {
                     TextField("問題文", text: $input.question, axis: .vertical).lineLimit(3...10)
@@ -130,6 +182,10 @@ struct NoteEditorView: View {
                 Section {
                     if !input.answer.isEmpty, let reason = OrderingAnswer.reason(kind: input.kind, answer: input.answer) {
                         Text(reason).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if let variants = speechVariants {
+                        Text("このノートから\(variants.count)枚の学習カードを作成")
+                            .accessibilityIdentifier("generatedCardCount")
                     }
                     Button("出題プレビュー") { preview = true }.accessibilityIdentifier("previewNote")
                     if item == nil { Button("保存して次へ") { requestSave(next: true) }.disabled(!canSave) }

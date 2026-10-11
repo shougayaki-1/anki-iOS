@@ -2,6 +2,65 @@ import XCTest
 @testable import AnkiIOS
 
 final class CardGenerationTests: XCTestCase {
+    func testKanbunStructuredMarksBothSidesRereadingAndSafeFallback() throws {
+        let source = "｜未《いま》［＃「未」の左に「ザル」のルビ］［＃（ダ）］［＃レ］知［＃（ラ）］。\n自［＃二］女王國［＃一レ］12年"
+        let parsed = KanbunDocument.parse(source)
+        XCTAssertNil(parsed.warning)
+        guard case .glyph(let first) = parsed.units.first else { return XCTFail("Missing annotated glyph") }
+        XCTAssertEqual(first.base, "未"); XCTAssertEqual(first.rightRuby, "いま")
+        XCTAssertEqual(first.leftRuby, "ザル"); XCTAssertEqual(first.okuri, "ダ"); XCTAssertEqual(first.returnMark, "レ")
+        let ruby = RubyDocument.parse(source)
+        XCTAssertNil(ruby.warning); XCTAssertTrue(ruby.hasRuby)
+        let html = ruby.html(layout: .vertical, fontSize: 24)
+        XCTAssertTrue(html.contains("kg-left")); XCTAssertTrue(html.contains("kg-right"))
+        XCTAssertFalse(html.contains("［＃")); XCTAssertTrue(html.contains("<span class=\"tcy\">12</span>"))
+        XCTAssertTrue(ruby.spoken.contains("再読の左の読み ザル"))
+        for mark in KanbunDocument.returnMarks {
+            XCTAssertNil(KanbunDocument.parse("漢［＃\(mark)］").warning)
+        }
+        for source in ["［＃レ］字", "字［＃未対応］", "字［＃レ", "字［＃レ］［＃一］", "字［＃（）］", "字［＃「別」の左に「よみ」のルビ］", "字［＃（\(String(repeating: "カ", count: 33))）］"] {
+            let invalid = RubyDocument.parse(source)
+            XCTAssertNotNil(invalid.warning); XCTAssertEqual(invalid.plain, source)
+        }
+        let attack = RubyDocument.parse("字［＃（<img src=evil>）］")
+        XCTAssertTrue(attack.html(layout: .vertical, fontSize: 24).contains("&lt;img src=evil&gt;"))
+        XCTAssertFalse(attack.html(layout: .vertical, fontSize: 24).contains("<img"))
+        let bulk = String(repeating: "字［＃（カナ）］［＃二］", count: 2000)
+        XCTAssertNil(KanbunDocument.parse(bulk).warning)
+        XCTAssertNotNil(KanbunDocument.parse(String(repeating: "字", count: 70_000)).warning)
+        let cloze = TextContent(question: "{{c1::不}}［＃（ズ）］［＃レ］知［＃（ラ）］", answer: "", explanation: "")
+        let shown = try CardGeneration.displayed(kind: .cloze, content: cloze, variant: "cloze:1")
+        XCTAssertFalse(shown.question.contains("ズ")); XCTAssertTrue(shown.question.contains("知［＃（ラ）］"))
+    }
+    func testRubyParsingSafeHTMLFallbackAndVerticalDigits() throws {
+        let document = RubyDocument.parse("｜春暁《しゅんぎょう》 12年。\n｜東京《とうきょう》<script>alert(1)</script>")
+        XCTAssertNil(document.warning); XCTAssertTrue(document.hasRuby)
+        XCTAssertTrue(document.spoken.contains("春暁（しゅんぎょう）"))
+        let html = document.html(layout: .vertical, fontSize: 24)
+        XCTAssertTrue(html.contains("writing-mode:vertical-rl"))
+        XCTAssertTrue(html.contains("<ruby>春暁<rt>しゅんぎょう</rt></ruby>"))
+        XCTAssertTrue(html.contains("<span class=\"tcy\">12</span>"))
+        XCTAssertTrue(html.contains("&lt;script&gt;")); XCTAssertFalse(html.contains("<script>"))
+        XCTAssertFalse(html.contains("https://")); XCTAssertTrue(html.contains("default-src 'none'"))
+        for source in ["｜漢字《", "｜《から》", "｜漢字《》", "漢字《かんじ》", "｜漢字《読\nみ》"] {
+            let parsed = RubyDocument.parse(source)
+            XCTAssertNotNil(parsed.warning); XCTAssertEqual(parsed.plain, source)
+        }
+        XCTAssertEqual(RubyDocument.parse("普通の本文").plain, "普通の本文")
+    }
+    func testRubyClozeNeverLeaksReadingAndReverseSwapsLayouts() throws {
+        var content = TextContent(question: "｜{{c1::東京}}《とうきょう》と{{c2::｜大阪《おおさか》}}", answer: "A", explanation: "", questionLayout: .vertical, answerLayout: .horizontal)
+        let first = try CardGeneration.displayed(kind: .cloze, content: content, variant: "cloze:1")
+        XCTAssertFalse(first.question.contains("とうきょう"))
+        XCTAssertTrue(first.question.contains("｜大阪《おおさか》"))
+        let second = try CardGeneration.displayed(kind: .cloze, content: content, variant: "cloze:2")
+        XCTAssertFalse(second.question.contains("おおさか")); XCTAssertTrue(second.answer.contains("おおさか"))
+        content.reverseEnabled = true
+        let reverse = try CardGeneration.displayed(kind: .basic, content: content, variant: "basic:reverse")
+        XCTAssertEqual(reverse.questionLayout, .horizontal); XCTAssertEqual(reverse.answerLayout, .vertical)
+        let legacy = try JSONDecoder().decode(TextContent.self, from: Data(#"{"schemaVersion":1,"question":"Q","answer":"A","explanation":""}"#.utf8))
+        XCTAssertNil(legacy.questionLayout); XCTAssertNil(legacy.answerLayout)
+    }
     func testHintCompatibilityAndSharedVariants() throws {
         let old = Data(#"{"schemaVersion":1,"question":"Q","answer":"A","explanation":"E"}"#.utf8)
         XCTAssertNil(try JSONDecoder().decode(TextContent.self, from: old).hint)
@@ -83,5 +142,20 @@ final class NumericSettingsInputTests: XCTestCase {
         }
         XCTAssertEqual(rect.replacingPercentage("0", at: \.x)?.x, 0)
         XCTAssertEqual(MaskRect(x: 0, y: 0, width: 1, height: 1).replacingPercentage("100", at: \.height)?.height, 1)
+    }
+}
+
+extension CardGenerationTests {
+    func testJapaneseStateDescriptionsDistinguishSuspensionFutureDueAndNewLimits() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        for (raw, label) in [("new", "未学習"), ("learning", "学習中"), ("review", "復習待ち"), ("relearning", "再学習中")] {
+            let value = LearningStatePresentation(state: raw)
+            XCTAssertEqual(value.title, label); XCTAssertFalse(value.explanation.isEmpty)
+            XCTAssertTrue(value.availability(suspended: true, due: now, now: now).contains("停止中"))
+            if raw != "new" {
+                XCTAssertTrue(value.availability(suspended: false, due: now.addingTimeInterval(60), now: now).contains("待機"))
+                XCTAssertTrue(value.availability(suspended: false, due: now, now: now).contains("期日"))
+            } else { XCTAssertTrue(value.availability(suspended: false, due: now, now: now).contains("新規枠")) }
+        }
     }
 }

@@ -122,7 +122,7 @@ final class OrderingUITests: XCTestCase {
         attach(app, "Issue49-csv-mode-preview")
         app.buttons["confirmImport"].tap(); app.buttons["commitImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["importResult"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["importResult"].label.contains("成功 1件"))
+        XCTAssertTrue(app.staticTexts["importResult"].label.contains("新規 1ノート"))
         app.buttons["closeImport"].tap()
         app.staticTexts["CSV ordering"].firstMatch.tap(); app.buttons["editNote"].tap()
         tap("previewNote", app: app)

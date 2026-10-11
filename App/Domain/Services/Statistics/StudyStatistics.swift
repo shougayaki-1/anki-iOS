@@ -141,3 +141,43 @@ struct StudyStatistics {
                     unattributedAnswers: unattributedAnswers)
     }
 }
+
+struct WeakCardEvidence: Equatable {
+    let reasons: [String]
+    let score: Double
+    static func evaluate(logs: [StatisticLog], difficulty: Double, retrievability: Double?, now: Date) -> Self? {
+        let history = logs.filter { $0.date <= now }.sorted { $0.date < $1.date }
+        guard !history.isEmpty else { return nil }
+        let again = history.filter { $0.grade == .again }.count
+        let ratio = Double(again) / Double(history.count)
+        var reasons: [String] = []
+        if history.last?.grade == .again { reasons.append("直近の評価がAgain") }
+        if again >= 2 { reasons.append("期間内のAgain：\(again)回") }
+        if history.count >= 3 && ratio >= 0.3 { reasons.append("Againの割合：\(Int((ratio * 100).rounded()))%（\(history.count)回答）") }
+        if history.count >= 3 && difficulty >= 8 { reasons.append("FSRS難易度：\(String(format: "%.1f", difficulty))／10") }
+        if history.count >= 3, let probability = retrievability, probability < 0.75 {
+            reasons.append("現在の推定想起確率：\(Int((probability * 100).rounded()))%")
+        }
+        guard !reasons.isEmpty else { return nil }
+        return Self(reasons: reasons, score: Double(again) + ratio * 3 +
+            (history.last?.grade == .again ? 3 : 0) + difficulty / 10 + (1 - (retrievability ?? 1)))
+    }
+}
+
+struct WeakCardItem: Identifiable {
+    var id: UUID { card.cardID }
+    let card: NoteItem
+    let evidence: WeakCardEvidence
+}
+
+// Local practice state has no repository, scheduler, persistence or rating API.
+struct WeakPracticeSession: Identifiable {
+    let id = UUID()
+    let cards: [NoteItem]
+    private(set) var index = 0
+    private(set) var revealed = false
+    var current: NoteItem? { cards.indices.contains(index) ? cards[index] : nil }
+    mutating func reveal() { if current != nil { revealed = true } }
+    mutating func next() { guard current != nil, revealed else { return }; index += 1; revealed = false }
+    mutating func previous() { guard index > 0 else { return }; index -= 1; revealed = false }
+}
