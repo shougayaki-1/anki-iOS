@@ -430,3 +430,7 @@ SessionScopeは開始時にだけ設定する実行中セッションの条件�
 操作はNoteのdeckIDを更新、またはNoteと全兄弟StudyCardと編集下書きを削除する。DeckのUUID・parentID・階層は変更しない。移動はNote・Card UUID、FSRS、期限、停止状態、タグ、画像、ReviewLog、下書き本文を維持して下書きのdeckIDも更新する。削除後も過去のReviewLogは残り、該当カードの現行セッションとUndo参照を安全に解除する。変更の適用には既存previewBulkEdit/applyBulkEditのトランザクションとSwiftData保存失敗時のロールバックを利用する。
 
 プレビューから確定までにノート所属・ノート/カード内容・下書き・デッキ名や階層が変わった場合は失効し、再プレビューを求める。確定保存後のStudyStore.reloadでライブラリ・ホーム・通知を整合更新する。バックアップ形式・FSRSアルゴリズムに変更はない。Xcodeビルド、実機での学習中操作、バックアップ/復元、VoiceOver、大きな文字、1000ノート規模の確認は実施環境で別途検証する。
+
+### 画像付きZIPインポート（#22）
+
+CSV/TSVとPNG/JPEGを1つのローカルZIPからプレビュー・行除外・重複確認後に一括登録する。空の問題には共通プロンプトを補い、basicカードで画像・解答・FSRS・Undoを利用する。画像は既存MediaAsset管理を共用し、保存失敗はトランザクションとファイル清掃で巻き戻す。形式・上限・サンプル・実機確認手順は [画像ZIPインポート](image-zip-import.md) を参照。
