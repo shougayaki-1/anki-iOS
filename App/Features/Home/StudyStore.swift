@@ -132,8 +132,10 @@ final class StudyStore {
             self?.widgetFailure = message
         }
     }
-    func refreshWidget() {
-        do { try reload() } catch { failure = error.localizedDescription }
+    @discardableResult
+    func refreshWidget() -> Bool {
+        do { try reload(); return true }
+        catch { failure = error.localizedDescription; return false }
     }
     func refreshStatistics() {
         statisticsTask?.cancel()

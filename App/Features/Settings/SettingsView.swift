@@ -9,6 +9,7 @@ struct SettingsView: View {
     @State private var requestingNotification = false
     @State private var backup = false
     @State private var widgetRefreshRequested = false
+    @State private var lastWidgetRefreshFeedbackAt: Date?
 
     var body: some View {
         NavigationStack {
@@ -169,16 +170,19 @@ struct SettingsView: View {
         }
     }
     private func requestWidgetRefresh() {
-        let alreadyRequested = widgetRefreshRequested
-        store.refreshWidget() // Keep the existing WidgetKit request and error handling.
-        guard store.failure == nil else {
-            widgetRefreshRequested = false
-            return
-        }
+        let isRetry = store.widgetFailure != nil
+        // Old asynchronous failures must not block acknowledgment of a new request.
+        store.widgetFailure = nil
+        widgetRefreshRequested = false
+        guard store.refreshWidget(), store.widgetFailure == nil else { return }
+
         widgetRefreshRequested = true
-        // Only acknowledge the request, not completion of the OS-managed widget update.
-        // A persistent inline status avoids duplicate banners on repeated taps.
-        guard !alreadyRequested, store.widgetFailure == nil else { return }
+        // The inline status represents request acceptance; only haptics and
+        // VoiceOver announcements are throttled during rapid consecutive taps.
+        let now = Date()
+        if !isRetry, let last = lastWidgetRefreshFeedbackAt,
+           now.timeIntervalSince(last) < 1 { return }
+        lastWidgetRefreshFeedbackAt = now
         store.haptics.play(.widgetRefreshRequest, mode: store.settings.hapticsMode)
         if UIAccessibility.isVoiceOverRunning {
             UIAccessibility.post(notification: .announcement,
