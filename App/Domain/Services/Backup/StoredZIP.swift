@@ -1,4 +1,5 @@
 import Foundation
+import zlib
 
 enum BackupError: LocalizedError {
     case invalidArchive, unsupportedArchive, tooLarge, invalidData, checksum, unsupportedVersion
@@ -70,7 +71,28 @@ struct StoredZIP {
         guard archive.count <= maximumBytes else { throw BackupError.tooLarge }
         return archive
     }
-    static func read(_ archiveData: Data) throws -> [String: Data] {
+    // Raw DEFLATE is enabled only for legacy Anki import; app backup formats remain stored-only.
+    static func inflateZIP(_ data: Data, size: Int) throws -> Data {
+        guard !data.isEmpty, size <= maximumEntryBytes, size <= max(1_000_000, data.count * 200) else { throw BackupError.tooLarge }
+        try Task.checkCancellation()
+        var stream = z_stream()
+        guard inflateInit2_(&stream, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else { throw BackupError.invalidArchive }
+        defer { inflateEnd(&stream) }
+        var output = Data(count: max(1, size))
+        let status = data.withUnsafeBytes { input in
+            output.withUnsafeMutableBytes { target in
+                stream.next_in = UnsafeMutablePointer(mutating: input.bindMemory(to: Bytef.self).baseAddress!)
+                stream.avail_in = uInt(data.count)
+                stream.next_out = target.bindMemory(to: Bytef.self).baseAddress!
+                stream.avail_out = uInt(max(1, size))
+                return inflate(&stream, Z_FINISH)
+            }
+        }
+        guard status == Z_STREAM_END, stream.total_out == size, stream.avail_in == 0 else { throw BackupError.invalidArchive }
+        try Task.checkCancellation()
+        return Data(output.prefix(size))
+    }
+    static func read(_ archiveData: Data, allowDeflate: Bool = false) throws -> [String: Data] {
         let data = Data(archiveData)
         guard data.count <= maximumBytes else { throw BackupError.tooLarge }
         guard data.count >= 22 else { throw BackupError.invalidArchive }
@@ -85,28 +107,30 @@ struct StoredZIP {
         var position = start, localEnd = 0, total = 0
         var files: [String: Data] = [:]
         for _ in 0..<count {
+            try Task.checkCancellation()
             guard position + 46 <= end, (try data.uint32(position)) == 0x02014b50 else { throw BackupError.invalidArchive }
             let flags = (try data.uint16(position + 8)), method = (try data.uint16(position + 10))
             let size = Int((try data.uint32(position + 24))), packed = Int((try data.uint32(position + 20)))
             let nameLength = Int((try data.uint16(position + 28)))
-            guard flags == 0 || flags == 0x800, method == 0,
+            guard flags == 0 || flags == 0x800, method == 0 || (allowDeflate && method == 8),
                   (try data.uint16(position + 30)) == 0, (try data.uint16(position + 32)) == 0, (try data.uint16(position + 34)) == 0,
                   ((try data.uint32(position + 38)) >> 16) & 0xf000 != 0xa000 else { throw BackupError.unsupportedArchive }
             guard size <= maximumEntryBytes, total + size <= maximumBytes else { throw BackupError.tooLarge }
-            guard packed == size, position + 46 + nameLength <= end,
+            guard (method == 8 || packed == size), position + 46 + nameLength <= end,
                   let path = String(data: data.subdata(in: (position + 46)..<(position + 46 + nameLength)), encoding: .utf8),
                   validPath(path), files[path] == nil else { throw BackupError.invalidArchive }
             let local = Int((try data.uint32(position + 42)))
-            guard local == localEnd, local + 30 + nameLength + size <= start,
+            guard local == localEnd, local + 30 + nameLength + packed <= start,
                   (try data.uint32(local)) == 0x04034b50,
                   (try data.uint16(local + 6)) == flags, (try data.uint16(local + 8)) == method,
                   (try data.uint32(local + 14)) == (try data.uint32(position + 16)), (try data.uint32(local + 18)) == packed,
                   (try data.uint32(local + 22)) == size, (try data.uint16(local + 26)) == nameLength, (try data.uint16(local + 28)) == 0,
                   data.subdata(in: (local + 30)..<(local + 30 + nameLength)) == Data(path.utf8) else { throw BackupError.invalidArchive }
-            let bytes = data.subdata(in: (local + 30 + nameLength)..<(local + 30 + nameLength + size))
+            let payload = data.subdata(in: (local + 30 + nameLength)..<(local + 30 + nameLength + packed))
+            let bytes = method == 8 ? try inflateZIP(payload, size: size) : payload
             guard crc32(bytes) == ((try data.uint32(position + 16))) else { throw BackupError.checksum }
             files[path] = bytes; total += size
-            localEnd = local + 30 + nameLength + size; position += 46 + nameLength
+            localEnd = local + 30 + nameLength + packed; position += 46 + nameLength
         }
         guard position == end, localEnd == start else { throw BackupError.invalidArchive }
         return files

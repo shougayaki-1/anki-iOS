@@ -84,6 +84,10 @@ enum DeckExchange {
             width: $0.width, height: $0.height, sha256: $0.sha256, createdAt: now) }
         try BackupValidation.validate(snapshot, media: bytes)
     }
+    static func validated(package: DeckPackage, bytes: [UUID: Data]) throws -> ValidatedDeckPackage {
+        try validate(package, bytes: bytes)
+        return ValidatedDeckPackage(package: package, bytes: bytes)
+    }
     static func encode(_ package: DeckPackage, bytes: [UUID: Data]) throws -> Data {
         try validate(package, bytes: bytes)
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
