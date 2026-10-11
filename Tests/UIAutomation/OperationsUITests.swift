@@ -87,7 +87,10 @@ final class OperationsUITests: XCTestCase {
         XCTAssertTrue(tab(app, "設定").waitForExistence(timeout: 15)); tab(app, "設定").tap()
         scrollTo(toggle, in: app); XCTAssertEqual(toggle.value as? String, "0")
     }
-    func testActualDueNotificationDeliveryAndTapReturnsHome() {
+    func testActualDueNotificationDeliveryAndTapReturnsHome() throws {
+        #if targetEnvironment(macCatalyst)
+        throw XCTSkip("iOS notification delivery acceptance")
+        #else
         addUIInterruptionMonitor(withDescription: "Local notification permission") { alert in
             for label in ["許可", "Allow"] where alert.buttons[label].exists { alert.buttons[label].tap(); return true }
             return false
@@ -142,6 +145,7 @@ final class OperationsUITests: XCTestCase {
         XCTAssertTrue(tab(app, "設定").waitForExistence(timeout: 15))
         tab(app, "設定").tap(); scrollTo(toggle, in: app)
         XCTAssertEqual(toggle.value as? String, "0")
+        #endif
     }
     func testNativeBackupExportAndImportPicker() {
         let app = launch(); create(app)

@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UserNotifications
+import Observation
 
 @main
 struct AnkiIOSApp: App {
@@ -11,39 +12,70 @@ struct AnkiIOSApp: App {
     }
     var body: some Scene {
         WindowGroup { AppRootView().tint(Color("AccentColor")) }
+        #if targetEnvironment(macCatalyst)
+        .commands {
+            CommandGroup(after: .newItem) {
+                Button("同じ学習ウィンドウを開く") {
+                    UIApplication.shared.requestSceneSessionActivation(nil, userActivity: nil, options: nil)
+                }.keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+            CommandMenu("学習") {
+                Button("復習を開始・再開") { ShortcutNavigation.shared.submit(.study(.review)) }
+                Button("新規学習を開始・再開") { ShortcutNavigation.shared.submit(.study(.new)) }
+                Button("学習記録を表示") { ShortcutNavigation.shared.submit(.progress) }
+            }
+        }
+        #endif
     }
 }
 
 struct AppRootView: View {
-    @State private var container: ModelContainer?
-    @State private var failure: String?
-    @State private var store: StudyStore?
-    @State private var diagnosticOnly = false
+    @State private var workspace = AppWorkspace.forWindow()
+    @State private var windowID = UUID()
 
     var body: some View {
         Group {
-            if let container {
-                if diagnosticOnly {
+            if let container = workspace.container {
+                if workspace.diagnosticOnly {
                     Phase0View().modelContainer(container)
-                } else if let store {
-                    MainTabs(store: store, probeContainer: container)
+                } else if let store = workspace.store {
+                    MainTabs(store: store, probeContainer: container, sceneActivity: { workspace.sceneChanged(id: windowID, active: $0) })
                 }
-            } else if let failure {
+            } else if let failure = workspace.failure {
                 ContentUnavailableView {
                     Label("保存領域を開けません", systemImage: "externaldrive.badge.exclamationmark")
                 } description: {
                     Text(failure)
                 } actions: {
-                    Button("再試行", action: load)
+                    Button("再試行", action: workspace.load)
                 }
             } else {
                 ProgressView("保存領域を読み込み中")
             }
         }
-        .task { if container == nil { load() } }
+        .task { if workspace.container == nil { workspace.load() } }
     }
 
-    private func load() {
+}
+
+// One actor and one repository own the Mac's learning state across windows.
+// iPhone/iPad keep the same owner too when the OS opens another scene.
+@MainActor @Observable final class AppWorkspace {
+    static let shared = AppWorkspace()
+    static func forWindow() -> AppWorkspace { shared }
+    var container: ModelContainer?
+    var failure: String?
+    var store: StudyStore?
+    var diagnosticOnly = false
+    private var activity = WindowActivity()
+
+    func sceneChanged(id: UUID, active: Bool) {
+        let wasActive = activity.isActive
+        activity.set(id: id, active: active)
+        if wasActive != activity.isActive { store?.sceneChanged(active: activity.isActive) }
+    }
+
+    func load() {
         do {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-study-test-accessibility") { UITestFixtures.configureAccessibilityScene() }
@@ -138,5 +170,13 @@ struct AppRootView: View {
         } catch {
             failure = error.localizedDescription
         }
+    }
+}
+
+struct WindowActivity {
+    private var active = Set<UUID>()
+    var isActive: Bool { !active.isEmpty }
+    mutating func set(id: UUID, active value: Bool) {
+        if value { active.insert(id) } else { active.remove(id) }
     }
 }

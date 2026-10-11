@@ -2,6 +2,40 @@ import XCTest
 import UIKit
 
 final class StudyUITests: XCTestCase {
+    #if targetEnvironment(macCatalyst)
+    func testMacKeyboardEditStudyAndSharedWindows() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-numeric-mask"]
+        app.launch()
+        let library = app.buttons["sidebarTab-1"]
+        XCTAssertTrue(library.waitForExistence(timeout: 20))
+        app.typeKey("2", modifierFlags: .command)
+        let note = app.staticTexts["Numeric mask fixture"]
+        XCTAssertTrue(note.waitForExistence(timeout: 10)); note.tap()
+        app.buttons["editNote"].tap()
+        let question = app.descendants(matching: .any)["questionInput"]
+        XCTAssertTrue(question.waitForExistence(timeout: 10)); question.tap(); question.typeText(" Mac edited")
+        app.typeKey("s", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["editNote"].waitForExistence(timeout: 10))
+        app.typeKey("1", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 10)); app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].label.contains("Mac edited"))
+        app.typeKey(XCUIKeyboardKey.return, modifierFlags: .command)
+        XCTAssertTrue(app.buttons["grade-4"].waitForExistence(timeout: 10))
+        app.typeKey("4", modifierFlags: .command)
+        app.typeKey("z", modifierFlags: .command)
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        app.buttons["pauseStudy"].tap()
+        let windows = app.windows.count
+        app.typeKey("n", modifierFlags: [.command, .shift])
+        let extra = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in app.windows.count > windows }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [extra], timeout: 10), .completed)
+        let screenshot = XCTAttachment(screenshot: app.screenshot()); screenshot.name = "Issue20-Mac-windows"
+        screenshot.lifetime = .keepAlways; add(screenshot)
+    }
+    #endif
+
     private func iPadFourFormatsInPortraitAndLandscape() throws {
         guard UIDevice.current.userInterfaceIdiom == .pad else { throw XCTSkip("iPad simulator acceptance") }
         XCUIDevice.shared.orientation = .landscapeLeft

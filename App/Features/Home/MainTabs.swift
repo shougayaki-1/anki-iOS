@@ -4,6 +4,7 @@ import SwiftData
 struct MainTabs: View {
     @Bindable var store: StudyStore
     let probeContainer: ModelContainer
+    var sceneActivity: ((Bool) -> Void)? = nil
     @Environment(\.scenePhase) private var scenePhase
     @State private var shortcutNavigation = ShortcutNavigation.shared
     @State private var shortcutDeck: ShortcutDeckDestination?
@@ -25,7 +26,7 @@ struct MainTabs: View {
 
     var body: some View {
         Group {
-            if UIDevice.current.userInterfaceIdiom == .pad {
+            if UIDevice.current.userInterfaceIdiom != .phone {
                 NavigationSplitView(preferredCompactColumn: $compactColumn) {
                     List {
                         Section("暗記ノート") {
@@ -115,8 +116,11 @@ struct MainTabs: View {
             if tab == 0 { store.refreshHome() }
             if tab == 2 { store.refreshHome(); store.refreshStatistics() }
         }
+        .onAppear { sceneActivity?(scenePhase == .active) }
+        .onDisappear { sceneActivity?(false) }
         .onChange(of: scenePhase) { _, phase in
-            store.sceneChanged(active: phase == .active)
+            if let sceneActivity { sceneActivity(phase == .active) }
+            else { store.sceneChanged(active: phase == .active) }
             if phase == .active {
                 shortcutNavigation.syncFromDisk()
                 handleShortcut()
