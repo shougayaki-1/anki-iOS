@@ -22,6 +22,74 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testWeakPracticeFiltersAndNeverChangesSchedulerHistoryOrDraft() throws {
+        let repo = try fixture()
+        let id = try create(repo)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .again, date: now)
+        let later = now.addingTimeInterval(60)
+        let before = try BackupData.capture(repo).canonical()
+        let rows = try repo.weakCards(scope: LearningScope(), days: 7, now: later)
+        XCTAssertEqual(rows.count, 1); XCTAssertEqual(rows.first?.card.noteID, id)
+        XCTAssertEqual(rows.first?.evidence.reasons, ["直近の評価がAgain"])
+        var practice = try repo.weakPractice(scope: LearningScope(), days: 7, now: later)
+        practice.next(); XCTAssertEqual(practice.index, 0)
+        practice.reveal(); practice.next(); XCTAssertNil(practice.current)
+        practice.previous(); XCTAssertEqual(practice.current?.noteID, id); XCTAssertFalse(practice.revealed)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let other = try repo.createDeck(name: "Other", now: now)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(deckID: other), days: nil, now: later).isEmpty)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(), days: 7, now: later.addingTimeInterval(10 * 86400)).isEmpty)
+        try repo.setSuspended(cardID: rows[0].id, value: true, now: later)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(), days: nil, now: later).isEmpty)
+        XCTAssertThrowsError(try repo.weakPractice(scope: LearningScope(), days: nil, now: later))
+    }
+
+    func testWeakPracticeKeepsSiblingSuppressionAndTagAndParentScopes() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        let note = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", tagNames: ["weak"], reverseEnabled: true), now: now)
+        let cards = try repo.cards().filter { $0.noteID == note }
+        // Build valid learned snapshots and histories for both siblings on a previous day.
+        let yesterday = now.addingTimeInterval(-86400)
+        let scheduler = try ReviewScheduler()
+        for card in cards {
+            let transition = try scheduler.review(repo.snapshot(card), grade: .again, now: yesterday)
+            let after = try JSONEncoder().encode(transition.after)
+            repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                mode: .mental, durationMs: 0, wasNew: true, sequence: card.id == cards[0].id ? 1 : 2))
+            card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+        }
+        try repo.context.save()
+        let tag = try repo.tags().first!.id
+        let scope = LearningScope(deckID: parent, tagIDs: [tag])
+        XCTAssertEqual(try repo.weakCards(scope: scope, days: 30, now: now).count, 2)
+        // Short learning siblings are the deliberate exception.
+        XCTAssertEqual(try repo.weakPractice(scope: scope, days: 30, now: now).cards.count, 2)
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(tagIDs: [UUID()]), days: 30, now: now).count == 2) // normalized stale tag removed
+        var sequence = 2
+        for grade in [ReviewGrade.again, .easy] {
+            for card in cards {
+                sequence += 1
+                let time = yesterday.addingTimeInterval(Double(sequence) * 600)
+                let transition = try scheduler.review(repo.snapshot(card), grade: grade, now: time)
+                let after = try JSONEncoder().encode(transition.after)
+                repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                    mode: .mental, durationMs: 0, wasNew: false, sequence: sequence))
+                card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+            }
+        }
+        try repo.context.save()
+        XCTAssertTrue(try repo.noteItems().allSatisfy { $0.summary.state == "review" })
+        XCTAssertEqual(try repo.weakPractice(scope: scope, days: 30, now: now).cards.count, 1)
+        try repo.createNote(NoteInput(deckID: child, question: "Strong", answer: "A", tagNames: ["strong"]), now: now)
+        let strongTag = try repo.tags().first { $0.name == "strong" }!.id
+        XCTAssertTrue(try repo.weakCards(scope: LearningScope(deckID: parent, tagIDs: [strongTag]), days: 30, now: now).isEmpty)
+        var saved = try repo.options(); saved.siblingBuryEnabled = false
+        try repo.updateOptions(saved)
+        XCTAssertEqual(try repo.weakPractice(scope: scope, days: 30, now: now).cards.count, 2)
+    }
+
     func testDeckLimitsInheritanceUndoMoveDeleteAndBackup() async throws {
         let repo = try fixture(), parent = try repo.decks()[0].id
         let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
