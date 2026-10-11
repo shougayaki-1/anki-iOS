@@ -49,7 +49,9 @@ actor StatisticsReader {
         // data error, not an answer that is silently excluded.
         guard logs.count == logRows.count else { throw StudyError.unsupportedContent }
 
-        let scheduler = try ReviewScheduler()
+        let extra = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
+        let optimization = try extra.flatMap { try JSONDecoder().decode(StudyOptions.self, from: $0.payload).fsrsOptimization }
+        let scheduler = try ReviewScheduler(parameters: optimization?.activeParameters)
         let retentionStates: [StatisticCardState] = try cards.map { card in
             try Task.checkCancellation()
             let note = notesByID[card.noteID]
@@ -78,7 +80,7 @@ extension StudyRepository {
             return StatisticLog(cardID: $0.cardID, date: $0.reviewedAt, grade: grade,
                                 durationMs: $0.durationMs, wasNew: $0.wasNew)
         }
-        let scheduler = try ReviewScheduler()
+        let scheduler = try ReviewScheduler(parameters: optimizationState().activeParameters)
         let retention = try cards().filter { !$0.isSuspended }.compactMap { card -> Double? in
             let snapshot = try snapshot(card)
             guard try scheduler.summary(snapshot).state != "new" else { return nil }
@@ -86,5 +88,89 @@ extension StudyRepository {
         }
         return StudyStatistics.calculate(logs: logs, retrievabilities: retention, now: now,
                                          calendar: calendar, startHour: try settings().dayStartHour)
+    }
+}
+
+extension StudyRepository {
+    func savedTypedAnswerModels() throws -> [SavedTypedAnswer] {
+        try context.fetch(FetchDescriptor<SavedTypedAnswer>(sortBy: [SortDescriptor(\.reviewedAt, order: .reverse)]))
+    }
+    func savedTypedAnswers(now: Date) throws -> [TypedAnswerRecord] {
+        try pruneTypedAnswers(now: now)
+        return try savedTypedAnswerModels().map { try JSONDecoder().decode(TypedAnswerRecord.self, from: $0.payload) }
+    }
+    func pruneTypedAnswersInTransaction(now: Date) throws {
+        guard let policy = try options().typedAnswerPolicy else { return }
+        let days = policy.retentionDays
+        guard TypedAnswerPolicy.supportedDays.contains(days) else { throw StudyError.invalidContent }
+        guard days > 0 else { return }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        let expired = try context.fetch(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.reviewedAt < cutoff }))
+        for row in expired { context.delete(row) }
+    }
+    func pruneTypedAnswers(now: Date) throws {
+        guard let policy = try options().typedAnswerPolicy else { return }
+        let days = policy.retentionDays
+        guard days > 0 else { return }
+        let cutoff = now.addingTimeInterval(-Double(days) * 86400)
+        let count = try context.fetchCount(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.reviewedAt < cutoff }))
+        if count > 0 { try transaction { try pruneTypedAnswersInTransaction(now: now) } }
+    }
+    func updateTypedAnswerPolicy(_ policy: TypedAnswerPolicy, now: Date) throws {
+        guard TypedAnswerPolicy.supportedDays.contains(policy.retentionDays) else { throw StudyError.invalidContent }
+        try transaction {
+            var value = try options(); value.typedAnswerPolicy = policy
+            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first { row.payload = try JSONEncoder().encode(value) }
+            else { context.insert(try ExtraPreferences(options: value)) }
+            try pruneTypedAnswersInTransaction(now: now)
+        }
+    }
+    func deleteTypedAnswers(ids: Set<UUID>? = nil) throws {
+        try transaction {
+            for row in try savedTypedAnswerModels() where ids == nil || ids!.contains(row.id) { context.delete(row) }
+        }
+    }
+    func weakCards(scope: LearningScope, days: Int?, now: Date) throws -> [WeakCardItem] {
+        guard days == nil || [7, 30, 90].contains(days!) else { throw StudyError.invalidContent }
+        let normalized = try normalizedScope(scope)
+        let scopedIDs = Set(try scopedQueueCards(normalized).map(\.id))
+        let startHour = try settings().dayStartHour
+        let day = StudyDay(calendar: calendar, startHour: startHour).interval(containing: now)
+        let start = days.flatMap { calendar.date(byAdding: .day, value: 1 - $0, to: day.start) }
+        let rows = try logs()
+        let grouped = Dictionary(grouping: rows.filter { $0.reviewedAt <= now && (start == nil || $0.reviewedAt >= start!) }, by: \.cardID)
+        let states = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0) })
+        let scheduler = try ReviewScheduler()
+        return try noteItems().filter { scopedIDs.contains($0.cardID) && !$0.isSuspended && $0.summary.state != "new" }.compactMap { item in
+            guard let state = states[item.cardID] else { return nil }
+            let history = try (grouped[item.cardID] ?? []).map { row -> StatisticLog in
+                guard let grade = ReviewGrade(rawValue: row.grade) else { throw StudyError.unsupportedContent }
+                return StatisticLog(cardID: row.cardID, date: row.reviewedAt, grade: grade, durationMs: row.durationMs)
+            }
+            let probability = try scheduler.retrievability(snapshot(state), now: now)
+            guard let evidence = WeakCardEvidence.evaluate(logs: history, difficulty: item.summary.difficulty,
+                                                           retrievability: probability, now: now) else { return nil }
+            return WeakCardItem(card: item, evidence: evidence)
+        }.sorted { $0.evidence.score == $1.evidence.score ? $0.id.uuidString < $1.id.uuidString : $0.evidence.score > $1.evidence.score }
+    }
+
+    func weakPractice(scope: LearningScope, days: Int?, now: Date) throws -> WeakPracticeSession {
+        let candidates = try weakCards(scope: scope, days: days, now: now)
+        let settings = try settings()
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let cardNotes = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
+        let today = try logs().filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+        var seen = Set<UUID>()
+        let selected = candidates.filter { item in
+            let card = item.card
+            guard settings.siblingBuryEnabled, !["learning", "relearning"].contains(card.summary.state) else { return true }
+            guard !seen.contains(card.noteID), !today.contains(where: {
+                $0.cardID != card.cardID && cardNotes[$0.cardID] == card.noteID
+            }) else { return false }
+            seen.insert(card.noteID)
+            return true
+        }.map(\.card)
+        guard !selected.isEmpty else { throw StudyError.noAvailableCards }
+        return WeakPracticeSession(cards: selected)
     }
 }

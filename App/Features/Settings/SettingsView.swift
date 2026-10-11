@@ -27,6 +27,10 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
                 StudySettingsSection(store: store)
+                Section("タイピング回答") {
+                    NavigationLink("回答の保存設定") { TypedAnswerSettingsView(store: store) }
+                        .accessibilityIdentifier("typedAnswerSettings")
+                }
                 Section {
                     Toggle("同じノートの兄弟カードを同日抑制", isOn: Binding(
                         get: { store.settings.siblingBuryEnabled }, set: { value in update { $0.siblingBuryEnabled = value } }
@@ -49,6 +53,8 @@ struct SettingsView: View {
                     }
                     Text("変更は次の回答から適用されます。既存の復習予定は変わりません。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
+                    NavigationLink("FSRS個人最適化") { FSRSOptimizationView(store: store) }
+                        .accessibilityIdentifier("openFSRSOptimization")
                 } header: { Text("FSRS-6").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
                 Section {
                     Toggle("復習が必要な日だけ通知", isOn: Binding(get: { store.settings.notification.enabled }, set: { enabled in

@@ -131,3 +131,42 @@ final class ScaleRepositoryTests: XCTestCase {
         attachment.lifetime = .keepAlways; add(attachment)
     }
 }
+
+extension ScaleRepositoryTests {
+    func testThirtyDayForecastThreeThousandCardsDoesNotWrite() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, scheduler = try ReviewScheduler()
+        let content = try JSONEncoder().encode(TextContent(question: "Scale forecast", answer: "A", explanation: ""))
+        let snapshot = try JSONEncoder().encode(scheduler.newCard(now: now))
+        try repo.transaction {
+            for _ in 0..<3000 {
+                let note = Note(input: NoteInput(deckID: deck, question: "Scale forecast", answer: "A"), content: content, now: now)
+                repo.context.insert(note)
+                repo.context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: snapshot, now: now))
+            }
+        }
+        let before = try BackupData.capture(repo).canonical(), start = Date()
+        let report = try ReviewForecast.calculate(data: before, deckID: nil, days: 30, now: now, calendar: .current)
+        print("Issue #13: 3000 cards / 30 days forecast: \(Date().timeIntervalSince(start))s")
+        XCTAssertEqual(report.days.count, 30)
+        XCTAssertEqual(report.days.reduce(0) { $0 + $1.newCards }, 300)
+        XCTAssertEqual(report.remainingNew, 2700)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let past = now.addingTimeInterval(-86400 * 3)
+        let first = try scheduler.review(scheduler.newCard(now: past), grade: .good, now: past)
+        let transition = try scheduler.review(first.after, grade: .good, now: scheduler.summary(first.after).dueDate)
+        let learned = try JSONEncoder().encode(transition.after), due = try scheduler.summary(transition.after).dueDate
+        try repo.transaction {
+            for card in try repo.cards() { card.fsrsPayload = learned; card.dueDate = due }
+        }
+        let learnedBefore = try BackupData.capture(repo).canonical(), learnedStart = Date()
+        let loaded = try ReviewForecast.calculate(data: learnedBefore, deckID: nil, days: 30, now: now, calendar: .current)
+        print("Issue #13: 3000 learned cards / 30 days forecast: \(Date().timeIntervalSince(learnedStart))s")
+        XCTAssertEqual(loaded.days[0].scheduled, 3000)
+        XCTAssertEqual(loaded.days[0].reviews, 3000)
+        XCTAssertGreaterThan(loaded.projectedAnswers, 3000)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), learnedBefore)
+    }
+}

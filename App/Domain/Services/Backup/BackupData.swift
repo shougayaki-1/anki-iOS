@@ -10,6 +10,7 @@ struct BackupData: Codable, Equatable, Sendable {
     var logs: [BackupStudyReviewLog] = []
     var sessions: [BackupSessionDraft] = []
     var orderingDrafts: [BackupOrderingDraft]? = nil
+    var typedAnswers: [TypedAnswerRecord]? = nil
     var preferences: [BackupStudyPreferences] = []
     var tags: [BackupTag] = []
     var imports: [BackupImportBatch] = []
@@ -274,6 +275,8 @@ extension BackupData {
         result.sessions = try repository.context.fetch(FetchDescriptor<SessionDraft>()).map(BackupSessionDraft.init)
         let ordering = try repository.context.fetch(FetchDescriptor<OrderingDraftRecord>())
         result.orderingDrafts = ordering.isEmpty ? nil : ordering.map { BackupOrderingDraft(key: $0.key, payload: $0.payload) }
+        let answers = try repository.savedTypedAnswerModels().map { try JSONDecoder().decode(TypedAnswerRecord.self, from: $0.payload) }
+        result.typedAnswers = answers.isEmpty ? nil : answers
         result.preferences = try repository.context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
         result.tags = try repository.tags().map(BackupTag.init)
         result.imports = try repository.context.fetch(FetchDescriptor<ImportBatch>()).map(BackupImportBatch.init)
