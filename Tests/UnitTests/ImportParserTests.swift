@@ -2,6 +2,17 @@ import XCTest
 @testable import AnkiIOS
 
 final class ImportParserTests: XCTestCase {
+    func testImportReceiptDistinguishesCompletePartialAndZero() {
+        XCTAssertEqual(ImportResult(imported: 0, skipped: 0, errors: []).outcome, .empty)
+        XCTAssertEqual(ImportResult(imported: 0, skipped: 1, errors: ["invalid"]).outcome, .empty)
+        XCTAssertEqual(ImportResult(imported: 1, skipped: 0, errors: []).outcome, .complete)
+        XCTAssertEqual(ImportResult(imported: 1, skipped: 1, errors: []).outcome, .partial)
+        XCTAssertEqual(ImportResult(imported: 1, skipped: 0, errors: ["invalid"]).outcome, .partial)
+        let updated = ImportResult(imported: 1, skipped: 0, errors: [], updatedNotes: 1, maintainedCards: 2)
+        XCTAssertEqual(updated.createdCards, 0)
+        XCTAssertEqual(updated.outcome, .complete)
+    }
+
     func testNativeFileReaderRejectsUnsupportedOversizedDirectoryAndSymbolicLink() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

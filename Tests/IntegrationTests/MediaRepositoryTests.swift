@@ -457,10 +457,17 @@ extension MediaRepositoryTests {
         let package = try imagePackage(count: 2)
         let created = try repo.importImagePackage(package, deckID: deck, action: .skip, now: now)
         XCTAssertEqual(created.createdNotes, 2); XCTAssertEqual(created.createdCards, 2)
+        XCTAssertEqual(created.affectedCardIDs.count, 2)
+        XCTAssertEqual(created.destinations.count, 1)
+        XCTAssertFalse(created.destinations[0].name.isEmpty)
         var repeated = package; repeated.rows = [package.rows[0], package.rows[0]]
         let updated = try repo.importImagePackage(repeated, deckID: deck, action: .update, now: now)
         XCTAssertEqual(updated.imported, 2); XCTAssertEqual(updated.updatedNotes, 1); XCTAssertEqual(updated.maintainedCards, 1)
+        XCTAssertEqual(updated.affectedCardIDs.count, 1)
+        XCTAssertTrue(updated.affectedCardIDs.isSubset(of: created.affectedCardIDs))
         let skipped = try repo.importImagePackage(package, deckID: deck, action: .skip, now: now)
         XCTAssertEqual(skipped.duplicateRows, 2); XCTAssertEqual(skipped.createdCards + skipped.maintainedCards, 0)
+        XCTAssertEqual(skipped.outcome, .empty)
+        XCTAssertTrue(skipped.affectedCardIDs.isEmpty)
     }
 }

@@ -1,6 +1,43 @@
 import XCTest
 
 final class ImportUITests: XCTestCase {
+    func testImportCompletionInspectContinueAndRetryZero() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["openImport"].tap()
+        func importOne() {
+            let text = app.textViews["importText"]
+            XCTAssertTrue(text.waitForExistence(timeout: 5)); text.tap()
+            text.typeText("Q: Completion card\nA: Completion answer")
+            app.buttons["完了"].tap()
+            app.buttons["previewImport"].tap()
+            app.buttons["confirmImport"].tap(); app.buttons["commitImport"].firstMatch.tap()
+            XCTAssertTrue(app.staticTexts["importResult"].waitForExistence(timeout: 10))
+        }
+        func tapVisible(_ id: String) {
+            let button = app.buttons[id]
+            for _ in 0..<5 where !button.isHittable { app.swipeUp() }
+            button.tap()
+        }
+        importOne()
+        XCTAssertEqual(app.staticTexts["importCompletionTitle"].label, "取り込みが完了しました")
+        tapVisible("viewImportedCards")
+        XCTAssertTrue(app.staticTexts["Completion card"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        tapVisible("continueImport")
+        XCTAssertTrue(app.textViews["importText"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.textViews["importText"].value as? String, "")
+        importOne()
+        XCTAssertEqual(app.staticTexts["importCompletionTitle"].label, "追加・更新はありません")
+        XCTAssertFalse(app.buttons["viewImportedCards"].exists)
+        tapVisible("retryEmptyImport")
+        XCTAssertTrue(app.buttons["confirmImport"].waitForExistence(timeout: 5))
+        app.buttons["closeImport"].tap()
+        XCTAssertTrue(app.buttons["openImport"].waitForExistence(timeout: 5))
+    }
+
     func testCSVHintHeaderPreviewEditingAndLearning() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]
