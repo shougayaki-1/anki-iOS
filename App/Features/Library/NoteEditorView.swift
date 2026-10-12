@@ -53,7 +53,10 @@ struct NoteEditorView: View {
                                                answerAudioID: item?.sourceContent.answerAudioID, questionLayout: item?.sourceContent.questionLayout, answerLayout: item?.sourceContent.answerLayout))
         do {
             if let saved = try store.repository.editorDraft(key: item.map { "edit:\($0.noteID.uuidString)" } ?? "new") {
-                _input = State(initialValue: saved)
+                var restored = saved
+                // A deck-specific add action keeps its destination even when a draft exists.
+                if item == nil, let initialDeckID { restored.deckID = initialDeckID }
+                _input = State(initialValue: restored)
                 _tagText = State(initialValue: saved.tagNames.joined(separator: ", "))
             }
         } catch { _failure = State(initialValue: "下書きを読み込めません: " + error.localizedDescription) }

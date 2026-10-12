@@ -10,6 +10,8 @@ struct ShortcutDeckContentsView: View {
     let deckID: UUID
 
     private var deck: DeckItem? { store.decks.first { $0.id == deckID } }
+    @State private var adding = false
+    @Environment(\.dismiss) private var dismiss
     @State private var index: LibraryIndex?
     @State private var results = LibraryResults()
     @State private var cards: [LibraryCard] = []
@@ -27,8 +29,17 @@ struct ShortcutDeckContentsView: View {
                     if loading { ProgressView("カードを読み込み中") }
                     if let failure { Label(failure, systemImage: "exclamationmark.triangle") }
                     if results.cardCount == 0 && !loading && failure == nil {
-                        ContentUnavailableView("カードがありません", systemImage: "rectangle.on.rectangle",
-                                               description: Text("このデッキと下位デッキにはカードがありません。"))
+                        ContentUnavailableView {
+                            Label("このデッキにはカードがありません", systemImage: "rectangle.on.rectangle")
+                        } description: {
+                            Text("このデッキと下位デッキにはカードがありません。")
+                        } actions: {
+                            Button("このデッキにカードを追加") { adding = true }
+                                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+                                .accessibilityIdentifier("emptyDeckAdd")
+                            Button("ライブラリに戻る") { dismiss() }
+                                .buttonStyle(.bordered)
+                        }
                     } else {
                         Section("カード（下位デッキを含む）") {
                             ForEach(cards) { card in
@@ -52,6 +63,7 @@ struct ShortcutDeckContentsView: View {
                                        description: Text("デッキが削除または復元された可能性があります。"))
             }
         }
+        .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: deckID) }
         .task(id: store.dataRevision) {
             loading = true
             defer { if !Task.isCancelled { loading = false } }
