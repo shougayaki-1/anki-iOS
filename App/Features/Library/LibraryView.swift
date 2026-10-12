@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct LibraryView: View {
     @Bindable var store: StudyStore
@@ -330,7 +331,7 @@ private struct BulkManagementView: View {
     @State private var tagText = ""
     @State private var removedTags = Set<UUID>()
     @State private var preview: BulkEditPreview?
-    @State private var result: String?
+    @State private var result: LibraryOperationCompletion?
     @State private var failure: String?
     @State private var confirmDelete = false
     private var action: BulkEditAction? {
@@ -347,8 +348,8 @@ private struct BulkManagementView: View {
         NavigationStack {
             Form {
                 if let result {
-                    Section("結果") { Text(result).accessibilityIdentifier("bulkResult") }
-                    Button("閉じる") { close(true) }.accessibilityIdentifier("closeBulkResult")
+                    LibraryOperationCompletionSection(store: store, result: result, identifier: "bulkResult")
+                    Button("ライブラリへ戻る") { close(true) }.accessibilityIdentifier("closeBulkResult")
                 } else {
                     Section {
                         Text("選択カード: \(selection.count)枚")
@@ -420,12 +421,17 @@ private struct BulkManagementView: View {
         catch { preview = nil; failure = error.localizedDescription }
     }
     private func commit(_ value: BulkEditPreview) {
+        guard result == nil else { return }
+        let targetName = operation == .move ? store.decks.first(where: { $0.id == destination })?.name : nil
         var receipt: BulkEditResult?
         let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
         if let receipt {
             didCommit()
-            result = "変更済み: \(receipt.changedNotes)ノート・\(receipt.changedCards)枚"
-            if !refreshed { result! += "。表示を更新できません。閉じてアプリを開き直してください。" }
+            result = LibraryOperationCompletion(operation: operation.title, notes: receipt.changedNotes,
+                cards: receipt.changedCards, targetName: targetName,
+                destinationID: operation == .move ? destination : nil,
+                warning: refreshed ? nil : "変更は保存済みですが、画面を更新できません。アプリを開き直してください。再実行は不要です。")
+            if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
             preview = nil
         } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
         store.failure = nil
@@ -533,6 +539,46 @@ private struct WeakPracticeView: View {
             }
             .navigationTitle("重点練習")
             .toolbar { Button("終了") { dismiss() } }
+        }
+    }
+}
+
+/// Shared completion layout. Feedback belongs to commit, never view appearance.
+struct LibraryOperationCompletionSection: View {
+    let store: StudyStore
+    let result: LibraryOperationCompletion
+    let identifier: String
+    @State private var announced = false
+    var body: some View {
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: result.isSuccess ? "checkmark.circle.fill" : "info.circle.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(result.isSuccess ? Color.green : Color.orange)
+                    .accessibilityHidden(true)
+                Text(result.title).font(.headline)
+                Text(result.summary).accessibilityIdentifier(identifier)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 16)
+            .accessibilityElement(children: .combine)
+            if result.operation == "削除" || result.operation == "ノート削除" {
+                Text("削除したカードは元に戻せません。過去の回答履歴は残ります。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let warning = result.warning {
+                Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+            if let destination = result.destinationID {
+                NavigationLink("移動先を見る") { ShortcutDeckContentsView(store: store, deckID: destination) }
+            }
+        }
+        .task {
+            guard !announced else { return }
+            announced = true
+            if UIAccessibility.isVoiceOverRunning {
+                UIAccessibility.post(notification: .announcement,
+                    argument: result.title + "。" + result.summary + "。" + (result.warning ?? ""))
+            }
         }
     }
 }
