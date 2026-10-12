@@ -37,7 +37,7 @@ struct NotificationPlanner {
             return time
         }.prefix(30)
         return candidates.compactMap { time in
-            guard learned.contains(where: { $0.due <= time }) else { return nil }
+            guard learned.contains(where: { $0.due <= time && !$0.isHidden(at: time) }) else { return nil }
             var identifierCalendar = Calendar(identifier: .gregorian)
             identifierCalendar.timeZone = calendar.timeZone
             let parts = identifierCalendar.dateComponents([.year, .month, .day], from: time)

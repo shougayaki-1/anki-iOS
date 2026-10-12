@@ -18,6 +18,7 @@ struct StudyOptions: Codable, Equatable {
     // Optional fields preserve decoding of existing .studybackup preference JSON.
     // nil = default 20 answers; 0 = unlimited.
     var sessionAnswerLimit: Int? = nil
+    var cardMarks: [CardMark]? = nil
     var fsrsOptimization: FSRSOptimizationState? = nil
     var deckLearning: [DeckLearningOverride]? = nil
     var deckNewUsage: [DeckNewUsage]? = nil
@@ -602,4 +603,18 @@ struct LibraryOperationCompletion {
     var summary: String {
         "\(operation)：\(notes)ノート・\(cards)枚" + (targetName.map { " · \($0)" } ?? "")
     }
+}
+
+// Card-keyed optional metadata keeps old stores and backup JSON readable without a schema migration.
+enum CardFlag: String, Codable, CaseIterable, Identifiable {
+    case red, blue, yellow
+    var id: Self { self }
+    var title: String {
+        switch self { case .red: return "赤"; case .blue: return "青"; case .yellow: return "黄" }
+    }
+}
+struct CardMark: Codable, Equatable {
+    let cardID: UUID
+    var flag: CardFlag?
+    var hiddenUntil: Date?
 }

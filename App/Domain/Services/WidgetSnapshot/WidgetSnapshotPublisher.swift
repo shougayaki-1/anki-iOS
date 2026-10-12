@@ -31,7 +31,7 @@ enum WidgetProjection {
                 let byNote = Dictionary(grouping: today.compactMap { log in log.noteID.map { ($0, log.cardID) } }, by: { $0.0 })
                     .mapValues { Set($0.map { $0.1 }) }
                 let eligible = cards.filter { card in
-                    guard !card.suspended else { return false }
+                    guard !card.suspended && !card.isHidden(at: date) else { return false }
                     if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
                     guard let note = card.noteID, let answered = byNote[note] else { return true }
                     return answered.count == 1 && answered.contains(card.id)

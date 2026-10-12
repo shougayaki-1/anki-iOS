@@ -179,3 +179,25 @@ final class ReviewQueueTests: XCTestCase {
         XCTAssertNotEqual(tokyo.interval(containing: window.start).start, window.start)
     }
 }
+
+extension ReviewQueueTests {
+    func testManualHoldBoundaryCountsNotificationsAndWidgetAgree() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let settings = StudySettings()
+        let end = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now).end
+        let card = QueueCard(id: UUID(), state: "review", due: now, createdAt: now, suspended: false, hiddenUntil: end)
+        let builder = ReviewQueueBuilder(calendar: calendar)
+        XCTAssertTrue(builder.queue(cards: [card], logs: [], settings: settings, mode: .review, touched: [], reviewStreak: 0, now: now).isEmpty)
+        XCTAssertEqual(builder.counts(cards: [card], logs: [], settings: settings, now: now).due, 0)
+        XCTAssertEqual(builder.queue(cards: [card], logs: [], settings: settings, mode: .review, touched: [], reviewStreak: 0, now: end), [card.id])
+        let widget = try WidgetProjection.make(cards: [card], logs: [], settings: WidgetProjectionSettings(settings), now: now, calendar: calendar)
+        XCTAssertEqual(widget.points.first?.due, 0)
+        XCTAssertEqual(widget.points.first { $0.date == end }?.due, 1)
+        var notifications = NotificationOptions(); notifications.enabled = true
+        let planned = NotificationPlanner(calendar: calendar).plan(cards: [card], options: notifications, authorized: true, delivered: [], now: now)
+        XCTAssertFalse(planned.isEmpty)
+        XCTAssertTrue(planned.allSatisfy { $0.date >= end })
+    }
+}

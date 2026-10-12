@@ -8,15 +8,13 @@ extension StudyRepository {
     func options() throws -> StudyOptions {
         guard let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first else { return StudyOptions() }
         let value = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
-        guard (1...2).contains(value.schemaVersion) else { throw StudyError.unsupportedContent }
+        guard Set((value.cardMarks ?? []).map(\.cardID)).count == (value.cardMarks ?? []).count,
+              (value.cardMarks ?? []).allSatisfy({ $0.hiddenUntil?.timeIntervalSince1970.isFinite ?? true }),
+              (1...2).contains(value.schemaVersion) else { throw StudyError.unsupportedContent }
         return value
     }
     func updateOptions(_ value: StudyOptions) throws {
-        let payload = try JSONEncoder().encode(value)
-        try transaction {
-            if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first { row.payload = payload }
-            else { context.insert(try ExtraPreferences(options: value)) }
-        }
+        try transaction { try writeOptionsInTransaction(value) }
     }
     // Home preferences never mutate the active session's SessionScope.
     func normalizedScope(_ value: LearningScope) throws -> LearningScope {
@@ -105,6 +103,7 @@ extension StudyRepository {
                     }
                 }
                 for card in removed { context.delete(card) }
+                try pruneCardMarks()
                 for note in affected {
                     try removeEditorDraftInTransaction(key: "edit:\(note.id.uuidString)")
                     context.delete(note)
@@ -187,11 +186,11 @@ extension StudyRepository {
         var counts = builder.counts(cards: scoped, logs: today, settings: settings, now: now)
         counts.learnedToday = global.learnedToday; counts.answerCount = global.answerCount
         let used = Set(today.filter(\.wasNew).map(\.cardID)).count
-        let next = scoped.filter { !$0.suspended && ["learning", "relearning"].contains($0.state) && $0.due > now }.map(\.due).min()
+        let next = scoped.filter { !$0.suspended && !$0.isHidden(at: now) && ["learning", "relearning"].contains($0.state) && $0.due > now }.map(\.due).min()
         return HomeSnapshot(scope: selected, counts: counts, globalCounts: global,
                             newSlotsRemaining: max(0, settings.dailyNewLimit - used), nextShortDue: next,
                             hasCards: !all.isEmpty, dayStart: start,
-                            nextRefresh: min(end, all.filter { !$0.suspended && $0.state != "new" && $0.due > now }.map(\.due).min() ?? end))
+                            nextRefresh: min(end, all.filter { !$0.suspended && !$0.isHidden(at: now) && $0.state != "new" && $0.due > now }.map(\.due).min() ?? end))
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)
@@ -373,6 +372,7 @@ extension StudyRepository {
                 draft.payload = try JSONEncoder().encode(input); draft.updatedAt = now
             }
             if case .deleteNotes = current.action {
+                try pruneCardMarks()
                 if let draft = try session() {
                     if let id = draft.cardID, cardIDs.contains(id) {
                         draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false; draft.activeSince = nil; draft.elapsedMs = 0
@@ -703,5 +703,54 @@ actor TagFilterReader {
         noteFetch.propertiesToFetch = [\.id, \.deckID, \.tagIDs]
         let notes = try context.fetch(noteFetch).map { TagFilterNote(deckID: $0.deckID, tagIDs: Set($0.tagIDs), cards: counts[$0.id] ?? 0) }
         return TagFilterIndex(decks: decks, tags: tags, notes: notes)
+    }
+}
+
+extension StudyRepository {
+    func cardMark(_ id: UUID) throws -> CardMark? {
+        try options().cardMarks?.first { $0.cardID == id }
+    }
+    func setFlags(cardIDs: Set<UUID>, flag: CardFlag?) throws {
+        try transaction {
+            let existing = Set(try cards().map(\.id))
+            guard cardIDs.isSubset(of: existing) else { throw StudyError.missingRecord }
+            var saved = try options()
+            var marks = saved.cardMarks ?? []
+            for id in cardIDs {
+                if let index = marks.firstIndex(where: { $0.cardID == id }) { marks[index].flag = flag }
+                else if flag != nil { marks.append(CardMark(cardID: id, flag: flag)) }
+            }
+            saved.cardMarks = marks.filter { existing.contains($0.cardID) && ($0.flag != nil || $0.hiddenUntil != nil) }
+            try writeOptionsInTransaction(saved)
+        }
+    }
+    func hideToday(cardID: UUID, now: Date) throws {
+        try transaction {
+            guard try card(cardID) != nil else { throw StudyError.missingRecord }
+            var saved = try options(), marks = saved.cardMarks ?? []
+            let end = StudyDay(calendar: calendar, startHour: try settings().dayStartHour).interval(containing: now).end
+            if let index = marks.firstIndex(where: { $0.cardID == cardID }) { marks[index].hiddenUntil = end }
+            else { marks.append(CardMark(cardID: cardID, hiddenUntil: end)) }
+            saved.cardMarks = marks
+            try writeOptionsInTransaction(saved)
+            if let draft = try session(), draft.cardID == cardID { try selectNext(draft: draft, now: now) }
+        }
+    }
+    func showToday(cardID: UUID) throws {
+        try transaction {
+            var saved = try options()
+            saved.cardMarks = saved.cardMarks?.compactMap { mark in
+                var mark = mark
+                if mark.cardID == cardID { mark.hiddenUntil = nil }
+                return mark.flag == nil && mark.hiddenUntil == nil ? nil : mark
+            }
+            try writeOptionsInTransaction(saved)
+        }
+    }
+    func pruneCardMarks() throws {
+        var saved = try options()
+        let ids = Set(try cards().map(\.id))
+        saved.cardMarks = saved.cardMarks?.filter { ids.contains($0.cardID) }
+        try writeOptionsInTransaction(saved)
     }
 }

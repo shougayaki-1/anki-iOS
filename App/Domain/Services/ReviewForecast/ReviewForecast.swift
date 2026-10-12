@@ -50,6 +50,7 @@ struct ReviewForecast: Equatable, Sendable {
         }
         let ancestorMap = Dictionary(uniqueKeysWithValues: data.decks.map { ($0.id, ancestors($0.id)) })
         let overrides = Dictionary(uniqueKeysWithValues: (options.deckLearning ?? []).map { ($0.deckID, $0) })
+        let holds = Dictionary(uniqueKeysWithValues: (options.cardMarks ?? []).compactMap { mark in mark.hiddenUntil.map { (mark.cardID, $0) } })
         var cards: [LiveCard] = []
         let baseScheduler = try ReviewScheduler(parameters: options.fsrsOptimization?.activeParameters)
         for (index, card) in data.cards.enumerated() where !card.isSuspended {
@@ -65,7 +66,7 @@ struct ReviewForecast: Equatable, Sendable {
                                   scheduler: try ReviewScheduler(desiredRetention: retention, parameters: options.fsrsOptimization?.activeParameters),
                                   snapshot: snapshot, summary: summary))
             if scoped && summary.state != "new" {
-                if let bucket = periods.indices.first(where: { card.dueDate < periods[$0].end }) { periods[bucket].scheduled += 1 }
+                if let bucket = periods.indices.first(where: { max(card.dueDate, holds[card.id] ?? card.dueDate) < periods[$0].end }) { periods[bucket].scheduled += 1 }
             }
         }
         let overdue = cards.filter { $0.scoped && $0.summary.state != "new" && $0.source.dueDate < now }.count
@@ -104,7 +105,7 @@ struct ReviewForecast: Equatable, Sendable {
             for (offset, index) in order.enumerated() {
                 if offset % 64 == 0 { try Task.checkCancellation() }
                 let card = cards[index], isNew = card.summary.state == "new"
-                if answeredToday.contains(card.source.id) { continue }
+                if answeredToday.contains(card.source.id) || reviewAt < (holds[card.source.id] ?? .distantPast) { continue }
                 let isShort = card.summary.state == "learning" || card.summary.state == "relearning"
                 if options.siblingBuryEnabled && !isShort && usedNotes.contains(card.noteID) { continue }
                 if isNew {

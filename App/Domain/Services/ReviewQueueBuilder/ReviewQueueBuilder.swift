@@ -26,6 +26,8 @@ struct QueueCard: Sendable {
     let due: Date
     let createdAt: Date
     let suspended: Bool
+    var hiddenUntil: Date? = nil
+    func isHidden(at date: Date) -> Bool { hiddenUntil.map { date < $0 } ?? false }
     var noteID: UUID? = nil
     var deckLimits: [UUID: Int] = [:]
 }
@@ -67,7 +69,7 @@ struct ReviewQueueBuilder {
         let today = logs.filter { $0.reviewedAt >= interval.start && $0.reviewedAt < interval.end }
         let used = Set(today.filter(\.wasNew).map(\.cardID)).count
         let available = cards.filter { card in
-            guard !card.suspended else { return false }
+            guard !card.suspended && !card.isHidden(at: now) else { return false }
             if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
             guard let noteID = card.noteID else { return true }
             return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
@@ -86,7 +88,7 @@ struct ReviewQueueBuilder {
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let today = logs.filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
         let eligible = cards.filter { card in
-            if card.suspended { return false }
+            if card.suspended || card.isHidden(at: now) { return false }
             if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
             guard let noteID = card.noteID else { return true }
             return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
