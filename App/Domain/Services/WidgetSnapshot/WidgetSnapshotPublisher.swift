@@ -1,7 +1,7 @@
 import Foundation
 import WidgetKit
 
-struct WidgetProjectionSettings: Sendable {
+struct WidgetProjectionSettings: Sendable, Equatable {
     let dayStartHour: Int
     let dailyNewLimit: Int
     let siblingBuryEnabled: Bool
@@ -56,27 +56,58 @@ enum WidgetProjection {
         let start: Date
         let zone: String
         let goal: Int?
+        let calendar: Calendar
+        let settings: WidgetProjectionSettings
+        let cards: [UUID: QueueCard]
+        let logs: [QueueLog]
     }
     let file: WidgetSnapshotFile
     private let reload: () -> Void
     private var previous: Key?
+    private var previousInterval: DateInterval?
+    private var inFlight: Key?
+    private var inFlightAt: Date?
+    private var completions: [(String?) -> Void] = []
     private var job: Task<Void, Never>?
     private var generation = 0
+    #if DEBUG
+    private(set) var projectionCount = 0
+    #endif
     init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind) }) {
         self.file = file; self.reload = reload
     }
     func publish(repository: StudyRepository, snapshot: HomeSnapshot, settings: StudySettings, now: Date,
                  force: Bool, cards suppliedCards: [QueueCard]? = nil, logs suppliedLogs: [QueueLog]? = nil, completion: @escaping (String?) -> Void) {
-        let key = Key(counts: snapshot.globalCounts, next: snapshot.nextRefresh, start: snapshot.dayStart,
-                      zone: repository.calendar.timeZone.identifier, goal: settings.dailyGoal)
-        guard force || previous != key else { return }
-        job?.cancel(); generation += 1
-        let generation = generation
         do {
             guard file.url != nil else { throw WidgetSnapshotFailure.unavailable }
             let cards = try suppliedCards ?? repository.queueCards()
             let logs = try suppliedLogs ?? repository.todayQueueLogs(cards: cards, settings: settings, now: now)
             let calendar = repository.calendar, projected = WidgetProjectionSettings(settings)
+            let cardMap = Dictionary(cards.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+            let key = Key(counts: snapshot.globalCounts, next: snapshot.nextRefresh, start: snapshot.dayStart,
+                          zone: calendar.timeZone.identifier, goal: settings.dailyGoal, calendar: calendar,
+                          settings: projected, cards: cardMap,
+                          logs: logs.sorted {
+                              if $0.cardID != $1.cardID { return $0.cardID.uuidString < $1.cardID.uuidString }
+                              if $0.reviewedAt != $1.reviewedAt { return $0.reviewedAt < $1.reviewedAt }
+                              return !$0.wasNew && $1.wasNew
+                          })
+            let cacheable = cards.count <= 10000 && logs.count <= 50000 && cardMap.count == cards.count
+            if !force, cacheable {
+                if previous == key, let interval = previousInterval, now >= interval.start, now < interval.end {
+                    completion(nil); return
+                }
+                if inFlight == key, let started = inFlightAt, now >= started, now < snapshot.nextRefresh {
+                    completions.append(completion); return
+                }
+            }
+            job?.cancel(); generation += 1
+            let generation = generation
+            inFlight = cacheable ? key : nil; inFlightAt = now
+            completions = [completion]
+            #if DEBUG
+            projectionCount += 1
+            #endif
             job = Task { [weak self] in
                 let task = Task.detached(priority: .utility) {
                     try WidgetProjection.make(cards: cards, logs: logs, settings: projected, now: now, calendar: calendar)
@@ -85,12 +116,24 @@ enum WidgetProjection {
                     let value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
                     guard let self, !Task.isCancelled, self.generation == generation else { return }
                     try self.file.write(value)
-                    self.previous = key; self.reload(); completion(nil)
+                    self.previous = cacheable ? key : nil
+                    self.previousInterval = DateInterval(start: value.generatedAt, end: value.expiresAt)
+                    self.inFlight = nil; self.inFlightAt = nil
+                    let callbacks = self.completions; self.completions = []
+                    self.reload(); callbacks.forEach { $0(nil) }
                 } catch is CancellationError {} catch {
                     guard let self, self.generation == generation else { return }
-                    completion(WidgetSnapshotFailure.unavailable.localizedDescription)
+                    self.inFlight = nil; self.inFlightAt = nil
+                    self.previous = nil; self.previousInterval = nil
+                    let callbacks = self.completions; self.completions = []
+                    callbacks.forEach { $0(WidgetSnapshotFailure.unavailable.localizedDescription) }
                 }
             }
-        } catch { completion(WidgetSnapshotFailure.unavailable.localizedDescription) }
+        } catch {
+            job?.cancel(); generation += 1
+            inFlight = nil; inFlightAt = nil; completions = []
+            previous = nil; previousInterval = nil
+            completion(WidgetSnapshotFailure.unavailable.localizedDescription)
+        }
     }
 }

@@ -3,6 +3,76 @@ import SwiftData
 @testable import AnkiIOS
 
 final class WidgetSnapshotTests: XCTestCase {
+    @MainActor func testThreeThousandCardsDuplicateWidgetProjectionMeasurement() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = WidgetSnapshotFile(url: root.appendingPathComponent("widget.json"))
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let cards = (0..<3000).map { index in
+            QueueCard(id: UUID(), state: "review", due: now.addingTimeInterval(Double(index % 30 + 1) * 3600), createdAt: now, suspended: false)
+        }
+        let snapshot = try repo.homeSnapshot(now: now, cards: cards, logs: []), settings = try repo.settings()
+        var writes = 0
+        let publisher = WidgetSnapshotPublisher(file: file, reload: { writes += 1 })
+        func publish(force: Bool) async throws {
+            var completed = false
+            publisher.publish(repository: repo, snapshot: snapshot, settings: settings, now: now, force: force, cards: cards, logs: []) {
+                XCTAssertNil($0); completed = true
+            }
+            for _ in 0..<200 {
+                if completed { return }
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            XCTFail("Widget projection did not finish")
+        }
+        let oldStart = Date()
+        for _ in 0..<10 { try await publish(force: true) }
+        let forcedMs = Date().timeIntervalSince(oldStart) * 1000
+        XCTAssertEqual(writes, 10)
+        let suppressedStart = Date()
+        for _ in 0..<10 { try await publish(force: false) }
+        let suppressedMs = Date().timeIntervalSince(suppressedStart) * 1000
+        XCTAssertEqual(writes, 10)
+        XCTAssertEqual(publisher.projectionCount, 10)
+        print("WIDGET_DUPLICATES cards=3000 requests=10 forced_ms=\(forcedMs) identical_ms=\(suppressedMs) forced_writes=10 identical_writes=0")
+    }
+    @MainActor func testWidgetCoalescesAndFutureScheduleChangeInvalidatesEqualHomeCounts() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = WidgetSnapshotFile(url: root.appendingPathComponent("widget.json"))
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let cards = [QueueCard(id: UUID(), state: "review", due: now.addingTimeInterval(3600), createdAt: now, suspended: false),
+                     QueueCard(id: UUID(), state: "review", due: now.addingTimeInterval(7200), createdAt: now, suspended: false)]
+        let snapshot = try repo.homeSnapshot(now: now, cards: cards, logs: [])
+        let settings = try repo.settings()
+        var reloads = 0, completions = 0
+        let publisher = WidgetSnapshotPublisher(file: file, reload: { reloads += 1 })
+        func publish(_ input: [QueueCard], force: Bool = false) {
+            publisher.publish(repository: repo, snapshot: snapshot, settings: settings, now: now, force: force, cards: input, logs: []) {
+                XCTAssertNil($0); completions += 1
+            }
+        }
+        for _ in 0..<10 { publish(cards) }
+        for _ in 0..<100 where completions < 10 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(completions, 10); XCTAssertEqual(reloads, 1); XCTAssertEqual(publisher.projectionCount, 1)
+        publish(Array(cards.reversed()))
+        XCTAssertEqual(publisher.projectionCount, 1)
+        // The earliest due date and home counts are identical, but a later
+        // timeline point changed. Aggregate-only invalidation would miss it.
+        let changed = [cards[0], QueueCard(id: cards[1].id, state: "review", due: now.addingTimeInterval(10800), createdAt: now, suspended: false)]
+        publish(changed)
+        for _ in 0..<100 where reloads < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(publisher.projectionCount, 2)
+        XCTAssertTrue(file.read()?.points.contains { $0.date == now.addingTimeInterval(10800) } == true)
+        publish(changed, force: true)
+        for _ in 0..<100 where reloads < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(publisher.projectionCount, 3)
+        XCTAssertTrue(try repo.logs().isEmpty)
+    }
     private var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!; return c }
     func testDueNewProgressAndStudyDayBoundaryUseSavedSchedules() throws {
         let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 3, minute: 59))!
