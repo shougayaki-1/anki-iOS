@@ -270,6 +270,7 @@ struct ImportView: View {
     private func commit() {
         guard !saving, result == nil else { return }
         saving = true
+        reloadWarning = nil
         defer { saving = false }
         do {
             let saved = try store.repository.importRows(rows, deckID: deckID, kind: kind,
@@ -366,6 +367,7 @@ struct ImageZIPImportView: View {
     private func commit() {
         guard !saving, result == nil else { return }
         saving = true
+        reloadWarning = nil
         defer { saving = false }
         do {
             let saved = try store.repository.importImagePackage(package, deckID: deckID, action: action, now: store.clock())
