@@ -235,7 +235,7 @@ final class QualityUITests: XCTestCase {
     }
     func testScaleHomeReviewUndoAndRestart() {
         let app = XCUIApplication()
-        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-scale"]
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-scale", "-study-performance"]
         app.launch()
         XCTAssertTrue(app.staticTexts["dueCount"].waitForExistence(timeout: 20))
         XCTAssertTrue(app.staticTexts["dueCount"].label.contains("3000枚"))

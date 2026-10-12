@@ -59,6 +59,8 @@ actor StatisticsReader {
     // edits or restore have not happened since their previous read.
     func load(now: Date, calendar: Calendar, startHour: Int, scope: LearningScope,
               revision: Int? = nil) throws -> StudyStatistics {
+        let interval = PerformanceProbe.begin("Statistics.load")
+        defer { PerformanceProbe.end(interval) }
         try Task.checkCancellation()
         let material: Material
         if let revision, let saved = cached, saved.revision == revision { material = saved.material }

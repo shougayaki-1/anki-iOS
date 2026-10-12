@@ -35,6 +35,28 @@ private final class ImportMemoryProbe: @unchecked Sendable {
 
 @MainActor
 final class ScaleRepositoryTests: XCTestCase {
+    func testProfilingFixturesAreIsolatedAndDoNotReplaceExistingData() throws {
+        #if DEBUG
+        for basic in [true, false] {
+            let container = try PersistenceController.makeStudyContainer(inMemory: true)
+            let repository = StudyRepository(container: container)
+            let now = Date(timeIntervalSince1970: 1_700_000_000)
+            try repository.initialize(now: now)
+            try UITestFixtures.populateScale(repository, now: now, basic: basic, multipleDecks: true)
+            let notes = try repository.notes(), cards = try repository.cards(), logs = try repository.logs()
+            XCTAssertEqual(notes.count, basic ? 3000 : 1000)
+            XCTAssertEqual(cards.count, 3000)
+            XCTAssertEqual(logs.count, basic ? 0 : 10000)
+            XCTAssertEqual(try repository.decks().count, 20)
+            let ids = Set(notes.map(\.id)), cardIDs = Set(cards.map(\.id)), logIDs = Set(logs.map(\.id))
+            try UITestFixtures.populateScale(repository, now: now, basic: !basic, multipleDecks: true)
+            XCTAssertEqual(Set(try repository.notes().map(\.id)), ids)
+            XCTAssertEqual(Set(try repository.cards().map(\.id)), cardIDs)
+            XCTAssertEqual(Set(try repository.logs().map(\.id)), logIDs)
+        }
+        #endif
+    }
+
     func testAnkiImportBufferMeasurements() throws {
         let url = try XCTUnwrap(Bundle(for: ScaleRepositoryTests.self).url(forResource: "latest-vocabulary-1900", withExtension: "apkg", subdirectory: "Anki"))
         let bytes = try Data(contentsOf: url)
