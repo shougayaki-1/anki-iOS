@@ -141,6 +141,8 @@ struct TextReplacementView: View {
         let reader = TextReplacementReader(container: store.repository.context.container), now = store.clock()
         work = Task { @MainActor in
             do {
+                try await store.createRestorePoint("本文の一括置換")
+                try Task.checkCancellation()
                 let result = try await reader.apply(preview, now: now)
                 // No cancellation check after commit: always report a saved operation.
                 completed = true; saving = false

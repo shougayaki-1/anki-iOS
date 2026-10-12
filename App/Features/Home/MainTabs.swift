@@ -116,6 +116,9 @@ struct MainTabs: View {
         .onReceive(NotificationCenter.default.publisher(for: .studyNotificationOpened)) { _ in
             store.pause(); store.selectedTab = 0
         }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+            Task { await store.libraryReader.clearContents() }
+        }
         .onChange(of: store.decks.map(\.id)) { _, ids in
             if let sidebarDeck, !ids.contains(sidebarDeck) { self.sidebarDeck = nil }
         }

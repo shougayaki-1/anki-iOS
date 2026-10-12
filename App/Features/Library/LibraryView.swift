@@ -22,6 +22,9 @@ struct LibraryView: View {
     @AppStorage("libraryExpandedDeckIDs") private var savedExpansion = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tree: LibraryTreeProjection?
+    @State private var visibleRows: [LibraryTreeRow] = []
+    @State private var projectionKey: ProjectionKey?
+    @State private var shownExpansion = ""
     @State private var cardMarks: [UUID: CardMark] = [:]
     @State private var index: LibraryIndex?
     @State private var results = LibraryResults()
@@ -78,11 +81,22 @@ struct LibraryView: View {
         let attempt: Int
         let expansion: String
     }
+    private struct ProjectionKey: Equatable {
+        let revision: Int
+        let query: String
+        let deck: UUID?
+        let attempt: Int
+    }
+    private var request: Request {
+        Request(revision: store.dataRevision, query: search, deck: activeDeckFilter, tab: store.selectedTab,
+                attempt: loadAttempt, expansion: savedExpansion)
+    }
 
     var body: some View {
         NavigationStack {
             List(selection: $selection) {
                 Section {
+                    NavigationLink("詳細検索・保存済み検索") { AdvancedLibrarySearchView(store: store) }
                     NavigationLink { FlaggedCardsView(store: store) } label: { Label("フラグ付きカード", systemImage: "flag") }
                 }
                 Section("登録数") {
@@ -111,7 +125,7 @@ struct LibraryView: View {
                 if results.cardCount == 0 && !loading && libraryFailure == nil {
                     emptyLibrary
                 }
-                ForEach(tree?.rows(expanded: LibraryTreeProjection.expandedIDs(savedExpansion)) ?? []) { row in
+                ForEach(visibleRows) { row in
                     if let deck = row.deck {
                         Button {
                             guard row.expandable, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -146,7 +160,7 @@ struct LibraryView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: note.cardIDs.isSubset(of: selection) ? "checkmark.circle.fill" : (selection.isDisjoint(with: note.cardIDs) ? "circle" : "minus.circle.fill"))
-                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag)
+                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
                                 }.foregroundStyle(.primary)
                             }
                             .buttonStyle(.plain)
@@ -154,38 +168,49 @@ struct LibraryView: View {
                             .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         } else {
                             NavigationLink { NoteDetailView(store: store, cardID: note.card.id) } label: {
-                                LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag)
+                                LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
                             }.padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         }
                     }
                 }
             }
-            .task(id: Request(revision: store.dataRevision, query: search, deck: activeDeckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
+            .task(id: request) {
                 guard store.selectedTab == 1 else { return }
-                let revision = store.dataRevision, query = search
+                let wanted = request
+                let revision = wanted.revision, query = wanted.query
                 loading = true
-                defer { if !Task.isCancelled { loading = false } }
+                defer { if !Task.isCancelled, wanted == request { loading = false } }
                 do {
                     if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
-                    let allowed = try activeDeckFilter.map { try store.repository.descendants(of: $0) }
+                    let allowed = try wanted.deck.map { try store.repository.descendants(of: $0) }
                     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
                     let metadata = try await store.libraryReader.load(revision: revision)
-                    let found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
-                    let decks = store.decks.filter { allowed?.contains($0.id) ?? true }
-                    let projection = LibraryTreeProjection(decks: decks, index: metadata, results: found, search: query)
-                    let expanded = LibraryTreeProjection.expandedIDs(savedExpansion)
-                    let visibleExpanded = Set(projection.rows(expanded: expanded).filter(\.expanded).compactMap { $0.deck?.id })
+                    let key = ProjectionKey(revision: revision, query: query, deck: wanted.deck, attempt: wanted.attempt)
+                    let found: LibraryResults, projection: LibraryTreeProjection
+                    if projectionKey == key, let tree {
+                        found = results; projection = tree
+                    } else {
+                        found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
+                        let decks = store.decks.filter { allowed?.contains($0.id) ?? true }
+                        projection = LibraryTreeProjection(decks: decks, index: metadata, results: found, search: query)
+                    }
+                    let expanded = LibraryTreeProjection.expandedIDs(wanted.expansion)
+                    let rows = projection.rows(expanded: expanded)
+                    let visibleExpanded = Set(rows.filter(\.expanded).compactMap { $0.deck?.id })
                     let requested = query.isEmpty ? visibleExpanded : Set(found.cardsByDeck.keys)
                     let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: requested)
                     try Task.checkCancellation()
-                    guard revision == store.dataRevision else { return }
+                    guard wanted == request else { return }
                     cardMarks = Dictionary(uniqueKeysWithValues: (try store.repository.options().cardMarks ?? []).map { ($0.cardID, $0) })
-                    index = loaded; results = found; tree = projection; libraryFailure = nil
+                    let animate = projectionKey == key && shownExpansion != wanted.expansion
+                    index = loaded; results = found; tree = projection; projectionKey = key; libraryFailure = nil
+                    withAnimation(animate && !reduceMotion ? .easeInOut(duration: 0.18) : nil) { visibleRows = rows }
+                    shownExpansion = wanted.expansion
                     let valid = expanded.intersection(Set(store.decks.map(\.id)))
                     if valid != expanded { savedExpansion = LibraryTreeProjection.saveExpanded(valid) }
                     selection.formIntersection(found.cardIDs)
                 } catch is CancellationError { }
-                catch { if !Task.isCancelled { libraryFailure = error.localizedDescription } }
+                catch { if !Task.isCancelled, wanted == request { libraryFailure = error.localizedDescription } }
             }
             .environment(\.editMode, $editMode)
             .onChange(of: deckFilter) { _, _ in clearedDeckFilter = false; selection.removeAll(); editMode = .inactive }
@@ -266,19 +291,25 @@ struct LibraryView: View {
 }
 
 /// List creates row bodies on demand; hidden decks never render generated text.
-struct LibraryCardRow: View {
-    let card: LibraryCard
-    let index: LibraryIndex?
+struct LibraryCardRow: View, Equatable {
+    let content: LibraryRowContent
     var flag: CardFlag? = nil
+
+    init(card: LibraryCard, index: LibraryIndex?, flag: CardFlag? = nil) {
+        content = index?.rowContents[card.id] ?? LibraryRowContent(question: "カードを表示できません",
+            kindTitle: index?.notes[card.noteID]?.kind.title ?? "", siblingCount: index?.siblingCounts[card.noteID] ?? 1,
+            isSuspended: card.isSuspended)
+        self.flag = flag
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let flag { CardFlagLabel(flag: flag) }
-            Text((try? index?.displayed(card).question) ?? "カードを表示できません").lineLimit(2)
-            if let count = index?.siblingCounts[card.noteID], count > 1 {
-                Text("同じノートから\(count)枚").font(.caption).foregroundStyle(.secondary)
+            Text(content.question).lineLimit(2)
+            if content.siblingCount > 1 {
+                Text("同じノートから\(content.siblingCount)枚").font(.caption).foregroundStyle(.secondary)
             }
-            Text((index?.notes[card.noteID]?.kind.title ?? "") + (card.isSuspended ? " · 停止中" : ""))
+            Text(content.kindTitle + (content.isSuspended ? " · 停止中" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -301,8 +332,8 @@ struct NoteDetailView: View {
                     Section("問題") { Text(item.content.question).textSelection(.enabled) }
                     if let id = item.sourceContent.imageID {
                         Section("画像") {
-                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
-                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
+                            if let url = try? store.repository.assetURL(id: id) {
+                                AsyncStudyImageView(file: url, namespace: store.mediaDisplayNamespace, revision: store.dataRevision, identity: id.uuidString, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
                                                targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
                                                hideAll: item.sourceContent.hideAllMasks ?? true, revealed: true)
                             } else { Label("画像を読み込めません。編集から写真を再選択してください。", systemImage: "exclamationmark.triangle") }
@@ -384,6 +415,7 @@ private struct BulkManagementView: View {
     @State private var result: LibraryOperationCompletion?
     @State private var failure: String?
     @State private var confirmDelete = false
+    @State private var checkpointWorking = false
     private var action: BulkEditAction? {
         switch operation {
         case .move: return destination.map(BulkEditAction.move)
@@ -446,10 +478,12 @@ private struct BulkManagementView: View {
                     }
                 }
             }
+            .disabled(checkpointWorking)
+            .interactiveDismissDisabled(checkpointWorking)
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("一括操作")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close(result != nil) }.accessibilityIdentifier("closeBulkManagement") }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close(result != nil) }.disabled(checkpointWorking).accessibilityIdentifier("closeBulkManagement") }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }.accessibilityIdentifier("dismissBulkKeyboard") }
             }
             .onChange(of: operation) { _, _ in preview = nil }
@@ -471,20 +505,26 @@ private struct BulkManagementView: View {
         catch { preview = nil; failure = error.localizedDescription }
     }
     private func commit(_ value: BulkEditPreview) {
-        guard result == nil else { return }
-        let targetName = operation == .move ? store.decks.first(where: { $0.id == destination })?.name : nil
-        var receipt: BulkEditResult?
-        let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
-        if let receipt {
-            didCommit()
-            result = LibraryOperationCompletion(operation: operation.title, notes: receipt.changedNotes,
-                cards: receipt.changedCards, targetName: targetName,
-                destinationID: operation == .move ? destination : nil,
-                warning: refreshed ? nil : "変更は保存済みですが、画面を更新できません。アプリを開き直してください。再実行は不要です。")
-            if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
-            preview = nil
-        } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
-        store.failure = nil
+        guard result == nil, !checkpointWorking else { return }
+        checkpointWorking = true
+        Task {
+            defer { checkpointWorking = false }
+            do { try await store.createRestorePoint("ライブラリの一括操作") }
+            catch { failure = error.localizedDescription; return }
+            let targetName = operation == .move ? store.decks.first(where: { $0.id == destination })?.name : nil
+            var receipt: BulkEditResult?
+            let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
+            if let receipt {
+                didCommit()
+                result = LibraryOperationCompletion(operation: operation.title, notes: receipt.changedNotes,
+                    cards: receipt.changedCards, targetName: targetName,
+                    destinationID: operation == .move ? destination : nil,
+                    warning: refreshed ? nil : "変更は保存済みですが、画面を更新できません。アプリを開き直してください。再実行は不要です。")
+                if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
+                preview = nil
+            } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
+            store.failure = nil
+        }
     }
 }
 
@@ -561,8 +601,10 @@ private struct WeakPracticeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var session: WeakPracticeSession
     let conditions: String
-    init(store: StudyStore, initial: WeakPracticeSession, conditions: String) {
+    var customSearch = false
+    init(store: StudyStore, initial: WeakPracticeSession, conditions: String, customSearch: Bool = false) {
         self.conditions = conditions
+        self.customSearch = customSearch
         self.store = store; _session = State(initialValue: initial)
     }
     var body: some View {
@@ -575,8 +617,8 @@ private struct WeakPracticeView: View {
                         Text("\(session.index + 1)／\(session.cards.count)枚")
                         Text(item.content.question).font(.title2).accessibilityIdentifier("weakPracticeQuestion")
                         if let id = item.sourceContent.imageID {
-                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
-                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? item.sourceContent.masks ?? [] : [],
+                            if let url = try? store.repository.assetURL(id: id) {
+                                AsyncStudyImageView(file: url, namespace: store.mediaDisplayNamespace, revision: store.dataRevision, identity: id.uuidString, masks: item.kind == .imageOcclusion ? item.sourceContent.masks ?? [] : [],
                                     targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
                                     hideAll: item.sourceContent.hideAllMasks ?? true, revealed: session.revealed)
                             } else { Text("画像を読み込めません。ライブラリで画像を確認してください。") }
@@ -597,7 +639,7 @@ private struct WeakPracticeView: View {
                         VStack(spacing: 24) {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 68)).foregroundStyle(.green).accessibilityHidden(true)
-                            Text("重点練習が完了しました").font(.title2.bold())
+                            Text(customSearch ? "カスタム学習が完了しました" : "重点練習が完了しました").font(.title2.bold())
                                 .accessibilityIdentifier("weakPracticeCompleted")
                             Text("練習したカード：\(session.completedCount)枚")
                                 .accessibilityIdentifier("weakPracticeCompletedCount")
@@ -607,16 +649,16 @@ private struct WeakPracticeView: View {
                             Button("同じカードをもう一度練習する") { session.restart() }
                                 .buttonStyle(.borderedProminent).controlSize(.large)
                                 .accessibilityIdentifier("restartWeakPractice")
-                            Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                            Button(customSearch ? "検索結果に戻る" : "苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
                         }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 24)
                     } else {
                         ContentUnavailableView("練習するカードがありません", systemImage: "rectangle.on.rectangle",
                                                description: Text("苦手カード一覧で対象条件を変更してください。"))
-                        Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                        Button(customSearch ? "検索結果に戻る" : "苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
                     }
                 }.padding()
             }
-            .navigationTitle("重点練習")
+            .navigationTitle(customSearch ? "カスタム学習" : "重点練習")
             .toolbar { Button("終了") { dismiss() } }
         }
     }
@@ -745,5 +787,219 @@ struct FlaggedCardsView: View {
         }
         .onChange(of: search) { _, _ in selection.removeAll() }
         .onChange(of: flag) { _, _ in selection.removeAll() }
+    }
+}
+
+
+struct AdvancedLibrarySearchView: View {
+    @Bindable var store: StudyStore
+    @State private var preferences = LibrarySearchPreferences()
+    @State private var restored = false
+    @State private var index: LibraryIndex?
+    @State private var results = LibraryResults()
+    @State private var evaluatedAt = Date()
+    @State private var loading = false
+    @State private var failure: String?
+    @State private var filters = false
+    @State private var name = ""
+    @State private var editingSaved: UUID?
+    @State private var selection: Set<UUID> = []
+    @State private var editMode = EditMode.inactive
+    @State private var bulk = false
+    @State private var practice: WeakPracticeSession?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refresh = 0
+    private struct Request: Equatable {
+        let conditions: LibrarySearchConditions
+        let revision: Int
+        let refresh: Int
+        let restored: Bool
+    }
+    private var cards: [LibraryCard] {
+        results.cardsByDeck.values.flatMap { $0 }.sorted {
+            if $0.createdAt == $1.createdAt { return $0.id.uuidString < $1.id.uuidString }
+            return preferences.current.oldestFirst ? $0.createdAt < $1.createdAt : $0.createdAt > $1.createdAt
+        }
+    }
+    var body: some View {
+        List(selection: $selection) {
+            Section {
+                Button("絞り込み条件・保存済み検索", systemImage: "line.3.horizontal.decrease") { filters = true }
+                Text("\(results.noteCount)ノート / \(results.cardCount)枚")
+                Text("ノートは内容のまとまり、カードは出題単位です。") .font(.footnote).foregroundStyle(.secondary)
+                conditionChips
+                Text("評価時刻: " + evaluatedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("期限・今日・想起確率は評価時刻によって変わります。") .font(.caption).foregroundStyle(.secondary)
+                Button("現在時刻で再評価") { refresh += 1 }
+            }
+            if loading { ProgressView("検索中") }
+            if let failure { Text(failure).foregroundStyle(.red) }
+            if !loading && failure == nil && cards.isEmpty {
+                ContentUnavailableView("検索結果がありません", systemImage: "magnifyingglass",
+                    description: Text("条件を変更してください。削除済みデッキ・タグを指定した条件には一致しません。"))
+            }
+            ForEach(cards) { card in
+                NavigationLink { NoteDetailView(store: store, cardID: card.id) } label: {
+                    LibraryCardRow(card: card, index: index)
+                }.tag(card.id)
+            }
+        }
+        .navigationTitle("詳細検索")
+        .searchable(text: $preferences.current.text, prompt: "問題・解答・デッキ・タグ")
+        .environment(\.editMode, $editMode)
+        .toolbar {
+            Button(editMode.isEditing ? "完了" : "選択") { editMode = editMode.isEditing ? .inactive : .active; selection.removeAll() }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                if editMode.isEditing {
+                    Button("全選択") { selection = results.cardIDs }
+                    Button("一括操作（\(selection.count)枚）") { bulk = true }.disabled(selection.isEmpty)
+                } else {
+                    Button("検索結果でカスタム学習") {
+                        do {
+                            practice = WeakPracticeSession(cards: try store.repository.noteItems(cardIDs: results.cardIDs))
+                        } catch { failure = error.localizedDescription }
+                    }
+                }
+            }.disabled(loading || failure != nil || results.cardCount == 0).padding().background(.regularMaterial)
+        }
+        .task {
+            do { preferences = try store.repository.options().librarySearch ?? LibrarySearchPreferences(); restored = true }
+            catch { failure = error.localizedDescription }
+        }
+        .task(id: Request(conditions: preferences.current, revision: store.dataRevision, refresh: refresh, restored: restored)) {
+            guard restored else { return }
+            loading = true
+            defer { if !Task.isCancelled { loading = false } }
+            do {
+                try await Task.sleep(for: .milliseconds(180))
+                let conditions = preferences.current, revision = store.dataRevision, now = store.clock()
+                let found = try await store.libraryReader.advancedSearch(conditions, revision: revision, now: now,
+                    calendar: store.repository.calendar, dayStartHour: store.settings.dayStartHour)
+                let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: Set(found.cardsByDeck.keys))
+                try Task.checkCancellation()
+                guard revision == store.dataRevision else { return }
+                results = found; index = loaded; evaluatedAt = now; failure = nil
+                selection.formIntersection(found.cardIDs)
+                try store.repository.saveLibrarySearch(preferences)
+            } catch is CancellationError {} catch { if !Task.isCancelled { failure = error.localizedDescription } }
+        }
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                if scenePhase == .active { refresh += 1 }
+            }
+        }
+        .onChange(of: preferences.current) { _, _ in selection.removeAll() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refresh += 1 } }
+        .onDisappear { if restored { persist() } }
+        .sheet(isPresented: $filters) { filterSheet }
+        .sheet(isPresented: $bulk) {
+            BulkManagementView(store: store, selection: selection, didCommit: { selection.removeAll(); refresh += 1 }) { _ in bulk = false }
+        }
+        .sheet(item: $practice) { session in
+            WeakPracticeView(store: store, initial: session, conditions: "詳細検索の結果 \(results.cardCount)枚・練習のみ", customSearch: true)
+        }
+    }
+    private var conditionChips: some View {
+        ScrollView(.horizontal) {
+            HStack {
+                ForEach(chips, id: \.id) { chip in
+                    Button(chip.title + " ×") { chip.clear() }.buttonStyle(.bordered)
+                }
+                Button("すべて解除") { preferences.current = LibrarySearchConditions() }
+            }
+        }
+    }
+    private struct Chip { let id: String; let title: String; let clear: () -> Void }
+    private var chips: [Chip] {
+        let c = preferences.current
+        var values: [Chip] = []
+        if !c.text.isEmpty { values.append(Chip(id: "text", title: c.text) { preferences.current.text = "" }) }
+        if let id = c.deckID { values.append(Chip(id: "deck", title: store.decks.first { $0.id == id }?.name ?? "削除済みデッキ") { preferences.current.deckID = nil }) }
+        for id in c.tags { values.append(Chip(id: "tag-" + id.uuidString, title: "タグ: " + (store.tags.first { $0.id == id }?.name ?? "削除済み")) { preferences.current.tags.removeAll { $0 == id } }) }
+        if c.state != .all { values.append(Chip(id: "state", title: stateTitle(c.state)) { preferences.current.state = .all }) }
+        if c.dueOnly { values.append(Chip(id: "due", title: "期限到来") { preferences.current.dueOnly = false }) }
+        if c.againToday { values.append(Chip(id: "again", title: "今日Again") { preferences.current.againToday = false }) }
+        if c.reviewedDays > 0 { values.append(Chip(id: "days", title: "直近\(c.reviewedDays)学習日") { preferences.current.reviewedDays = 0 }) }
+        if c.minimumLapses > 0 { values.append(Chip(id: "lapses", title: "忘却\(c.minimumLapses)回以上") { preferences.current.minimumLapses = 0 }) }
+        if c.minimumDifficulty > 0 { values.append(Chip(id: "difficulty", title: "難易度\(Int(c.minimumDifficulty))以上") { preferences.current.minimumDifficulty = 0 }) }
+        if c.maximumRecall < 1 { values.append(Chip(id: "recall", title: "想起確率\(Int(c.maximumRecall * 100))%以下") { preferences.current.maximumRecall = 1 }) }
+        if c.missingFSRS { values.append(Chip(id: "missing", title: "未学習・FSRSデータなし") { preferences.current.missingFSRS = false }) }
+        if let flag = c.flag { values.append(Chip(id: "flag", title: "フラグ: " + flag.title) { preferences.current.flag = nil }) }
+        return values
+    }
+    private func stateTitle(_ state: LibrarySearchState) -> String {
+        state == .suspended ? "停止" : (state == .all ? "すべて" : LearningStatePresentation(state: state.rawValue).title)
+    }
+    private var filterSheet: some View {
+        NavigationStack {
+            Form {
+                if let failure { Section { Text(failure).foregroundStyle(.red) } }
+                Section("対象") {
+                    DeckSelectionField("デッキ", decks: store.decks, selection: $preferences.current.deckID, nilTitle: "すべて")
+                    Toggle("子孫デッキを含む", isOn: $preferences.current.descendants)
+                    Toggle("タグのいずれかを含む（OR）", isOn: $preferences.current.anyTag)
+                    Text(preferences.current.anyTag ? "タグはOR、他条件とはANDです。" : "タグはすべて含むAND条件です。") .font(.footnote)
+                    ForEach(store.tags) { tag in
+                        Toggle(tag.name, isOn: Binding(get: { preferences.current.tags.contains(tag.id) }, set: { selected in
+                            preferences.current.tags.removeAll { $0 == tag.id }
+                            if selected { preferences.current.tags.append(tag.id) }
+                        }))
+                    }
+                }
+                Section("状態・履歴") {
+                    Picker("状態", selection: $preferences.current.state) {
+                        ForEach(LibrarySearchState.allCases, id: \.self) { Text(stateTitle($0)).tag($0) }
+                    }
+                    Toggle("期限到来（新規・停止中を除く）", isOn: $preferences.current.dueOnly)
+                    Toggle("今日Again", isOn: $preferences.current.againToday)
+                    Stepper("直近\(preferences.current.reviewedDays)学習日に回答（0: 指定なし）", value: $preferences.current.reviewedDays, in: 0...365)
+                    Stepper("忘却\(preferences.current.minimumLapses)回以上", value: $preferences.current.minimumLapses, in: 0...100)
+                    Picker("フラグ", selection: $preferences.current.flag) {
+                        Text("すべて").tag(Optional<CardFlag>.none)
+                        ForEach(CardFlag.allCases) { Text($0.title).tag(Optional($0)) }
+                    }
+                }
+                Section("FSRS") {
+                    Stepper("難易度\(Int(preferences.current.minimumDifficulty))以上（0: 指定なし）", value: $preferences.current.minimumDifficulty, in: 0...10)
+                    Text("想起確率\(Int(preferences.current.maximumRecall * 100))%以下（100: 指定なし）")
+                    Slider(value: $preferences.current.maximumRecall, in: 0...1, step: 0.05)
+                    Toggle("未学習・データなし", isOn: $preferences.current.missingFSRS)
+                    Text("難易度・想起確率の数値条件は未学習とデータなしを除外します。欠損値を0として扱いません。") .font(.footnote)
+                }
+                Section("並び順") { Toggle("古い登録から表示", isOn: $preferences.current.oldestFirst) }
+                Section("条件を保存") {
+                    TextField("検索名", text: $name)
+                    Button(editingSaved == nil ? "新しく保存" : "条件・名称を更新") {
+                        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !title.isEmpty else { return }
+                        if let id = editingSaved, let position = preferences.saved.firstIndex(where: { $0.id == id }) {
+                            preferences.saved[position].name = title; preferences.saved[position].conditions = preferences.current
+                        } else { preferences.saved.append(SavedLibrarySearch(name: title, conditions: preferences.current)) }
+                        persist(); name = ""; editingSaved = nil
+                    }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if editingSaved != nil { Button("新規保存に切り替える") { editingSaved = nil; name = "" } }
+                    ForEach(preferences.saved) { saved in
+                        HStack {
+                            Button(saved.name) { preferences.current = saved.conditions; filters = false }
+                            Spacer()
+                            Button("編集") { editingSaved = saved.id; name = saved.name; preferences.current = saved.conditions }
+                            Button("削除", role: .destructive) { preferences.saved.removeAll { $0.id == saved.id }; if editingSaved == saved.id { editingSaved = nil; name = "" }; persist() }
+                        }
+                    }
+                }
+            }.navigationTitle("検索条件").toolbar { Button("完了") { filters = false } }
+        }
+    }
+    private func persist() {
+        do { try store.repository.saveLibrarySearch(preferences); failure = nil }
+        catch {
+            failure = "検索条件を保存できません: " + error.localizedDescription
+            if let persisted = try? store.repository.options().librarySearch { preferences = persisted }
+            else { preferences = LibrarySearchPreferences() }
+        }
     }
 }
