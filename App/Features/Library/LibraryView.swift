@@ -15,11 +15,21 @@ struct LibraryView: View {
     @State private var bulkEditing = false
     @State private var bulkCommitted = false
 
+    @AppStorage("libraryExpandedDeckIDs") private var savedExpansion = ""
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var tree: LibraryTreeProjection?
     @State private var index: LibraryIndex?
     @State private var results = LibraryResults()
     @State private var loading = true
     @State private var libraryFailure: String?
     @State private var loadAttempt = 0
+
+    init(store: StudyStore, shortcutDeck: Binding<ShortcutDeckDestination?>, deckFilter: UUID? = nil) {
+        self.store = store
+        _shortcutDeck = shortcutDeck
+        self.deckFilter = deckFilter
+        _savedExpansion = AppStorage(wrappedValue: "", "libraryExpandedDeckIDs.\(store.storageLocation.canonicalStore.lastPathComponent)")
+    }
 
     private struct Request: Equatable {
         let revision: Int
@@ -27,6 +37,7 @@ struct LibraryView: View {
         let deck: UUID?
         let tab: Int
         let attempt: Int
+        let expansion: String
     }
 
     var body: some View {
@@ -59,19 +70,56 @@ struct LibraryView: View {
                     ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
                                            description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
                 }
-                ForEach(store.decks.filter { results.cardsByDeck[$0.id] != nil }) { deck in
-                    Section(deck.name) {
-                        ForEach(results.cardsByDeck[deck.id] ?? []) { item in
-                            if editMode.isEditing {
-                                LibraryCardRow(card: item, index: index).tag(item.id)
-                            } else {
-                                NavigationLink { NoteDetailView(store: store, cardID: item.id) } label: { LibraryCardRow(card: item, index: index) }
+                ForEach(tree?.rows(expanded: LibraryTreeProjection.expandedIDs(savedExpansion)) ?? []) { row in
+                    if let deck = row.deck {
+                        Button {
+                            guard row.expandable, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                            var expanded = LibraryTreeProjection.expandedIDs(savedExpansion)
+                            if !expanded.insert(deck.id).inserted { expanded.remove(deck.id) }
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                                savedExpansion = LibraryTreeProjection.saveExpanded(expanded)
                             }
+                            store.haptics.play(.reveal, mode: store.settings.hapticsMode)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: row.expandable ? (row.expanded ? "chevron.down" : "chevron.right") : "minus")
+                                    .font(.caption).frame(width: 12).accessibilityHidden(true)
+                                Image(systemName: row.expanded ? "folder.fill" : "folder").foregroundStyle(.secondary).accessibilityHidden(true)
+                                Text(deck.name).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                                Spacer(minLength: 4)
+                                Text(row.cardCount == 0 ? "空" : "\(row.cardCount)枚").font(.caption).foregroundStyle(.secondary)
+                            }
+                            .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
+                            .frame(minHeight: 36).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("階層\(row.depth + 1)、\(deck.name)、配下\(row.cardCount)枚")
+                        .accessibilityValue(row.expandable ? (row.expanded ? "展開中" : "折り畳み中") : "空のデッキ")
+                        .accessibilityHint(row.expandable ? (row.expanded ? "折り畳む" : "展開する") : "")
+                        .accessibilityIdentifier("libraryDeck-\(deck.id.uuidString)")
+                    } else if let note = row.note {
+                        if editMode.isEditing {
+                            Button {
+                                if note.cardIDs.isSubset(of: selection) { selection.subtract(note.cardIDs) }
+                                else { selection.formUnion(note.cardIDs) }
+                            } label: {
+                                HStack {
+                                    Image(systemName: note.cardIDs.isSubset(of: selection) ? "checkmark.circle.fill" : (selection.isDisjoint(with: note.cardIDs) ? "circle" : "minus.circle.fill"))
+                                    LibraryCardRow(card: note.card, index: index)
+                                }.foregroundStyle(.primary)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityValue(note.cardIDs.isSubset(of: selection) ? "選択中" : "未選択")
+                            .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
+                        } else {
+                            NavigationLink { NoteDetailView(store: store, cardID: note.card.id) } label: {
+                                LibraryCardRow(card: note.card, index: index)
+                            }.padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         }
                     }
                 }
             }
-            .task(id: Request(revision: store.dataRevision, query: search, deck: deckFilter, tab: store.selectedTab, attempt: loadAttempt)) {
+            .task(id: Request(revision: store.dataRevision, query: search, deck: deckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
                 guard store.selectedTab == 1 else { return }
                 let revision = store.dataRevision, query = search
                 loading = true
@@ -79,11 +127,20 @@ struct LibraryView: View {
                 do {
                     if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
                     let allowed = try deckFilter.map { try store.repository.descendants(of: $0) }
-                    let found = try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
-                    let loaded = try await store.libraryReader.load(revision: revision)
+                    let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let metadata = try await store.libraryReader.load(revision: revision)
+                    let found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
+                    let decks = store.decks.filter { allowed?.contains($0.id) ?? true }
+                    let projection = LibraryTreeProjection(decks: decks, index: metadata, results: found, search: query)
+                    let expanded = LibraryTreeProjection.expandedIDs(savedExpansion)
+                    let visibleExpanded = Set(projection.rows(expanded: expanded).filter(\.expanded).compactMap { $0.deck?.id })
+                    let requested = query.isEmpty ? visibleExpanded : Set(found.cardsByDeck.keys)
+                    let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: requested)
                     try Task.checkCancellation()
                     guard revision == store.dataRevision else { return }
-                    index = loaded; results = found; libraryFailure = nil
+                    index = loaded; results = found; tree = projection; libraryFailure = nil
+                    let valid = expanded.intersection(Set(store.decks.map(\.id)))
+                    if valid != expanded { savedExpansion = LibraryTreeProjection.saveExpanded(valid) }
                     selection.formIntersection(found.cardIDs)
                 } catch is CancellationError { }
                 catch { if !Task.isCancelled { libraryFailure = error.localizedDescription } }
@@ -391,12 +448,9 @@ private struct WeakCardListView: View {
                 Picker("履歴の期間", selection: $days) {
                     ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
                 }
-                ForEach(store.tags) { tag in
-                    Toggle(tag.name, isOn: Binding(get: { scope.tagIDs.contains(tag.id) }, set: { value in
-                        if value { scope.tagIDs.append(tag.id) } else { scope.tagIDs.removeAll { $0 == tag.id } }
-                    }))
-                }
+
             }
+            ContextualTagFilterSections(store: store, scope: $scope)
             Section {
                 Text("直近Again、Again2回以上、3回答以上でAgain割合30%以上・難易度8以上・推定想起確率75%未満を基準に抽出します。停止中・未学習は除外します。タグはすべて含む条件です。")
                     .font(.footnote).foregroundStyle(.secondary)

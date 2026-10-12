@@ -12,6 +12,14 @@ enum UITestFixtures {
             scene.traitOverrides.userInterfaceStyle = .dark
         }
     }
+    @MainActor static func populateLibraryTree(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let root = try repository.createDeck(name: "Tree English", now: now)
+        let child = try repository.createDeck(name: "Tree Draft", parentID: root, now: now)
+        let leaf = try repository.createDeck(name: "Tree Lesson", parentID: child, now: now)
+        try repository.createNote(NoteInput(deckID: root, question: "Tree parent question", answer: "Parent"), now: now)
+        try repository.createNote(NoteInput(deckID: leaf, question: "Tree leaf question", answer: "Leaf"), now: now)
+    }
     @MainActor static func populateNewReviewDue(_ store: StudyStore) throws {
         let repo = store.repository, now = store.clock()
         guard try repo.notes().isEmpty else { return }
@@ -101,6 +109,12 @@ enum UITestFixtures {
         try repository.createNote(NoteInput(deckID: child, question: "Both tags", answer: "A", tagNames: ["A", "B"]), now: now)
         try repository.createNote(NoteInput(deckID: child, question: "Only A", answer: "A", tagNames: ["A"]), now: now)
         try repository.createNote(NoteInput(deckID: other, question: "Other card", answer: "A", tagNames: ["A", "B"]), now: now)
+    }
+    @MainActor static func populateTagFilters(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        try populateHomeFilters(repository, now: now)
+        guard let other = try repository.decks().first(where: { $0.name == "Other" }) else { throw StudyError.missingRecord }
+        try repository.createNote(NoteInput(deckID: other.id, question: "Outside tag", answer: "Answer", tagNames: ["他分野"]), now: now)
     }
     @MainActor static func populateMask(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
