@@ -8,6 +8,9 @@ struct ImportView: View {
     @State private var text = ""
     @State private var filePicker = false
     @State private var acceptingFiles = true
+    @State private var fileOperation: Task<Void, Never>?
+    @State private var fileGeneration = UUID()
+    @State private var readingFile = false
     @State private var dropTarget = false
     @State private var pendingFile: (url: URL, text: String)?
     @State private var replaceInput = false
@@ -177,14 +180,8 @@ struct ImportView: View {
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focused = false } }
             }
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText, .zip]) { result in
-                do {
-                    let url = try result.get()
-                    if url.pathExtension.lowercased() == "zip" {
-                        imagePackage = try ImageImportPackage.read(LocalFileInput.read(url, extensions: ["zip"], maximumBytes: 200_000_000))
-                    } else {
-                    acceptFile(url, data: try LocalFileInput.read(url, extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000))
-                    }
-                } catch { failure = error.localizedDescription }
+                do { readFile(try result.get()) }
+                catch { failure = error.localizedDescription }
             }
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTarget) { providers in
                 guard providers.count == 1 else { failure = "ファイルは1件ずつ選択してください。"; return false }
@@ -198,7 +195,9 @@ struct ImportView: View {
                 return true
             }
             .onAppear { acceptingFiles = true }
-            .onDisappear { acceptingFiles = false }
+            .onDisappear { acceptingFiles = false; fileOperation?.cancel(); fileGeneration = UUID(); readingFile = false }
+            .overlay { if readingFile { ProgressView("ファイルを読み込んでいます")
+                .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
             .overlay { if dropTarget { RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }
             .confirmationDialog("入力中の内容をファイルで置き換えますか？", isPresented: $replaceInput, titleVisibility: .visible) {
                 Button("ファイルの内容に置き換える") { applyPendingFile() }
@@ -214,9 +213,32 @@ struct ImportView: View {
         }
     }
     private func acceptFile(_ url: URL, data: Data) {
+        fileOperation?.cancel(); fileGeneration = UUID(); readingFile = false
         guard let value = String(data: data, encoding: .utf8) else { failure = LibraryError.invalidUTF8.localizedDescription; return }
         pendingFile = (url, value.hasPrefix("\u{feff}") ? String(value.dropFirst()) : value)
         if !text.isEmpty || !rows.isEmpty { replaceInput = true } else { applyPendingFile() }
+    }
+    private func readFile(_ url: URL) {
+        fileOperation?.cancel()
+        let generation = UUID(); fileGeneration = generation; readingFile = true
+        fileOperation = Task {
+            defer { if fileGeneration == generation { readingFile = false; fileOperation = nil } }
+            do {
+                let contents = try await LocalFileInput.readImport(url)
+                guard !Task.isCancelled, acceptingFiles, fileGeneration == generation, result == nil, !saving else { return }
+                readingFile = false
+                switch contents {
+                case .images(let package): imagePackage = package
+                case .text(let text):
+                    pendingFile = (url, text)
+                    if !self.text.isEmpty || !rows.isEmpty { replaceInput = true } else { applyPendingFile() }
+                }
+            } catch is CancellationError {
+            } catch {
+                guard !Task.isCancelled, acceptingFiles, fileGeneration == generation else { return }
+                readingFile = false; failure = error.localizedDescription
+            }
+        }
     }
     private func applyPendingFile() {
         guard let file = pendingFile else { return }

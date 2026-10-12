@@ -2,6 +2,21 @@ import XCTest
 @testable import AnkiIOS
 
 final class ImportParserTests: XCTestCase {
+    func testAsyncImportFileReaderPreservesBOMAndCancellation() async throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("csv")
+        try Data("\u{feff}question,answer\r\n日本語,解答".utf8).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        guard case let .text(text) = try await LocalFileInput.readImport(file) else { return XCTFail("Expected text") }
+        XCTAssertEqual(text, "question,answer\r\n日本語,解答")
+        let task = Task { try await LocalFileInput.readImport(file) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled read accepted") } catch is CancellationError { }
+    }
+    func testIteratorCSVNormalizesBareCRAndPreservesGraphemes() throws {
+        let table = try ImportParser.table("question,answer\r\"e\u{301}👨‍👩‍👧‍👦\r\n次の行\",\"\"\"引用\"\"\"\rQ,A", delimiter: ",")
+        XCTAssertEqual(table.lines, [1, 2, 4])
+        XCTAssertEqual(table.rows[1], ["e\u{301}👨‍👩‍👧‍👦\n次の行", "\"引用\""])
+    }
     func testImportReceiptDistinguishesCompletePartialAndZero() {
         XCTAssertEqual(ImportResult(imported: 0, skipped: 0, errors: []).outcome, .empty)
         XCTAssertEqual(ImportResult(imported: 0, skipped: 1, errors: ["invalid"]).outcome, .empty)

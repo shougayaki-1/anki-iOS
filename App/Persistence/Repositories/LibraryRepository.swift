@@ -206,7 +206,8 @@ extension StudyRepository {
     func importRows(_ rows: [ImportRow], deckID: UUID, kind: NoteKind, tagNames: [String],
                     action: DuplicateAction, resetHistory: Bool = false, source: String, now: Date) throws -> ImportResult {
         var valid: [(ImportRow, NoteInput, Data)] = [], errors: [String] = []
-        let initialNoteIDs = Set(try notes().map(\.id))
+        let initialNotes = try notes()
+        let initialNoteIDs = Set(initialNotes.map(\.id))
         var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
         let excluded = rows.filter { !$0.included }.count
         var duplicates = 0, skipped = 0
@@ -223,8 +224,21 @@ extension StudyRepository {
         let fresh = try JSONEncoder().encode(scheduler.newCard(now: now))
         return try transaction {
             var imported = 0
+            var duplicatesByText: [[String]: Note] = [:]
+            for note in initialNotes where !valid.isEmpty && note.deckID == deckID && note.type == kind.rawValue {
+                let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+                let key = [ImportParser.normalized(content.question), ImportParser.normalized(content.answer)]
+                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
+            }
+            var importTagIDs: [UUID]?
+            @MainActor func tagsForImport() throws -> [UUID] {
+                if let importTagIDs { return importTagIDs }
+                let ids = try tagIDs(for: tagNames); importTagIDs = ids; return ids
+            }
             for (row, input, content) in valid {
-                if let existing = try duplicate(of: input) {
+                try Task.checkCancellation()
+                let key = [ImportParser.normalized(input.question), ImportParser.normalized(input.answer)]
+                if let existing = duplicatesByText[key] {
                     if action == .skip { skipped += 1; duplicates += 1; continue }
                     if action == .update {
                         var merged = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
@@ -235,8 +249,9 @@ extension StudyRepository {
                         if let value = input.answerLayout { merged.answerLayout = value }
                         existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
                         if row.responseMode != nil { existing.defaultResponseMode = input.responseMode.rawValue }
-                        existing.tagIDs = try tagIDs(for: tagNames)
-                        let existingCards = try cards().filter { $0.noteID == existing.id }
+                        existing.tagIDs = try tagsForImport()
+                        let noteID = existing.id
+                        let existingCards = try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
                         if initialNoteIDs.contains(existing.id) {
                             updatedNoteIDs.insert(existing.id); maintainedCardIDs.formUnion(existingCards.map(\.id))
                         }
@@ -249,7 +264,8 @@ extension StudyRepository {
                     }
                 }
                 let note = Note(input: input, content: content, now: now)
-                note.tagIDs = try tagIDs(for: tagNames); context.insert(note); createdNoteIDs.insert(note.id)
+                note.tagIDs = try tagsForImport(); context.insert(note); createdNoteIDs.insert(note.id)
+                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
                 let value = try JSONDecoder().decode(TextContent.self, from: content)
                 for key in try CardGeneration.variants(kind: kind, content: value) {
                     let card = StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now)
