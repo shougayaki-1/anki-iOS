@@ -2,6 +2,21 @@ import XCTest
 @testable import AnkiIOS
 
 final class ReviewSchedulerTests: XCTestCase {
+    func testPreparedStatisticalPredictionMatchesSnapshotAtEveryTime() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let scheduler = try ReviewScheduler()
+        let fresh = try scheduler.newCard(now: now)
+        let reviewed = try scheduler.review(fresh, grade: .easy, now: now).after
+        for snapshot in [fresh, reviewed] {
+            let state = try scheduler.predictionState(snapshot)
+            XCTAssertEqual(state.isNew, try scheduler.summary(snapshot).state == "new")
+            let offsets: [Double] = [0, 60, 86400, 86400 * 30]
+            for delta in offsets {
+                let date = now.addingTimeInterval(delta)
+                XCTAssertEqual(scheduler.retrievability(state, now: date), try scheduler.retrievability(snapshot, now: date), accuracy: 0.000000001)
+            }
+        }
+    }
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
 
     func testFSRS6InitializationAndReviewLifecycle() throws {

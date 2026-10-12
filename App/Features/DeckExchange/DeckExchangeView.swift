@@ -182,6 +182,8 @@ struct DeckExchangeView: View {
                 guard !working, completion == nil, let selected else { return }
                 run {
                     try Task.checkCancellation()
+                    try await store.createRestorePoint("デッキ・APKGの取り込み")
+                    try Task.checkCancellation()
                     var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock())
                     receipt.skipped = ankiPreview?.skipped ?? []
                     receipt.warnings = ankiPreview?.warnings ?? []
