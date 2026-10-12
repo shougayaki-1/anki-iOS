@@ -4,6 +4,8 @@ struct LibraryView: View {
     @Bindable var store: StudyStore
     @Binding var shortcutDeck: ShortcutDeckDestination?
     var deckFilter: UUID? = nil
+    @State private var clearedDeckFilter = false
+    private var activeDeckFilter: UUID? { clearedDeckFilter ? nil : deckFilter }
     @State private var adding = false
     @State private var ocr = false
     @State private var importing = false
@@ -29,6 +31,40 @@ struct LibraryView: View {
         _shortcutDeck = shortcutDeck
         self.deckFilter = deckFilter
         _savedExpansion = AppStorage(wrappedValue: "", "libraryExpandedDeckIDs.\(store.storageLocation.canonicalStore.lastPathComponent)")
+    }
+
+    private var hasSearch: Bool { !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var emptyLibrary: some View {
+        let isFirstCard = (index?.cardCount ?? 0) == 0 && !hasSearch
+        return ContentUnavailableView {
+            Label(isFirstCard ? "カードがありません" : (hasSearch ? "検索結果がありません" : "このデッキにはカードがありません"),
+                  systemImage: hasSearch && !isFirstCard ? "magnifyingglass" : "rectangle.on.rectangle")
+        } description: {
+            Text(isFirstCard ? "問題と解答を登録して、学習を始めましょう。" : (hasSearch ? "問題・解答・デッキ・タグの検索条件を変えてください。" : "このデッキと下位デッキにカードを追加できます。"))
+        } actions: {
+            if isFirstCard || !hasSearch {
+                Button(activeDeckFilter == nil ? "カードを追加" : "このデッキにカードを追加") {
+                    selection.removeAll(); editMode = .inactive; adding = true
+                }
+                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+                .accessibilityIdentifier("emptyLibraryAdd")
+                if isFirstCard {
+                    Button("一括登録") { selection.removeAll(); editMode = .inactive; importing = true }
+                        .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryImport")
+                }
+            }
+            if hasSearch {
+                Button("検索条件をクリア") { search = ""; selection.removeAll(); editMode = .inactive }
+                    .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryClearSearch")
+            }
+            if activeDeckFilter != nil {
+                Button("デッキの絞り込みを解除") {
+                    clearedDeckFilter = true; selection.removeAll(); editMode = .inactive
+                }
+                .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryClearDeck")
+            }
+        }
     }
 
     private struct Request: Equatable {
@@ -67,8 +103,7 @@ struct LibraryView: View {
                 }
                 if loading { ProgressView("カードを読み込み中") }
                 if results.cardCount == 0 && !loading && libraryFailure == nil {
-                    ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
-                                           description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
+                    emptyLibrary
                 }
                 ForEach(tree?.rows(expanded: LibraryTreeProjection.expandedIDs(savedExpansion)) ?? []) { row in
                     if let deck = row.deck {
@@ -119,14 +154,14 @@ struct LibraryView: View {
                     }
                 }
             }
-            .task(id: Request(revision: store.dataRevision, query: search, deck: deckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
+            .task(id: Request(revision: store.dataRevision, query: search, deck: activeDeckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
                 guard store.selectedTab == 1 else { return }
                 let revision = store.dataRevision, query = search
                 loading = true
                 defer { if !Task.isCancelled { loading = false } }
                 do {
                     if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
-                    let allowed = try deckFilter.map { try store.repository.descendants(of: $0) }
+                    let allowed = try activeDeckFilter.map { try store.repository.descendants(of: $0) }
                     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
                     let metadata = try await store.libraryReader.load(revision: revision)
                     let found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
@@ -146,7 +181,7 @@ struct LibraryView: View {
                 catch { if !Task.isCancelled { libraryFailure = error.localizedDescription } }
             }
             .environment(\.editMode, $editMode)
-            .onChange(of: deckFilter) { _, _ in selection.removeAll(); editMode = .inactive }
+            .onChange(of: deckFilter) { _, _ in clearedDeckFilter = false; selection.removeAll(); editMode = .inactive }
             .onChange(of: search) { _, _ in selection.removeAll() }
             .onChange(of: editMode) { _, mode in if !mode.isEditing { selection.removeAll() } }
             .safeAreaInset(edge: .bottom) {
@@ -166,7 +201,7 @@ struct LibraryView: View {
                 }
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
-            .navigationTitle(editMode.isEditing ? "カードを選択" : (deckFilter.flatMap { id in store.decks.first { $0.id == id }?.shortName } ?? "ライブラリ"))
+            .navigationTitle(editMode.isEditing ? "カードを選択" : (activeDeckFilter.flatMap { id in store.decks.first { $0.id == id }?.shortName } ?? "ライブラリ"))
             .onDisappear { selection.removeAll(); editMode = .inactive }
             .navigationDestination(item: $shortcutDeck) { destination in
                 ShortcutDeckContentsView(store: store, deckID: destination.id)
@@ -208,7 +243,7 @@ struct LibraryView: View {
                     bulkEditing = false
                 }
             }
-            .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: deckFilter) }
+            .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: activeDeckFilter) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
             .sheet(isPresented: $importing) { ImportView(store: store) }
             .sheet(isPresented: $ocr) { OCRImportView(store: store) }
