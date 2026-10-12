@@ -71,6 +71,7 @@ final class StudyStore {
     var showingReview = false
     var selectedTab = 0
     var dataRevision = 0
+    var mediaDisplayNamespace = UUID()
     var statistics: StudyStatistics?
     var statisticsLoading = false
     var statisticsError: String?
@@ -534,6 +535,8 @@ final class StudyStore {
             statisticsReader = StatisticsReader(container: container)
             libraryReader = LibraryReader(container: container)
             repository = StudyRepository(container: container, mediaStore: repository.mediaStore)
+            mediaDisplayNamespace = UUID()
+            Task { await DisplayImageLoader.shared.clearCache() }
             showingReview = false
             failure = nil
             var warning: String?
