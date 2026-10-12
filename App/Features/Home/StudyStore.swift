@@ -264,6 +264,7 @@ final class StudyStore {
     }
 
     func sceneChanged(active: Bool) {
+        if !active { Task { await libraryReader.clearContents() } }
         if !active {
             let reader = statisticsReader
             Task { await reader.clearCache() }

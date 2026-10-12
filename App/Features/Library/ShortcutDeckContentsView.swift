@@ -47,7 +47,7 @@ struct ShortcutDeckContentsView: View {
                                     NoteDetailView(store: store, cardID: card.id)
                                 } label: {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        LibraryCardRow(card: card, index: index)
+                                        LibraryCardRow(card: card, index: index).equatable()
                                         Text(index?.notes[card.noteID]?.deckName ?? "").font(.caption).foregroundStyle(.secondary)
                                     }
                                 }
@@ -71,7 +71,7 @@ struct ShortcutDeckContentsView: View {
                 let revision = store.dataRevision
                 let allowed = try store.repository.descendants(of: deckID)
                 let found = try await store.libraryReader.search("", revision: revision, deckIDs: allowed)
-                let loaded = try await store.libraryReader.load(revision: revision)
+                let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: allowed)
                 try Task.checkCancellation()
                 guard revision == store.dataRevision else { return }
                 cards = found.cardsByDeck.values.flatMap { $0 }.sorted { $0.createdAt > $1.createdAt }

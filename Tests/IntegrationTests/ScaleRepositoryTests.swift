@@ -486,6 +486,27 @@ extension ScaleRepositoryTests {
             let cached = try await reader.search("Card", revision: 1, deckIDs: nil)
             let cachedTime = Date().timeIntervalSince(cachedStart)
             XCTAssertEqual(cold.cardCount, 3000); XCTAssertEqual(cached.cardIDs, Set(cards.map(\.id)))
+            let prepared = try await reader.contents(revision: 1, deckIDs: nil)
+            let listed = cached.cardsByDeck.values.flatMap { $0 }
+            let beforeDecodes = await reader.contentDecodes
+            let legacyRowsStart = Date()
+            var legacyCharacters = 0
+            for _ in 0..<10 {
+                for card in listed { legacyCharacters += try prepared.displayed(card).question.count }
+            }
+            let legacyRowsMs = Date().timeIntervalSince(legacyRowsStart) * 1000
+            let preparedRowsStart = Date()
+            var preparedCharacters = 0
+            for _ in 0..<10 {
+                for card in listed { preparedCharacters += prepared.rowContents[card.id]?.question.count ?? 0 }
+            }
+            let preparedRowsMs = Date().timeIntervalSince(preparedRowsStart) * 1000
+            XCTAssertEqual(legacyCharacters, preparedCharacters)
+            for _ in 0..<10 { _ = try await reader.contents(revision: 1, deckIDs: [first]) }
+            let afterDecodes = await reader.contentDecodes
+            XCTAssertEqual(beforeDecodes, afterDecodes)
+            let retainedBytes = await reader.retainedContentBytes
+            print("LIBRARY_ROWS notes=\(noteCount) cards=3000 passes=10 repeated_transform_ms=\(legacyRowsMs) prepared_lookup_ms=\(preparedRowsMs) retained_estimated_bytes=\(retainedBytes) reopened_content_decodes=\(afterDecodes - beforeDecodes)")
             XCTAssertEqual(try repo.logs().count, logCount)
             print("Issue115 notes=\(noteCount) cards=3000 logs=\(logCount) decks=20 legacyFullDetails=\(legacyLoad)s legacySearchGroups=\(legacySearchGroups)s metadata=\(metadataTime)s scopedContent=\(scopedTime)s firstSearch=\(coldTime)s cachedSearch=\(cachedTime)s")
         }

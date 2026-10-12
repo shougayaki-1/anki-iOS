@@ -299,6 +299,8 @@ final class StudyUITests: XCTestCase {
         scrollTo(a, app: app)
         a.tap(); a.typeText(answer)
         app.buttons["saveNote"].tap()
+        let folder = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'libraryDeck-' AND label CONTAINS %@", "マイデッキ")).firstMatch
+        if folder.waitForExistence(timeout: 5), folder.value as? String == "折り畳み中" { folder.tap() }
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label == %@", question)).firstMatch.waitForExistence(timeout: 5))
     }
     func scrollTo(_ element: XCUIElement, app: XCUIApplication) {
@@ -896,12 +898,21 @@ final class StudyUITests: XCTestCase {
         let app = app()
         create(app, question: "Selection one", answer: "One")
         create(app, question: "Selection two", answer: "Two")
+        func enterSelection() {
+            app.swipeDown()
+            let actions = app.buttons["libraryActions"]
+            for _ in 0..<4 where !actions.isHittable { app.swipeDown() }
+            actions.tap()
+            XCTAssertTrue(app.buttons["selectLibraryCards"].waitForExistence(timeout: 5))
+            app.buttons["selectLibraryCards"].tap()
+        }
         XCTAssertFalse(app.buttons["openBulkManagement"].exists)
-        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        enterSelection()
         XCTAssertFalse(app.buttons["openBulkManagement"].isEnabled)
         app.buttons["finishLibrarySelection"].tap()
         XCTAssertFalse(app.buttons["openBulkManagement"].exists)
-        app.buttons["libraryActions"].tap(); app.buttons["selectLibraryCards"].tap()
+        enterSelection()
+        for _ in 0..<4 where !app.staticTexts["Selection one"].exists { app.swipeUp() }
         app.staticTexts["Selection one"].tap()
         app.buttons["openBulkManagement"].tap()
         app.buttons["closeBulkManagement"].tap()

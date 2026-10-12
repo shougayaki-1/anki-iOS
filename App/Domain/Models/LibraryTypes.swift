@@ -473,7 +473,15 @@ struct LibraryNote {
     let tagNames: String
 }
 
+struct LibraryRowContent: Equatable {
+    let question: String
+    let kindTitle: String
+    let siblingCount: Int
+    let isSuspended: Bool
+}
+
 struct LibraryIndex {
+    var rowContents: [UUID: LibraryRowContent] = [:]
     var notes: [UUID: LibraryNote] = [:]
     var cardsByDeck: [UUID: [LibraryCard]] = [:]
     var siblingCounts: [UUID: Int] = [:]
