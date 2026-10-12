@@ -484,8 +484,15 @@ private struct WeakCardListView: View {
         .onChange(of: scope) { _, _ in refresh() }
         .onChange(of: days) { _, _ in refresh() }
         .sheet(item: $practice, onDismiss: { refresh() }) { session in
-            WeakPracticeView(store: store, initial: session)
+            WeakPracticeView(store: store, initial: session, conditions: practiceConditions)
         }
+    }
+    private var practiceConditions: String {
+        let deck = scope.deckID.flatMap { id in store.decks.first { $0.id == id }?.name } ?? "すべてのデッキ"
+        let period = days == 0 ? "全期間" : "直近\(days)日"
+        let tags = scope.tagIDs.compactMap { id in store.tags.first { $0.id == id }?.name }
+        let tagDescription = tags.isEmpty ? "タグ指定なし" : "タグ：" + tags.joined(separator: "、") + "（すべて含む）"
+        return "\(deck)（子孫を含む）・\(period)・\(tagDescription)"
     }
     private func refresh() {
         do { rows = try store.repository.weakCards(scope: scope, days: days == 0 ? nil : days, now: store.clock()); failure = nil }
@@ -497,7 +504,9 @@ private struct WeakPracticeView: View {
     @Bindable var store: StudyStore
     @Environment(\.dismiss) private var dismiss
     @State private var session: WeakPracticeSession
-    init(store: StudyStore, initial: WeakPracticeSession) {
+    let conditions: String
+    init(store: StudyStore, initial: WeakPracticeSession, conditions: String) {
+        self.conditions = conditions
         self.store = store; _session = State(initialValue: initial)
     }
     var body: some View {
@@ -519,15 +528,35 @@ private struct WeakPracticeView: View {
                         if session.revealed {
                             Text(item.content.answer).accessibilityIdentifier("weakPracticeAnswer")
                             if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
-                            Button("次のカード") { session.next() }.accessibilityIdentifier("nextWeakPractice")
+                            Button("次のカード") {
+                                session.next()
+                                if session.phase == .completed { store.haptics.play(.reveal, mode: store.settings.hapticsMode) }
+                            }.accessibilityIdentifier("nextWeakPractice")
                         } else {
                             StudyHintView(hint: item.content.hint).id(item.cardID)
                             Button("答えを表示") { session.reveal() }.accessibilityIdentifier("revealWeakPractice")
                         }
                         if session.index > 0 { Button("前のカード") { session.previous() } }
+                    } else if session.phase == .completed {
+                        VStack(spacing: 24) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 68)).foregroundStyle(.green).accessibilityHidden(true)
+                            Text("重点練習が完了しました").font(.title2.bold())
+                                .accessibilityIdentifier("weakPracticeCompleted")
+                            Text("練習したカード：\(session.completedCount)枚")
+                                .accessibilityIdentifier("weakPracticeCompletedCount")
+                            Text(conditions).font(.footnote).foregroundStyle(.secondary)
+                            Text("練習のみです。FSRS・回答履歴・復習予定は変更されていません。正式な復習はホームから行えます。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("同じカードをもう一度練習する") { session.restart() }
+                                .buttonStyle(.borderedProminent).controlSize(.large)
+                                .accessibilityIdentifier("restartWeakPractice")
+                            Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                        }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 24)
                     } else {
-                        Text("重点練習を完了しました")
-                        Button("閉じる") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                        ContentUnavailableView("練習するカードがありません", systemImage: "rectangle.on.rectangle",
+                                               description: Text("苦手カード一覧で対象条件を変更してください。"))
+                        Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
                     }
                 }.padding()
             }
