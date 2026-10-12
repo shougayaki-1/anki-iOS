@@ -73,3 +73,52 @@ final class AppShortcutRoutingTests: XCTestCase {
         XCTAssertEqual(Set(selected.map(\.path)).count, 3)
     }
 }
+
+@MainActor
+final class ReviewEditingTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func testEditingPreservesCardAndScheduleAndRestartsPresentation() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let deck = try XCTUnwrap(store.repository.decks().first).id
+        let id = try store.repository.createNote(NoteInput(deckID: deck, question: "Before", answer: "Answer"), now: now)
+        try store.reload(); store.start(.new); store.draft(revealed: true); store.grade(.good)
+        let studied = try XCTUnwrap(store.repository.cards().first)
+        let dueNow = studied.dueDate.addingTimeInterval(1)
+        try store.repository.start(mode: .review, now: dueNow)
+        try store.reload(); store.draft(text: "draft", revealed: true)
+        let history = try store.repository.logs().map(\.id)
+        let card = try XCTUnwrap(store.review?.card)
+        let original = try XCTUnwrap(store.repository.card(card.cardID))
+        let payload = original.fsrsPayload, due = original.dueDate
+        let progress = try store.repository.sessionProgress()
+        let draftKey = "edit:\(id.uuidString)"
+        let libraryDraft = NoteInput(deckID: deck, question: "Unsaved library edit", answer: "Draft answer")
+        try store.repository.saveEditorDraft(key: draftKey, input: libraryDraft, now: now)
+        try store.repository.updateNote(id: id, input: NoteInput(deckID: deck, question: "After", answer: "Answer", hint: "Hint"), duringReview: true, now: now)
+        try store.reload()
+        XCTAssertEqual(store.review?.card?.cardID, card.cardID)
+        XCTAssertEqual(store.review?.card?.content.question, "After")
+        XCTAssertEqual(original.fsrsPayload, payload); XCTAssertEqual(original.dueDate, due)
+        XCTAssertEqual(try store.repository.logs().map(\.id), history)
+        XCTAssertEqual(try store.repository.sessionProgress()?.answered, progress?.answered)
+        XCTAssertEqual(store.review?.typedDraft, "")
+        XCTAssertEqual(store.review?.answerRevealed, false)
+        XCTAssertEqual(store.review?.canUndo, false)
+        XCTAssertEqual(try store.repository.editorDraft(key: draftKey), libraryDraft)
+    }
+
+    func testStructureChangesAndSaveFailuresPreserveSessionAndNote() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let deck = try XCTUnwrap(store.repository.decks().first).id
+        let id = try store.repository.createNote(NoteInput(deckID: deck, kind: .cloze, question: "{{c1::Before}}", answer: ""), now: now)
+        try store.reload(); store.start(.new); store.draft(text: "draft", revealed: true)
+        let before = try BackupData.capture(store.repository).canonical()
+        XCTAssertThrowsError(try store.repository.updateNote(id: id, input: NoteInput(deckID: deck, kind: .cloze, question: "{{c2::After}}", answer: ""), duringReview: true, now: now))
+        XCTAssertEqual(try BackupData.capture(store.repository).canonical(), before)
+        XCTAssertThrowsError(try store.repository.updateNote(id: id, input: NoteInput(deckID: deck, kind: .cloze, question: "{{c1::After}}", answer: ""), resetHistory: true, duringReview: true, now: now))
+        store.repository.save = { _ in throw StudyError.invalidContent }
+        XCTAssertThrowsError(try store.repository.updateNote(id: id, input: NoteInput(deckID: deck, kind: .cloze, question: "{{c1::After}}", answer: ""), duringReview: true, now: now))
+        XCTAssertEqual(try BackupData.capture(store.repository).canonical(), before)
+    }
+}

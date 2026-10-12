@@ -157,12 +157,22 @@ final class StudyRepository {
         }
     }
 
-    func updateNote(id: UUID, input: NoteInput, resetHistory: Bool = false, clearingDraft key: String? = nil, now: Date) throws {
+    func updateNote(id: UUID, input: NoteInput, resetHistory: Bool = false, duringReview: Bool = false, clearingDraft key: String? = nil, now: Date) throws {
         let content = try validate(input)
         try transaction {
             guard let note = try notes().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
             let previous = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
-            let changesSession = previous.question != input.question || previous.answer != input.answer ||
+            if duringReview {
+                let proposed = try JSONDecoder().decode(TextContent.self, from: content)
+                let existingVariants = Set(try cards().filter { $0.noteID == id }.map(\.variantKey))
+                guard !resetHistory, note.type == input.kind.rawValue,
+                      Set(try CardGeneration.variants(kind: input.kind, content: proposed)) == existingVariants,
+                      let sessionCard = try session()?.cardID,
+                      try cards().contains(where: { $0.id == sessionCard && $0.noteID == id }) else {
+                    throw StudyError.reviewEditStructure
+                }
+            }
+            let changesSession = duringReview || previous.question != input.question || previous.answer != input.answer ||
                 previous.explanation != input.explanation || previous.imageID != input.imageID ||
                 (previous.reverseEnabled ?? false) != input.reverseEnabled ||
                 (previous.masks ?? []) != input.masks || (previous.hideAllMasks ?? true) != input.hideAllMasks ||
