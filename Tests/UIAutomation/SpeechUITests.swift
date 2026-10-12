@@ -79,16 +79,7 @@ extension SpeechUITests {
                 let folder = app.cells.containing(.staticText, identifier: "暗記ノート").firstMatch
                 if folder.exists { folder.tap() }
             }
-            // Reused simulator Documents can contain many earlier fixture files.
-        // Search the unique fixture instead of depending on the first visible page.
-        if !file.exists, app.searchFields["検索"].exists {
-            let search = app.searchFields["検索"]
-            search.tap()
-            let value = search.value as? String ?? ""
-            let existing = value == search.placeholderValue ? "" : value
-            search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + name)
-        }
-        XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription); file.tap()
+            XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription); file.tap()
             XCTAssertTrue(app.buttons["preview\(side)Audio"].waitForExistence(timeout: 10))
         }
         app.buttons["saveNote"].tap()
