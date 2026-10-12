@@ -281,7 +281,7 @@ private struct DeckContentsOperationView: View {
     @State private var destination: UUID?
     @State private var preview: DeckContentsPreview?
     @State private var confirming = false
-    @State private var completed: String?
+    @State private var completed: LibraryOperationCompletion?
     @State private var failure: String?
 
     private var sourceName: String {
@@ -309,10 +309,8 @@ private struct DeckContentsOperationView: View {
     var body: some View {
         Form {
             if let completed {
-                Section("完了") {
-                    Text(completed).accessibilityIdentifier("deckContentsResult")
-                    Button("戻る") { dismiss() }
-                }
+                LibraryOperationCompletionSection(store: store, result: completed, identifier: "deckContentsResult")
+                Button("デッキへ戻る") { dismiss() }
             } else {
                 Section("対象デッキ") {
                     Text(sourceName)
@@ -427,26 +425,28 @@ private struct DeckContentsOperationView: View {
     }
 
     private func commit() {
-        guard let preview, preview.canCommit else { return }
+        guard completed == nil, let preview, preview.canCommit else { return }
         do {
             let result = try store.repository.applyDeckContents(preview, now: store.clock())
             self.preview = nil
-            completed = operation == .delete
-                ? "\(result.changedNotes)ノート・\(result.changedCards)枚を削除しました。デッキと子デッキは残っています。"
-                : "\(result.changedNotes)ノート・\(result.changedCards)枚を移動しました。"
+            completed = LibraryOperationCompletion(operation: operation == .delete ? "削除" : "移動",
+                notes: result.changedNotes, cards: result.changedCards,
+                targetName: operation == .delete ? preview.sourcePath : preview.destinationPath,
+                destinationID: operation == .move ? destination : nil)
             // A completed transaction must not be reported as a failed deletion
             // if only post-commit UI/notification refresh fails.
             do { try store.reload() }
-            catch { failure = "変更は保存済みですが、画面更新に失敗しました。再表示してください。\n" + error.localizedDescription }
+            catch { completed?.warning = "変更は保存済みですが、画面更新に失敗しました。再実行は不要です。\n" + error.localizedDescription }
             if operation == .delete {
                 // Mirror NoteEditorView's post-save media cleanup. Media removal is
                 // deliberately separate from the atomic Note/Card database deletion.
                 do { try store.repository.cleanupUnusedMedia() }
                 catch {
                     let warning = "カードは削除済みですが、不要な画像の整理に失敗しました。\n" + error.localizedDescription
-                    failure = failure.map { $0 + "\n" + warning } ?? warning
+                    completed?.warning = completed?.warning.map { $0 + "\n" + warning } ?? warning
                 }
             }
+            if completed?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
         } catch {
             self.preview = nil
             failure = error.localizedDescription + "\n対象が変更されていた場合は、プレビューを作り直してください。"
