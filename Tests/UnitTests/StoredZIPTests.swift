@@ -2,6 +2,22 @@ import XCTest
 @testable import AnkiIOS
 
 final class StoredZIPTests: XCTestCase {
+    func testDeckCompletionDistinguishesCompletePartialEmptyAndExport() {
+        var receipt = DeckImportReceipt(rootDeckID: UUID(), destinationName: "取込先", createdNotes: 2, createdCards: 4, duplicateNotes: 0)
+        let complete = DeckExchangeCompletion.imported(receipt, reloadWarning: nil)
+        XCTAssertTrue(complete.isSuccess); XCTAssertFalse(complete.canRetry)
+        receipt.skipped = [AnkiSkippedNote(id: "10", reason: "未対応テンプレート")]
+        let partial = DeckExchangeCompletion.imported(receipt, reloadWarning: nil)
+        XCTAssertFalse(partial.isSuccess); XCTAssertFalse(partial.canRetry)
+        XCTAssertEqual(partial.title, "一部のノートを取り込みました")
+        receipt.skipped = []; receipt.warnings = [AnkiSkippedNote(id: "20", reason: "欠落音声")]
+        XCTAssertEqual(receipt.outcome, .partial)
+        let empty = DeckExchangeCompletion.imported(DeckImportReceipt(rootDeckID: nil, destinationName: nil, createdNotes: 0, createdCards: 0, duplicateNotes: 2), reloadWarning: nil)
+        XCTAssertFalse(empty.isSuccess); XCTAssertTrue(empty.canRetry)
+        let exported = DeckExchangeCompletion.exported(name: "デッキ", url: URL(fileURLWithPath: "/tmp/test.studydeck"))
+        XCTAssertTrue(exported.isSuccess); XCTAssertFalse(exported.canRetry)
+        XCTAssertEqual(exported.title, "デッキファイルを書き出しました")
+    }
     func testStoredZIPRoundTripAndKnownCRC() throws {
         let files = ["manifest.json": Data("manifest".utf8), "data.json": Data("json".utf8), "media/東京.jpg": Data((0...255).map(UInt8.init))]
         let archive = try StoredZIP.write(files)

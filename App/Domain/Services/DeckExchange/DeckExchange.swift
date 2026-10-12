@@ -39,6 +39,30 @@ struct DeckImportPreview {
     let destinationName: String
 }
 
+struct DeckImportReceipt {
+    let rootDeckID: UUID?
+    let destinationName: String?
+    let createdNotes: Int
+    let createdCards: Int
+    let duplicateNotes: Int
+    var skipped: [AnkiSkippedNote] = []
+    var warnings: [AnkiSkippedNote] = []
+    var outcome: ImportResult.Outcome {
+        guard createdNotes > 0 else { return .empty }
+        return duplicateNotes > 0 || !skipped.isEmpty || !warnings.isEmpty ? .partial : .complete
+    }
+    var title: String {
+        switch outcome {
+        case .complete: return "取り込みが完了しました"
+        case .partial: return "一部のノートを取り込みました"
+        case .empty: return "ノートは追加されませんでした"
+        }
+    }
+    var summary: String {
+        "追加 \(createdNotes)ノート / 新規カード \(createdCards)枚\n重複スキップ \(duplicateNotes)ノート / 未対応 \(skipped.count)ノート / 変更の警告 \(warnings.count)件"
+    }
+}
+
 // Content-only exchange: no scheduling state, timestamps, settings or editor drafts are serialized.
 enum DeckExchange {
     static func validate(_ package: DeckPackage, bytes: [UUID: Data]) throws {
@@ -180,12 +204,18 @@ extension StudyRepository {
         return DeckImportPreview(duplicates: duplicates, destinationName: name)
     }
     func importDeckPackage(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date) throws -> Int {
+        try importDeckPackageReceipt(validated, skipDuplicates: skipDuplicates, now: now).createdNotes
+    }
+    func importDeckPackageReceipt(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date) throws -> DeckImportReceipt {
         // Only decode can construct this immutable, fully validated value. Do not
         // decode audio again on the UI actor when publishing the transaction.
         try Task.checkCancellation()
         let preview = try previewDeckImport(validated)
         let notes = validated.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }
-        guard !notes.isEmpty else { return 0 }
+        let duplicateCount = skipDuplicates ? preview.duplicates.count : 0
+        guard !notes.isEmpty else {
+            return DeckImportReceipt(rootDeckID: nil, destinationName: nil, createdNotes: 0, createdCards: 0, duplicateNotes: duplicateCount)
+        }
         let required = Set(notes.flatMap { [$0.content.imageID].compactMap { $0 } + $0.content.audioIDs })
         var written: [String] = [], remapped: [UUID: UUID] = [:], assets: [StoredImage] = []
         do {
@@ -208,6 +238,7 @@ extension StudyRepository {
                     let model = Deck(name: deck.id == validated.package.rootID ? preview.destinationName : deck.name, now: now)
                     model.id = deckIDs[deck.id]!; model.parentID = deck.parentID.flatMap { deckIDs[$0] }; context.insert(model)
                 }
+                var cardCount = 0
                 for source in notes {
                     try Task.checkCancellation()
                     var content = source.content
@@ -219,9 +250,11 @@ extension StudyRepository {
                     note.tagIDs = try tagIDs(for: source.tags); context.insert(note)
                     for variant in try CardGeneration.variants(kind: source.kind, content: content) {
                         context.insert(StudyCard(noteID: note.id, variantKey: variant, payload: fresh, now: now))
+                        cardCount += 1
                     }
                 }
-                return notes.count
+                return DeckImportReceipt(rootDeckID: deckIDs[validated.package.rootID], destinationName: preview.destinationName,
+                                         createdNotes: notes.count, createdCards: cardCount, duplicateNotes: duplicateCount)
             }
         } catch { for path in written { try? mediaStore.remove(path) }; throw error }
     }
