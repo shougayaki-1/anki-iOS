@@ -3,6 +3,38 @@ import AVFoundation
 @testable import AnkiIOS
 
 final class SpeechReadoutTests: XCTestCase {
+    @MainActor
+    func testPronunciationDiscardInvalidatesPendingPermission() async {
+        var completion: ((Bool) -> Void)?
+        let practice = PronunciationPractice(requestPermission: { completion = $0 })
+        let start = Task { await practice.start() }
+        await Task.yield()
+        XCTAssertEqual(practice.phase, .requestingPermission)
+        practice.discard()
+        completion?(true)
+        await start.value
+        XCTAssertEqual(practice.phase, .idle)
+        XCTAssertNil(practice.startedAt)
+    }
+
+    @MainActor
+    func testPronunciationCleansOrphanFilesAndDiscardIsIdempotent() throws {
+        let directory = PronunciationPractice.directory
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let orphan = directory.appendingPathComponent("orphan.m4a")
+        try Data([1, 2, 3]).write(to: orphan)
+        PronunciationPractice.cleanAbandonedRecordings()
+        let practice = PronunciationPractice()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: orphan.path))
+        practice.play() // No recording must not start playback.
+        XCTAssertEqual(practice.phase, .idle)
+        practice.discard()
+        practice.discard()
+        XCTAssertEqual(practice.phase, .idle)
+        XCTAssertNil(practice.startedAt)
+        XCTAssertNil(practice.notice)
+    }
+
     func testLongEnglishReadoutRetainsFullTextAndClozeStillHidesTheAnswer() {
         let longText = String(repeating: "This is a longer English passage. ", count: 150)
         XCTAssertGreaterThan(longText.count, 3000)

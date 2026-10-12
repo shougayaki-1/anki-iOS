@@ -7,6 +7,7 @@ struct ReviewView: View {
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var speechPlayer = StudySpeechPlayer()
+    @StateObject private var pronunciation = PronunciationPractice()
     @State private var lastSpeechEvent: SpeechPresentationKey?
     @State private var autoSpeechPaused = false
     @State private var swipeGate = ReviewSwipeGate()
@@ -35,6 +36,7 @@ struct ReviewView: View {
                             }
                             questionContent(item)
                             speechControls(review, item: item)
+                            pronunciationControls
                             reviewImage(review, item: item)
                             if !review.answerRevealed {
                                 StudyHintView(hint: item.content.hint).id(item.cardID)
@@ -152,7 +154,11 @@ struct ReviewView: View {
             .onAppear { speechEventChanged(speechEvent) }
             .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { speechPlayer.stop() }
+                if phase != .active {
+                    speechPlayer.stop()
+                    if phase == .background { pronunciation.discard() }
+                    else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
+                }
                 else { speechEventChanged(speechEvent) }
             }
             .onChange(of: voiceOver) { _, enabled in if enabled { speechPlayer.stop() } }
@@ -164,6 +170,7 @@ struct ReviewView: View {
             .onDisappear {
                 swipeGate.cancel()
                 speechPlayer.stop()
+                pronunciation.discard()
                 lastSpeechEvent = nil
                 autoSpeechPaused = false
             }
@@ -178,6 +185,7 @@ struct ReviewView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button(store.review?.card == nil ? "閉じる" : "中断") {
                         speechPlayer.stop()
+                        pronunciation.discard()
                         store.pause()
                     }
                         .keyboardShortcut(.escape, modifiers: [])
@@ -185,7 +193,7 @@ struct ReviewView: View {
                         .accessibilityHint("学習を中断し、セッションを保存してホームへ戻ります")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Undo") { speechPlayer.stop(); store.undo() }
+                    Button("Undo") { speechPlayer.stop(); pronunciation.discard(); store.undo() }
                         .keyboardShortcut("z", modifiers: .command)
                         .disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
                         .accessibilityLabel("直前の評価を取り消す")
@@ -215,6 +223,41 @@ struct ReviewView: View {
         }.interactiveDismissDisabled()
     }
 
+    private var pronunciationControls: some View {
+        DisclosureGroup("発音を練習") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("録音は一時的です。カード移動・中断で削除します（最大2分）。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if pronunciation.phase == .recording, let date = pronunciation.startedAt {
+                    HStack {
+                        Label("録音中", systemImage: "mic.fill").foregroundStyle(.red)
+                        Text(date, style: .timer).monospacedDigit()
+                        Button("録音を停止") { pronunciation.stopRecording() }
+                    }
+                } else {
+                    Button(pronunciation.phase == .requestingPermission ? "マイクを確認中…" : "録音を開始") {
+                        speechPlayer.stop()
+                        Task { await pronunciation.start() }
+                    }.disabled(pronunciation.phase == .requestingPermission)
+                    if pronunciation.phase == .ready || pronunciation.phase == .playing {
+                        Button(pronunciation.phase == .playing ? "自分の音声を停止" : "自分の音声を再生") {
+                            speechPlayer.stop()
+                            if pronunciation.phase == .playing { pronunciation.stopPlayback() }
+                            else { pronunciation.play() }
+                        }
+                        Button("録音を削除") { pronunciation.discard() }
+                    }
+                }
+                if let notice = pronunciation.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+                if pronunciation.permissionDenied {
+                    Button("設定を開く") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                }
+            }.buttonStyle(.borderless)
+        }.accessibilityIdentifier("pronunciationPractice")
+    }
+
     private var speechEvent: SpeechPresentationKey? {
         guard let item = store.review?.card else { return nil }
         return SpeechPresentationKey(cardID: item.cardID, revealed: store.review?.answerRevealed == true)
@@ -224,6 +267,8 @@ struct ReviewView: View {
     private func speechEventChanged(_ event: SpeechPresentationKey?) {
         guard event != lastSpeechEvent else { return }
         speechPlayer.stop()
+        if event?.cardID != lastSpeechEvent?.cardID { pronunciation.discard() }
+        else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
         guard let event else { lastSpeechEvent = nil; return }
         guard scenePhase == .active else { SpeechDiagnostics.record("autoplaySkipped reason=inactive"); return }
         lastSpeechEvent = event
@@ -242,6 +287,8 @@ struct ReviewView: View {
     }
 
     private func playPreferredAudio(_ side: SpeechSide, item: NoteItem) {
+        guard pronunciation.phase != .recording, pronunciation.phase != .requestingPermission else { return }
+        pronunciation.stopPlayback()
         guard side == .question || store.review?.answerRevealed == true else { return }
         if let id = item.content.audioID(for: side) {
             if let url = try? store.repository.assetURL(id: id) { speechPlayer.playAttached(url: url) }
@@ -250,6 +297,8 @@ struct ReviewView: View {
     }
 
     private func playSpeech(_ side: SpeechSide, item: NoteItem) {
+        guard pronunciation.phase != .recording, pronunciation.phase != .requestingPermission else { return }
+        pronunciation.stopPlayback()
         // An answer can be read manually only after it has been revealed.
         guard side == .question || store.review?.answerRevealed == true else {
             SpeechDiagnostics.record("requestRejected reason=unrevealedAnswer"); return
@@ -299,6 +348,7 @@ struct ReviewView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
             .accessibilityIdentifier("speakQuestion")
+            .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if hasAnswer {
             Button { playPreferredAudio(.answer, item: item) } label: {
@@ -306,6 +356,7 @@ struct ReviewView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
             .accessibilityIdentifier("speakAnswer")
+            .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if (item.content.questionAudioID != nil || (store.review?.answerRevealed == true && item.content.answerAudioID != nil)) &&
            (SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil ||
@@ -319,6 +370,7 @@ struct ReviewView: View {
                     Button("解答の英文を読む") { playSpeech(.answer, item: item) }.accessibilityIdentifier("ttsAnswer")
                 }
             }.accessibilityIdentifier("chooseTTS")
+            .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if speechPlayer.playing {
             Button { speechPlayer.stop() } label: {
