@@ -105,7 +105,7 @@ final class StudyStore {
 
     func reload() throws { try refreshStudy(metadata: true) }
 
-    private func refreshStudy(metadata: Bool = false, changed: Bool = true) throws {
+    private func refreshStudy(metadata: Bool = false, changed: Bool = true, forceWidget: Bool = false) throws {
         // Invalidate even if post-save display reads fail. A successful mutation
         // must never reuse the material from before that mutation.
         if changed { statisticsRevision += 1 }
@@ -147,7 +147,7 @@ final class StudyStore {
             }
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
-            publishWidget(snapshot, force: changed, cards: cards, logs: logs)
+            publishWidget(snapshot, force: forceWidget, cards: cards, logs: logs)
             if changed { scheduleNotifications(cards: cards) }
         } catch { homeFailure = error.localizedDescription; throw error }
     }
@@ -188,7 +188,7 @@ final class StudyStore {
     }
     @discardableResult
     func refreshWidget() -> Bool {
-        do { try reload(); return true }
+        do { try refreshStudy(metadata: true, changed: false, forceWidget: true); return true }
         catch { failure = error.localizedDescription; return false }
     }
     func refreshStatistics() {
