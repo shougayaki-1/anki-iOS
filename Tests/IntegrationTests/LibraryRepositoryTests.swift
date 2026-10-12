@@ -901,3 +901,145 @@ extension LibraryRepositoryTests {
         XCTAssertNil(zero.destinationID)
     }
 }
+
+extension LibraryRepositoryTests {
+    func testTextReplacementFieldsSiblingCardsAndHistoryPreserved() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        var input = NoteInput(deckID: deck, question: "Alpha alpha", answer: "ALPHA", explanation: "alpha", hint: "alpha")
+        input.reverseEnabled = true
+        let noteID = try repo.createNote(input, now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now.addingTimeInterval(1))
+        let original = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate, $0.updatedAt, $0.variantKey) }
+        let logs = try repo.logs().map { ($0.id, $0.fsrsBefore, $0.fsrsAfter) }
+        let preview = try repo.previewTextReplacement(.init(scope: .cards([original[0].0]), find: "alpha", replacement: "Beta", fields: Set(ReplacementField.allCases)))
+        XCTAssertEqual(preview.changedRows.count, 1); XCTAssertEqual(preview.changedCards, 2); XCTAssertEqual(preview.occurrences, 5)
+        let result = try repo.applyTextReplacement(preview, now: now.addingTimeInterval(2))
+        XCTAssertEqual(result.changedNotes, 1)
+        let content = try JSONDecoder().decode(TextContent.self, from: XCTUnwrap(repo.notes().first { $0.id == noteID }).contentPayload)
+        XCTAssertEqual(content.question, "Beta Beta"); XCTAssertEqual(content.answer, "Beta"); XCTAssertEqual(content.explanation, "Beta"); XCTAssertEqual(content.hint, "Beta")
+        for state in original {
+            let card = try XCTUnwrap(repo.cards().first { $0.id == state.0 })
+            XCTAssertEqual(card.fsrsPayload, state.1); XCTAssertEqual(card.dueDate, state.2)
+            XCTAssertEqual(card.updatedAt, state.3); XCTAssertEqual(card.variantKey, state.4)
+        }
+        for state in logs {
+            let log = try XCTUnwrap(repo.logs().first { $0.id == state.0 })
+            XCTAssertEqual(log.fsrsBefore, state.1); XCTAssertEqual(log.fsrsAfter, state.2)
+        }
+    }
+
+    func testTextReplacementRejectsStaleSelectionCancellationAndSaveFailure() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        _ = try repo.createNote(NoteInput(deckID: deck, question: "old", answer: "A"), now: now)
+        _ = try repo.createNote(NoteInput(deckID: deck, question: "old", answer: "B"), now: now)
+        let request = ReplacementRequest(scope: .deck(deck, descendants: true), find: "old", replacement: "new", fields: [.question])
+        let first = try repo.previewTextReplacement(request)
+        var calls = 0
+        XCTAssertThrowsError(try repo.applyTextReplacement(first, now: now) { calls += 1; return calls >= 3 }) { error in
+            guard case ReplacementError.cancelled = error else { return XCTFail("Expected cancelled, got \(error)") }
+        }
+        XCTAssertEqual(try repo.previewTextReplacement(request), first)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.applyTextReplacement(first, now: now)) { error in
+            guard case Failure.save = error else { return XCTFail("Expected save failure, got \(error)") }
+        }
+        XCTAssertEqual(try repo.previewTextReplacement(request), first)
+        repo.save = { try $0.save() }
+        _ = try repo.createNote(NoteInput(deckID: deck, question: "old", answer: "C"), now: now)
+        XCTAssertThrowsError(try repo.applyTextReplacement(first, now: now))
+        let second = try repo.previewTextReplacement(request)
+        let note = try XCTUnwrap(repo.notes().first)
+        try repo.transaction { note.updatedAt = now.addingTimeInterval(1) }
+        XCTAssertThrowsError(try repo.applyTextReplacement(second, now: now))
+        let third = try repo.previewTextReplacement(request)
+        try repo.deleteNote(id: note.id)
+        XCTAssertThrowsError(try repo.applyTextReplacement(third, now: now))
+    }
+
+    func testTextReplacementSkipsClozeTemplatesDraftsAndInvalidBodies() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        _ = try repo.createNote(NoteInput(deckID: deck, kind: .cloze, question: "{{c1::old}}", answer: ""), now: now)
+        let draftID = try repo.createNote(NoteInput(deckID: deck, question: "old draft", answer: "A"), now: now)
+        try repo.saveEditorDraft(key: "edit:\(draftID.uuidString)", input: NoteInput(deckID: deck, question: "draft", answer: "A"), now: now)
+        _ = try repo.createNote(NoteInput(deckID: deck, question: "old {{Field}}", answer: "A"), now: now)
+        let futureID = try repo.createNote(NoteInput(deckID: deck, question: "old", answer: "A"), now: now)
+        try repo.transaction {
+            let note = try XCTUnwrap(repo.notes().first { $0.id == futureID })
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: note.contentPayload) as? [String: Any])
+            object["futureField"] = "preserve"
+            note.contentPayload = try JSONSerialization.data(withJSONObject: object)
+        }
+        let request = ReplacementRequest(scope: .deck(deck, descendants: false), find: "old", replacement: "new", fields: [.question])
+        let preview = try repo.previewTextReplacement(request)
+        XCTAssertEqual(preview.skipped, 4); XCTAssertTrue(preview.changedRows.isEmpty)
+        XCTAssertThrowsError(try repo.applyTextReplacement(preview, now: now))
+        let invalid = try repo.previewTextReplacement(.init(scope: .cards(Set(repo.cards().filter { $0.noteID == futureID }.map(\.id))), find: "old", replacement: "", fields: [.question]))
+        XCTAssertTrue(invalid.changedRows.isEmpty)
+    }
+
+    func testTextReplacementDeckDescendantsAndMatchingSemantics() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = Deck(name: "child", now: now)
+        try repo.transaction { child.parentID = root; repo.context.insert(child) }
+        _ = try repo.createNote(NoteInput(deckID: root, question: "Word", answer: "Word Word"), now: now)
+        _ = try repo.createNote(NoteInput(deckID: child.id, question: "word", answer: "Word"), now: now)
+        let direct = try repo.previewTextReplacement(.init(scope: .deck(root, descendants: false), find: "Word", replacement: "Next", fields: [.question], caseSensitive: true, wholeField: true))
+        XCTAssertEqual(direct.changedRows.count, 1)
+        let children = try repo.previewTextReplacement(.init(scope: .deck(root, descendants: true), find: "word", replacement: "Next", fields: [.question], wholeField: true))
+        XCTAssertEqual(children.changedRows.count, 2)
+        XCTAssertEqual(ReplacementRequest(scope: .cards([]), find: "aa", replacement: "$1\\", fields: [.question]).replacing("aaaa").text, "$1\\$1\\")
+        let noMatch = try repo.previewTextReplacement(.init(scope: .deck(root, descendants: true), find: "none", replacement: "Next", fields: [.question]))
+        XCTAssertTrue(noMatch.changedRows.isEmpty)
+        XCTAssertThrowsError(try repo.applyTextReplacement(noMatch, now: now))
+    }
+
+    func testTextReplacement3000CardsAndActiveAnswerReset() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let payload = try JSONEncoder().encode(ReviewScheduler().newCard(now: now))
+        try repo.transaction {
+            for index in 0..<3000 {
+                let input = NoteInput(deckID: deck, question: "old \(index)", answer: "Answer")
+                let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: "")), now: now)
+                repo.context.insert(note); repo.context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now))
+            }
+        }
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(mode: .typing, text: "old answer", revealed: true, now: now)
+        let start = Date()
+        let preview = try repo.previewTextReplacement(.init(scope: .deck(deck, descendants: true), find: "old", replacement: "new", fields: [.question]))
+        let previewSeconds = Date().timeIntervalSince(start), saveStart = Date()
+        let result = try repo.applyTextReplacement(preview, now: now.addingTimeInterval(1))
+        let saveSeconds = Date().timeIntervalSince(saveStart)
+        print("TextReplacement 3000 cards: preview=\(previewSeconds)s apply=\(saveSeconds)s")
+        XCTAssertEqual(result.changedNotes, 3000); XCTAssertEqual(result.changedCards, 3000)
+        XCTAssertEqual(preview.occurrences, 3000)
+        XCTAssertEqual(try repo.session()?.typedDraft, ""); XCTAssertEqual(try repo.session()?.answerRevealed, false)
+        XCTAssertEqual(try repo.cards().count, 3000); XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertTrue(try repo.notes().allSatisfy { (try? JSONDecoder().decode(TextContent.self, from: $0.contentPayload).question.hasPrefix("new")) == true })
+    }
+}
+
+
+extension LibraryRepositoryTests {
+    func testTextReplacementActorSaveRefreshesMainContextAndOrderingDraft() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let id = try repo.createNote(NoteInput(deckID: deck, question: "old", answer: "abc def", responseMode: .ordering), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        let reader = TextReplacementReader(container: repo.context.container)
+        let preview = try await reader.textReplacementPreview(.init(scope: .deck(deck, descendants: true), find: "abc", replacement: "xyz", fields: [.answer]))
+        let result = try await reader.apply(preview, now: now)
+        XCTAssertEqual(result.changedNotes, 1)
+        let fresh = StudyRepository(container: repo.context.container)
+        let content = try JSONDecoder().decode(TextContent.self, from: XCTUnwrap(fresh.notes().first { $0.id == id }).contentPayload)
+        XCTAssertEqual(content.answer, "xyz def")
+        let item = try XCTUnwrap(fresh.noteItems().first)
+        XCTAssertNotNil(try fresh.orderingDraft(for: item))
+        XCTAssertEqual(try fresh.session()?.answerRevealed, false)
+        XCTAssertEqual(try fresh.cards().map(\.id), try repo.cards().map(\.id))
+        XCTAssertTrue(try fresh.logs().isEmpty)
+        XCTAssertThrowsError(try fresh.applyTextReplacement(preview, now: now))
+    }
+}
