@@ -11,11 +11,12 @@ final class SpeechUITests: XCTestCase {
         add.tap()
 
         let question = app.descendants(matching: .any)["questionInput"]
+        for _ in 0..<10 { if question.exists && question.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(question.waitForExistence(timeout: 5))
         question.tap()
         question.typeText("Where are you going?")
         let answer = app.descendants(matching: .any)["answerInput"]
-        if !answer.isHittable { app.swipeUp() }
+        for _ in 0..<5 { if answer.exists && answer.isHittable { break }; app.swipeUp() }
         answer.tap()
         answer.typeText("I am going home.")
         app.buttons["saveNote"].tap()
@@ -29,6 +30,7 @@ final class SpeechUITests: XCTestCase {
         XCTAssertTrue(playQuestion.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["speakAnswer"].exists)
         XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["speechOutputHelp"].exists)
         playQuestion.tap()
         if app.buttons["stopSpeech"].exists { app.buttons["stopSpeech"].tap() }
 
