@@ -12,6 +12,119 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         return repo
     }
+    func testTodayQueueLogsMatchLegacyQuotaFallbackAndExcludeOldHistory() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", reverseEnabled: true), now: now)
+        let card = try XCTUnwrap(repo.cards().first)
+        let scheduler = try ReviewScheduler()
+        let transition = try scheduler.review(scheduler.newCard(now: now), grade: .good, now: now)
+        let after = try JSONEncoder().encode(transition.after)
+        try repo.transaction {
+            for index in 0..<3 {
+                let row = StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                                         mode: .mental, durationMs: 100, wasNew: true, sequence: index + 1)
+                row.reviewedAt = index == 0 ? now.addingTimeInterval(-86400) : now
+                repo.context.insert(row)
+            }
+            // One entry has a saved historical quota; another is a legacy log
+            // requiring the current deck fallback. Keep even deleted deck IDs.
+            var options = try repo.options()
+            options.deckNewUsage = [DeckNewUsage(sequence: 2, cardID: card.id, quotaDeckIDs: [UUID()])]
+            try repo.writeOptionsInTransaction(options)
+        }
+        let cards = try repo.queueCards(), settings = try repo.settings()
+        let day = StudyDay(calendar: repo.calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let expected = try repo.queueLogs().filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+        let actual = try repo.todayQueueLogs(cards: cards, settings: settings, now: now)
+        XCTAssertEqual(actual.count, 2)
+        func signature(_ rows: [QueueLog]) -> [String] {
+            rows.map { "\($0.cardID)|\($0.noteID?.uuidString ?? "")|\($0.quotaDeckIDs.map(\.uuidString).joined(separator: ","))" }.sorted()
+        }
+        XCTAssertEqual(signature(actual), signature(expected))
+        XCTAssertEqual(try repo.counts(now: now), ReviewQueueBuilder(calendar: repo.calendar).counts(cards: cards, logs: expected, settings: settings, now: now))
+    }
+    func testTypedDraftDebouncesOneHundredCharactersAndKeepsRefreshText() async throws {
+        let baseline = try fixture()
+        try create(baseline, mode: .typing)
+        try baseline.start(mode: .new, now: now)
+        var oldSaves = 0
+        baseline.save = { context in oldSaves += 1; try context.save() }
+        let baselineStart = Date()
+        for count in 1...100 { try baseline.updateDraft(text: String(repeating: "あ", count: count), now: now) }
+        let baselineMs = Date().timeIntervalSince(baselineStart) * 1000
+        XCTAssertEqual(oldSaves, 100)
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try create(store.repository, mode: .typing)
+        store.start(.new)
+        var saves = 0
+        store.repository.save = { context in saves += 1; try context.save() }
+        let started = Date()
+        for count in 1...100 { store.draft(text: String(repeating: "あ", count: count)) }
+        let bufferedMs = Date().timeIntervalSince(started) * 1000
+        XCTAssertEqual(saves, 0)
+        XCTAssertEqual(store.review?.typedDraft.count, 100)
+        XCTAssertEqual(try store.repository.session()?.typedDraft, "")
+        try store.reload()
+        XCTAssertEqual(store.review?.typedDraft.count, 100)
+        try await Task.sleep(for: .milliseconds(850))
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(try store.repository.session()?.typedDraft.count, 100)
+        print("TYPED_DRAFT characters=100 old_saves=\(oldSaves) new_saves=\(saves) old_input_ms=\(baselineMs) new_input_ms=\(bufferedMs) debounce_ms=600")
+    }
+
+    func testTypedDraftFailureKeepsInputBlocksGradeAndRetries() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try create(store.repository, mode: .typing)
+        try store.repository.updateTypedAnswerPolicy(TypedAnswerPolicy(enabled: true, retentionDays: 30), now: now)
+        store.start(.new)
+        let id = try XCTUnwrap(store.review?.card?.cardID)
+        store.draft(revealed: true)
+        store.draft(text: "最新の日本語")
+        store.repository.save = { _ in throw Failure.save }
+        store.grade(.good)
+        XCTAssertTrue(store.typedDraftSaveFailed)
+        XCTAssertEqual(store.review?.typedDraft, "最新の日本語")
+        XCTAssertEqual(store.review?.card?.cardID, id)
+        XCTAssertTrue(try store.repository.logs().isEmpty)
+        XCTAssertEqual(try store.repository.session()?.typedDraft, "")
+        store.repository.save = { try $0.save() }
+        XCTAssertTrue(store.flushTypedDraft())
+        XCTAssertFalse(store.typedDraftSaveFailed)
+        XCTAssertNil(store.failure)
+        XCTAssertEqual(try store.repository.session()?.typedDraft, "最新の日本語")
+        store.grade(.good)
+        XCTAssertEqual(try store.repository.logs().count, 1)
+        XCTAssertEqual(try store.repository.savedTypedAnswers(now: now).first?.answer, "最新の日本語")
+        store.undo()
+        XCTAssertEqual(store.review?.typedDraft, "")
+        XCTAssertTrue(try store.repository.savedTypedAnswers(now: now).isEmpty)
+    }
+
+    func testTypedDraftBoundariesAndOldTaskNeverRestorePreviousCardText() async throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try create(store.repository, mode: .typing); try create(store.repository, mode: .typing)
+        store.start(.new)
+        store.draft(text: "変換途中")
+        store.sceneChanged(active: false)
+        XCTAssertEqual(try store.repository.session()?.typedDraft, "変換途中")
+        store.sceneChanged(active: true)
+        store.draft(text: "確定回答")
+        store.draft(revealed: true)
+        XCTAssertEqual(try store.repository.session()?.typedDraft, "確定回答")
+        let first = store.review?.card?.cardID
+        store.grade(.easy)
+        XCTAssertNotEqual(store.review?.card?.cardID, first)
+        store.draft(text: "次カード")
+        store.pause()
+        XCTAssertEqual(try store.repository.session()?.typedDraft, "次カード")
+        store.resume()
+        try await Task.sleep(for: .milliseconds(850))
+        XCTAssertEqual(store.review?.typedDraft, "次カード")
+        store.undo()
+        XCTAssertEqual(store.review?.card?.cardID, first)
+        XCTAssertEqual(store.review?.typedDraft, "")
+    }
     func testCachedStatisticsHistoryFutureLogsBackwardClockAndDayBoundary() async throws {
         let container = try PersistenceController.makeStudyContainer(inMemory: true)
         let repo = StudyRepository(container: container)

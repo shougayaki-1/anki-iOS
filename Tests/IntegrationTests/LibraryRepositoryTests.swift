@@ -11,6 +11,56 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.initialize(now: now); return repo
     }
 
+    func testTargetedCardBatchesMatchFullProjectionOnDisk() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let writer = StudyRepository(container: container)
+        try writer.initialize(now: now)
+        let parent = try writer.decks()[0].id
+        let child = try writer.createDeck(name: "Child", parentID: parent, now: now)
+        let payload = try JSONEncoder().encode(ReviewScheduler().newCard(now: now))
+        try writer.transaction {
+            for index in 0..<1000 {
+                let content = TextContent(question: "Q \(index) {{c1::one}} {{c2::two}} {{c3::three}}", answer: "", explanation: "")
+                let input = NoteInput(deckID: child, kind: .cloze, question: content.question, answer: "")
+                let note = Note(input: input, content: try JSONEncoder().encode(content), now: now)
+                writer.context.insert(note)
+                for variant in 1...3 {
+                    let card = StudyCard(noteID: note.id, variantKey: "cloze:\(variant)", payload: payload,
+                                         now: now.addingTimeInterval(Double(index * 3 + variant)))
+                    writer.context.insert(card)
+                }
+            }
+        }
+        // A fresh context exercises the SQLite predicate rather than only pending objects.
+        let repo = StudyRepository(container: container)
+        let all = try repo.noteItems()
+        XCTAssertEqual(all.count, 3000)
+        XCTAssertTrue(try repo.noteItems(cardIDs: []).isEmpty)
+        XCTAssertTrue(try repo.noteItems(cardIDs: [UUID()]).isEmpty)
+        for count in [10, 100, 1000] {
+            let ids = Set(all.prefix(count).map(\.cardID))
+            let selected = try repo.noteItems(cardIDs: ids.union([UUID()]))
+            XCTAssertEqual(selected.map(\.cardID), Array(all.prefix(count)).map(\.cardID))
+            for (actual, expected) in zip(selected, all) {
+                XCTAssertEqual(actual.noteID, expected.noteID)
+                XCTAssertEqual(actual.deckName, expected.deckName)
+                XCTAssertEqual(actual.content, expected.content)
+                XCTAssertEqual(actual.sourceContent, expected.sourceContent)
+                XCTAssertEqual(actual.variantKey, expected.variantKey)
+                XCTAssertEqual(actual.tagIDs, expected.tagIDs)
+                XCTAssertEqual(actual.summary.dueDate, expected.summary.dueDate)
+            }
+        }
+        let first = try XCTUnwrap(all.first)
+        XCTAssertEqual(try repo.noteItems(cardID: first.cardID, cardIDs: []).map(\.cardID), [first.cardID])
+        XCTAssertEqual(try repo.noteItems(cardIDs: Set(all.map(\.cardID))).map(\.cardID), all.map(\.cardID))
+        XCTAssertEqual(try repo.cards().count, 3000)
+        XCTAssertTrue(try repo.logs().isEmpty)
+    }
+
     func testLibraryInlineTreeCountsGroupingSearchAndSavedExpansion() throws {
         let root = UUID(), child = UUID(), grandchild = UUID(), empty = UUID(), other = UUID()
         let note = UUID(), directNote = UUID()
@@ -1134,5 +1184,104 @@ extension LibraryRepositoryTests {
         XCTAssertEqual(try fresh.cards().map(\.id), try repo.cards().map(\.id))
         XCTAssertTrue(try fresh.logs().isEmpty)
         XCTAssertThrowsError(try fresh.applyTextReplacement(preview, now: now))
+    }
+}
+
+extension LibraryRepositoryTests {
+    func testAdvancedSearchConditionsBoundaryPersistenceAndScale() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = Deck(name: "Search child", now: now)
+        child.parentID = root
+        let scheduler = try ReviewScheduler()
+        let original = try scheduler.newCard(now: now)
+        let transition = try scheduler.review(original, grade: .again, now: now)
+        let fresh = try JSONEncoder().encode(original), learned = try JSONEncoder().encode(transition.after)
+        let tag = Tag(name: "Search tag", normalizedName: "search tag")
+        var selected: StudyCard!
+        try repo.transaction {
+            repo.context.insert(child); repo.context.insert(tag)
+            for position in 0..<3000 {
+                let input = NoteInput(deckID: position == 0 ? child.id : root, question: "Search \(position)", answer: "Answer")
+                let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: "", explanation: "")), now: now)
+                if position == 0 { note.tagIDs = [tag.id] }
+                repo.context.insert(note)
+                let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: position == 0 ? learned : fresh, now: now)
+                if position == 0 { selected = card }
+                repo.context.insert(card)
+            }
+            repo.context.insert(StudyReviewLog(card: selected, transition: transition, before: fresh, after: learned, mode: .mental, durationMs: 100, wasNew: true, sequence: 1))
+        }
+        let reader = LibraryReader(container: container)
+        let before = Date()
+        let baseline = try await reader.search("Search", revision: 1, deckIDs: nil)
+        let baselineTime = Date().timeIntervalSince(before)
+        XCTAssertEqual(baseline.cardCount, 3000)
+        var condition = LibrarySearchConditions()
+        condition.text = "Search"; condition.deckID = root; condition.tags = [tag.id]
+        condition.againToday = true; condition.reviewedDays = 1; condition.state = .learning
+        let advancedStart = Date()
+        let combined = try await reader.advancedSearch(condition, revision: 1, now: now, dayStartHour: 4)
+        let advancedTime = Date().timeIntervalSince(advancedStart)
+        XCTAssertEqual(combined.cardIDs, [selected.id])
+        let warmStart = Date()
+        let repeated = try await reader.advancedSearch(condition, revision: 1, now: now, dayStartHour: 4)
+        XCTAssertEqual(repeated.cardIDs, [selected.id])
+        print("Issue126 3000-card search baseline=\(baselineTime)s advanced cold=\(advancedTime)s warm=\(Date().timeIntervalSince(warmStart))s")
+        condition.descendants = false
+        let direct = try await reader.advancedSearch(condition, revision: 1, now: now, dayStartHour: 4)
+        XCTAssertEqual(direct.cardCount, 0)
+        condition.descendants = true
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: now)!
+        let nextDay = try await reader.advancedSearch(condition, revision: 1, now: tomorrow, dayStartHour: 4)
+        XCTAssertEqual(nextDay.cardCount, 0)
+        condition.againToday = false; condition.reviewedDays = 0; condition.state = .all
+        condition.tags = [UUID()]
+        let absent = try await reader.advancedSearch(condition, revision: 1, now: now, dayStartHour: 4)
+        XCTAssertEqual(absent.cardCount, 0)
+        condition.tags = []; condition.deckID = nil; condition.dueOnly = true
+        let dueResults = try await reader.advancedSearch(condition, revision: 1, now: tomorrow, dayStartHour: 4)
+        XCTAssertEqual(dueResults.cardIDs, [selected.id])
+        condition.dueOnly = false; condition.minimumDifficulty = 1
+        let difficulty = try await reader.advancedSearch(condition, revision: 1, now: now, dayStartHour: 4)
+        XCTAssertEqual(difficulty.cardIDs, [selected.id])
+        condition.minimumDifficulty = 0; condition.maximumRecall = 0.99
+        let prediction = try await reader.advancedSearch(condition, revision: 1, now: tomorrow, dayStartHour: 4)
+        XCTAssertEqual(prediction.cardIDs, [selected.id])
+        condition.maximumRecall = 1; condition.missingFSRS = true
+        let missing = try await reader.advancedSearch(condition, revision: 1, now: now, dayStartHour: 4)
+        XCTAssertEqual(missing.cardCount, 2999)
+        var preferences = LibrarySearchPreferences()
+        condition.oldestFirst = true
+        preferences.current = condition
+        preferences.saved = [SavedLibrarySearch(name: "Missing", conditions: condition)]
+        let payloadBefore = selected.fsrsPayload
+        try repo.saveLibrarySearch(preferences)
+        XCTAssertEqual(try repo.options().librarySearch, preferences)
+        preferences.saved[0].name = "Updated"
+        try repo.saveLibrarySearch(preferences)
+        XCTAssertEqual(try repo.options().librarySearch?.saved[0].name, "Updated")
+        preferences.saved = []; try repo.saveLibrarySearch(preferences)
+        XCTAssertTrue(try XCTUnwrap(repo.options().librarySearch).saved.isEmpty)
+        XCTAssertEqual(selected.fsrsPayload, payloadBefore)
+        XCTAssertEqual(try repo.logs().count, 1)
+        let legacy = try JSONDecoder().decode(StudyOptions.self, from: Data("{\"schemaVersion\":2,\"siblingBuryEnabled\":true}".utf8))
+        XCTAssertNil(legacy.librarySearch)
+        repo.save = { _ in throw Failure.save }
+        var rejected = preferences; rejected.current.text = "not persisted"
+        XCTAssertThrowsError(try repo.saveLibrarySearch(rejected))
+        repo.save = { try $0.save() }
+        XCTAssertEqual(try repo.options().librarySearch, preferences)
+        // A data revision discards the schedule cache after a card changes or is deleted.
+        try repo.transaction { selected.fsrsPayload = fresh }
+        condition.missingFSRS = true
+        let invalidated = try await reader.advancedSearch(condition, revision: 2, now: now, dayStartHour: 4)
+        XCTAssertEqual(invalidated.cardCount, 3000)
+        try repo.deleteNote(id: selected.noteID)
+        let deleted = try await reader.advancedSearch(condition, revision: 3, now: now, dayStartHour: 4)
+        XCTAssertEqual(deleted.cardCount, 2999)
+        XCTAssertFalse(deleted.cardIDs.contains(selected.id))
     }
 }

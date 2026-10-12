@@ -33,6 +33,7 @@ struct AnkiIOSApp: App {
 struct AppRootView: View {
     @State private var workspace = AppWorkspace.forWindow()
     @State private var windowID = UUID()
+    @State private var recovering = false
 
     var body: some View {
         Group {
@@ -49,12 +50,16 @@ struct AppRootView: View {
                     Text(failure)
                 } actions: {
                     Button("再試行", action: workspace.load)
+                    Button("バックアップから救済") { recovering = true }
                 }
             } else {
                 ProgressView("保存領域を読み込み中")
             }
         }
         .task { if workspace.container == nil { workspace.load() } }
+        .sheet(isPresented: $recovering) {
+            BackupRecoveryView(location: workspace.storageLocation, recover: workspace.recover)
+        }
     }
 
 }
@@ -69,6 +74,26 @@ struct AppRootView: View {
     var store: StudyStore?
     var diagnosticOnly = false
     private var activity = WindowActivity()
+    var storageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore)
+    private var recoveryMediaStore = MediaStore()
+    func recover(_ backup: ValidatedBackup) throws -> BackupRestoreOutcome {
+        let restored = try BackupService.restore(backup, location: storageLocation, mediaStore: recoveryMediaStore, now: Date())
+        let summary = try? BackupRestoreSummary(context: ModelContext(restored))
+        var warning: String?
+        // The commit already happened: do not call load() and potentially repeat migration of the broken store.
+        do {
+            store = try StudyStore(container: restored, mediaStore: recoveryMediaStore, storageLocation: storageLocation,
+                                   widgetSnapshots: WidgetSnapshotPublisher(file: .shared()))
+            container = (try? PersistenceController.makeContainer()) ?? restored
+            diagnosticOnly = false; failure = nil
+            store?.scheduleNotifications()
+        } catch {
+            // Successful restoration remains active; retry opens it next launch.
+            warning = "復元は保存済みです。再試行して新しい保存領域を開いてください。\n" + error.localizedDescription
+            failure = warning
+        }
+        return BackupRestoreOutcome(summary: summary, warning: warning)
+    }
 
     func sceneChanged(id: UUID, active: Bool) {
         let wasActive = activity.isActive
@@ -113,7 +138,9 @@ struct AppRootView: View {
                     }
                 }
                 #endif
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || ProcessInfo.processInfo.arguments.contains("-study-test-widget")) ? WidgetSnapshotPublisher(file: .shared()) : nil)
+                storageLocation = StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore)
+                recoveryMediaStore = mediaStore
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || ProcessInfo.processInfo.arguments.contains("-study-test-widget")) ? WidgetSnapshotPublisher(file: .shared()) : nil)
                 #if DEBUG
                 if studyURL != nil, args.contains("-study-test-widget"), let store {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
