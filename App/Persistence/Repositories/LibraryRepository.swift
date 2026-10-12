@@ -149,10 +149,22 @@ extension StudyRepository {
     // so reverse cards follow the same eligibility rules as the study UI.
     func responseEligibleCards(_ cards: [QueueCard], mode: SessionResponseMode) throws -> [QueueCard] {
         guard mode == .ordering else { return cards }
-        let items = try noteItems()
-        let eligible = Set(items.filter {
-            OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) == nil
-        }.map(\.id))
+        let candidates = Set(cards.map(\.id))
+        let noteMap = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0) })
+        var contentMap: [UUID: TextContent] = [:]
+        var eligible: Set<UUID> = []
+        for card in try self.cards() where candidates.contains(card.id) {
+            guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type) else { throw StudyError.missingRecord }
+            let content: TextContent
+            if let cached = contentMap[note.id] { content = cached }
+            else {
+                content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+                guard (1...2).contains(content.schemaVersion) else { throw StudyError.unsupportedContent }
+                contentMap[note.id] = content
+            }
+            let displayed = try CardGeneration.displayed(kind: kind, content: content, variant: card.variantKey)
+            if OrderingAnswer.reason(kind: kind, answer: displayed.answer) == nil { eligible.insert(card.id) }
+        }
         return cards.filter { eligible.contains($0.id) }
     }
     func scopedCounts(scope: LearningScope, now: Date) throws -> HomeCounts {
@@ -163,13 +175,13 @@ extension StudyRepository {
     }
     // One timestamp, one card snapshot and only today's logs. No displayed content,
     // full historical statistics, writes, or notification work in the polling path.
-    func homeSnapshot(now: Date) throws -> HomeSnapshot {
+    func homeSnapshot(now: Date, cards: [QueueCard]? = nil, logs: [QueueLog]? = nil) throws -> HomeSnapshot {
         let selected = try homeScope(), settings = try settings()
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let start = day.start, end = day.end
-        let all = try queueCards()
+        let all = try cards ?? queueCards()
         let scoped = try responseEligibleCards(scopedQueueCards(selected, cards: all), mode: options().sessionResponseMode ?? .cardDefault)
-        let today = try todayQueueLogs(cards: all, settings: settings, now: now)
+        let today = try logs ?? todayQueueLogs(cards: all, settings: settings, now: now)
         let builder = ReviewQueueBuilder(calendar: calendar)
         let global = builder.counts(cards: all, logs: today, settings: settings, now: now)
         var counts = builder.counts(cards: scoped, logs: today, settings: settings, now: now)
@@ -449,6 +461,28 @@ extension StudyRepository {
 }
 
 extension StudyRepository {
+    func targetedDeckPath(_ id: UUID) throws -> String {
+        var names: [String] = [], current: UUID? = id, seen: Set<UUID> = []
+        while let value = current, seen.insert(value).inserted {
+            var fetch = FetchDescriptor<Deck>(predicate: #Predicate { $0.id == value })
+            fetch.fetchLimit = 1
+            guard let row = try context.fetch(fetch).first else { break }
+            names.insert(row.name, at: 0)
+            current = row.parentID
+        }
+        return names.joined(separator: " / ")
+    }
+    func deckAncestorMap() throws -> [UUID: [UUID]] {
+        let rows = try decks()
+        let parents = Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.parentID) })
+        return Dictionary(uniqueKeysWithValues: rows.map { row in
+            var result: [UUID] = [], current: UUID? = row.id, seen: Set<UUID> = []
+            while let id = current, seen.insert(id).inserted {
+                result.append(id); current = parents[id] ?? nil
+            }
+            return (row.id, result)
+        })
+    }
     func deckAncestors(_ id: UUID) throws -> [UUID] {
         let rows = try decks()
         var result: [UUID] = [], current: UUID? = id
@@ -485,7 +519,7 @@ extension StudyRepository {
         try writeOptionsInTransaction(saved)
     }
     func quotaMap() throws -> (usage: [Int: [UUID]], cards: [UUID: [UUID]]) {
-        let ancestors = try Dictionary(uniqueKeysWithValues: decks().map { ($0.id, try deckAncestors($0.id)) })
+        let ancestors = try deckAncestorMap()
         let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
         let cards = try Dictionary(uniqueKeysWithValues: self.cards().map {
             ($0.id, noteDecks[$0.noteID].flatMap { ancestors[$0] } ?? [])

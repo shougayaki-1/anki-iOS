@@ -64,39 +64,48 @@ final class StudyStore {
         try reload()
     }
 
-    func reload() throws {
+    func reload() throws { try refreshStudy(metadata: true) }
+
+    private func refreshStudy(metadata: Bool = false, changed: Bool = true) throws {
         do {
             repository.calendar = .current
             let now = clock()
-            let snapshot = try repository.homeSnapshot(now: now)
-            let deckModels = try repository.decks()
-            let paths = LibraryIndex.deckPaths(deckModels)
-            let decks = deckModels.map { DeckItem(id: $0.id, name: paths[$0.id] ?? $0.name, shortName: $0.name, parentID: $0.parentID) }
-            let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
-            let settings = try repository.settings()
-            let answerLimit = try repository.options().sessionAnswerLimit ?? 20
-            let review = try repository.presentation(now: now)
-            // History scans and FSRS predictions belong to the statistics actor,
-            // never to the review/save/home reload path.
-            // Publish together only after all reads succeed.
-            self.decks = decks; self.tags = tags
-            self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
-            self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
-            statisticsTask?.cancel()
-            statisticsGeneration += 1
-            statistics = nil
-            statisticsLoading = false
-            statisticsError = nil
-            // A visible statistics tab must reload after grade/Undo, edits and restore.
-            // Off-screen reports remain lazy so review saves never await the history actor.
-            statisticsScope.deckID = statisticsScope.deckID.flatMap { id in decks.contains { $0.id == id } ? id : nil }
-            statisticsScope.tagIDs.removeAll { id in !tags.contains { $0.id == id } }
-            if selectedTab == 2 { refreshStatistics() }
-            dataRevision += 1
+            let cards = try repository.queueCards()
+            let savedSettings = metadata ? try repository.settings() : settings
+            let logs = try repository.todayQueueLogs(cards: cards, settings: savedSettings, now: now)
+            let snapshot = try repository.homeSnapshot(now: now, cards: cards, logs: logs)
+            if metadata {
+                let deckModels = try repository.decks()
+                let paths = LibraryIndex.deckPaths(deckModels)
+                let decks = deckModels.map { DeckItem(id: $0.id, name: paths[$0.id] ?? $0.name, shortName: $0.name, parentID: $0.parentID) }
+                let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
+                let settings = try repository.settings()
+                let answerLimit = try repository.options().sessionAnswerLimit ?? 20
+                let review = try repository.presentation(now: now, cards: cards)
+                // History scans and FSRS predictions belong to the statistics actor,
+                // never to the review/save/home reload path.
+                // Publish together only after all reads succeed.
+                self.decks = decks; self.tags = tags
+                self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
+                self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
+            } else { review = try repository.presentation(now: now, cards: cards) }
+            if changed {
+                statisticsTask?.cancel()
+                statisticsGeneration += 1
+                statistics = nil
+                statisticsLoading = false
+                statisticsError = nil
+                // A visible statistics tab must reload after grade/Undo, edits and restore.
+                // Off-screen reports remain lazy so review saves never await the history actor.
+                statisticsScope.deckID = statisticsScope.deckID.flatMap { id in decks.contains { $0.id == id } ? id : nil }
+                statisticsScope.tagIDs.removeAll { id in !tags.contains { $0.id == id } }
+                if selectedTab == 2 { refreshStatistics() }
+                dataRevision += 1
+            }
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
-            publishWidget(snapshot, force: true)
-            scheduleNotifications()
+            publishWidget(snapshot, force: changed, cards: cards, logs: logs)
+            if changed { scheduleNotifications(cards: cards) }
         } catch { homeFailure = error.localizedDescription; throw error }
     }
     private func applyHomeSnapshot(_ snapshot: HomeSnapshot) {
@@ -119,16 +128,18 @@ final class StudyStore {
                 review = try repository.presentation(now: now)
             }
 
-            let snapshot = try repository.homeSnapshot(now: now)
+            let cards = try repository.queueCards()
+            let logs = try repository.todayQueueLogs(cards: cards, settings: settings, now: now)
+            let snapshot = try repository.homeSnapshot(now: now, cards: cards, logs: logs)
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due
             applyHomeSnapshot(snapshot)
-            publishWidget(snapshot, force: false)
-            if reconcileNotifications || changed { scheduleNotifications() }
+            publishWidget(snapshot, force: false, cards: cards, logs: logs)
+            if reconcileNotifications || changed { scheduleNotifications(cards: cards) }
         } catch { homeFailure = error.localizedDescription }
     }
-    private func publishWidget(_ snapshot: HomeSnapshot, force: Bool) {
-        widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force) { [weak self] message in
+    private func publishWidget(_ snapshot: HomeSnapshot, force: Bool, cards: [QueueCard]? = nil, logs: [QueueLog]? = nil) {
+        widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force, cards: cards, logs: logs) { [weak self] message in
             self?.widgetFailure = message
         }
     }
@@ -197,10 +208,10 @@ final class StudyStore {
     }
 
     @discardableResult
-    func perform(_ work: () throws -> Void) -> Bool {
+    func perform(metadata: Bool = true, changed: Bool = true, _ work: () throws -> Void) -> Bool {
         do { try work() }
         catch { failure = error.localizedDescription; return false }
-        do { try reload(); return true }
+        do { try refreshStudy(metadata: metadata, changed: changed); return true }
         catch { homeFailure = error.localizedDescription; failure = "処理は完了しましたが画面を更新できません。再表示してください。\n" + error.localizedDescription; return false }
     }
     func canStart(_ mode: StudyMode) -> Bool {
@@ -252,11 +263,11 @@ final class StudyStore {
         do { try repository.completeSession(now: clock()) }
         catch { failure = error.localizedDescription; return }
         review = nil; showingReview = false; selectedTab = destination
-        do { try reload() }
+        do { try refreshStudy(changed: false) }
         catch { homeFailure = error.localizedDescription; failure = "学習は終了しましたが、ホームを更新できません。" }
     }
     func startAnotherSession() {
-        if perform({ try repository.startAnotherSession(now: clock()) }) { showingReview = true }
+        if perform(metadata: false, changed: false, { try repository.startAnotherSession(now: clock()) }) { showingReview = true }
     }
 
     var isNewLimitReached: Bool {
@@ -301,19 +312,19 @@ final class StudyStore {
     }
     @discardableResult
     func applyScope(_ value: LearningScope) -> Bool {
-        perform { try repository.applyHomeScope(value) }
+        perform(metadata: false, changed: false) { try repository.applyHomeScope(value) }
     }
     func start(_ mode: StudyMode) {
-        if perform({ try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
+        if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
     }
     func resume() {
-        if perform({ try repository.resume(now: clock()) }) { showingReview = true }
+        if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
     }
     func grade(_ grade: ReviewGrade) {
         let previouslyComplete = review?.sessionProgress?.isComplete == true
         do { try repository.grade(grade, now: clock()) }
         catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
-        do { try reload() }
+        do { try refreshStudy() }
         catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
         let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
         haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
@@ -321,7 +332,7 @@ final class StudyStore {
     func undo() {
         do { try repository.undo(now: clock()) }
         catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
-        do { try reload() }
+        do { try refreshStudy() }
         catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
         haptics.play(.undo, mode: settings.hapticsMode)
     }
@@ -357,7 +368,7 @@ final class StudyStore {
         } catch { failure = error.localizedDescription }
     }
     func pause() {
-        if perform({ try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
+        if perform(metadata: false, changed: false, { try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
     }
     func restoreBackup(_ backup: ValidatedBackup) throws {
         notificationJob?.cancel()
@@ -384,13 +395,15 @@ final class StudyStore {
             perform { try repository.updateSettings(value) }
         } catch { notificationFailure = error.localizedDescription }
     }
-    func scheduleNotifications() {
+    func scheduleNotifications() { scheduleNotifications(cards: nil) }
+    private func scheduleNotifications(cards: [QueueCard]?) {
         notificationJob?.cancel()
         notificationJob = Task { [weak self] in
             do {
                 try await Task.sleep(for: .milliseconds(200))
                 guard let self, !Task.isCancelled else { return }
-                let permission = try await notifications.reconcile(cards: repository.queueCards(), options: settings.notification,
+                let notificationCards = settings.notification.enabled ? try cards ?? repository.queueCards() : []
+                let permission = try await notifications.reconcile(cards: notificationCards, options: settings.notification,
                                                                     calendar: repository.calendar, now: clock())
                 guard !Task.isCancelled else { return }
                 notificationPermission = permission; notificationFailure = nil
@@ -401,7 +414,7 @@ final class StudyStore {
         }
     }
     func refreshQueue() {
-        let succeeded = perform {
+        let succeeded = perform(metadata: false, changed: false) {
             if let draft = try repository.session(), draft.cardID == nil {
                 try repository.resume(now: clock())
             }
