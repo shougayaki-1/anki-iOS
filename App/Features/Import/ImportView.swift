@@ -406,14 +406,8 @@ struct ImportCompletionView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
-                Image(systemName: complete ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
-                    .font(.system(size: 76)).foregroundStyle(complete ? .green : .orange)
-                    .scaleEffect(complete && !reduceMotion && !appeared ? 0.85 : 1)
-                    .opacity(complete && !reduceMotion && !appeared ? 0 : 1)
-                    .animation(.easeOut(duration: 0.35), value: appeared)
-                    .accessibilityHidden(true)
+                ImportCompletionHeader(title: title, complete: complete)
                 VStack(spacing: 12) {
-                    Text(title).font(.title2.bold()).accessibilityIdentifier("importCompletionTitle")
                     if complete { Text(result.createdCards > 0 ? "カードを正常に追加しました" : "既存のノートを更新しました") }
                     Text(result.summary).accessibilityIdentifier(resultIdentifier)
                     if !result.destinations.isEmpty {
@@ -504,5 +498,25 @@ private struct ImportedCardRow: View {
             item = try store.repository.noteItems(cardID: cardID).first
             failure = item == nil ? "このカードは削除されたため表示できません。" : nil
         } catch { failure = "カードを表示できません。" + error.localizedDescription }
+    }
+}
+
+/// Shared receipt header for text/image and deck-file operations.
+struct ImportCompletionHeader: View {
+    let title: String
+    let complete: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
+    var body: some View {
+        VStack(spacing: 24) {
+            Image(systemName: complete ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                .font(.system(size: 76)).foregroundStyle(complete ? .green : .orange)
+                .scaleEffect(complete && !reduceMotion && !appeared ? 0.85 : 1)
+                .opacity(complete && !reduceMotion && !appeared ? 0 : 1)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: appeared)
+                .accessibilityHidden(true)
+            Text(title).font(.title2.bold()).accessibilityIdentifier("importCompletionTitle")
+        }
+        .onAppear { appeared = true }
     }
 }
