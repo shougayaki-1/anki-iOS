@@ -26,6 +26,7 @@ struct DeckExchangeView: View {
     @State private var importingAnki = false
     @State private var ankiPreview: AnkiImportPreview?
     @State private var skippedPage = 0
+    @State private var warningPage = 0
     @State private var exporting = false
     @State private var confirmation = false
     @State private var working = false
@@ -54,8 +55,8 @@ struct DeckExchangeView: View {
                 Button("Anki .apkgを選択") { clearPreview(); importingAnki = true; importing = true }
                     .disabled(working).accessibilityIdentifier("selectAnkiPackage")
                 DisclosureGroup("対応形式と変更点") {
-                    Text("Ankiで「古いAnkiバージョンをサポート」を有効にして書き出してください。collection.anki2/anki21・schema11が対象です。最新anki21bは未対応です。")
-                    Text("2フィールドの標準的な基本・逆方向・穴埋めに対応。画像は問題面にJPEG/PNG1枚、音声は各面1本。文字装飾はプレーンテキストへ変わり、任意HTML/JS・画像遮蔽・動画・LaTeX・複数メディア等は未対応です。")
+                    Text("Ankiの最新.apkg（anki21b・schema 18）と旧形式（anki2/anki21・schema 11）に対応します。")
+                    Text("基本・逆方向・穴埋めと、安全なフィールド参照のみの多フィールドテンプレートに対応。画像は問題面にJPEG/PNG1枚、音声は各面1本。文字装飾はプレーンテキストへ変わり、任意HTML/JS・画像遮蔽・動画・LaTeX・複数メディア等は未対応です。")
                     Text("AnkiのFSRS・予定・回答履歴は引き継げません。新規学習として開始します。未対応ノートと理由を表示し、対応するノートだけを確認してから追加します。")
                 }.font(.footnote)
             }
@@ -73,6 +74,19 @@ struct DeckExchangeView: View {
                     LabeledContent("未対応ノート", value: "\(ankiPreview.skipped.count)").accessibilityIdentifier("ankiSkippedCount")
                     Text("学習済みカード\(ankiPreview.scheduledCards)件・回答履歴\(ankiPreview.reviewLogs)件は取り込みません。すべて新規学習として開始します。文字装飾やテンプレートの配置も移行しません。")
                         .font(.footnote).accessibilityIdentifier("ankiHistoryPolicy")
+                    if !ankiPreview.warnings.isEmpty {
+                        LabeledContent("本文のみ移行・フィールド省略の警告", value: "\(ankiPreview.warnings.count)")
+                        Text("欠落音声は追加しません。以下の変更を確認してから取り込んでください。").font(.footnote)
+                        ForEach(Array(ankiPreview.warnings.dropFirst(warningPage * 100).prefix(100))) { item in
+                            Text("ノート\(item.id)：\(item.reason)").font(.footnote)
+                        }
+                        if ankiPreview.warnings.count > 100 {
+                            HStack {
+                                Button("警告の前へ") { warningPage -= 1 }.disabled(warningPage == 0)
+                                Button("警告の次へ") { warningPage += 1 }.disabled((warningPage + 1) * 100 >= ankiPreview.warnings.count)
+                            }
+                        }
+                    }
                     ForEach(Array(ankiPreview.skipped.dropFirst(skippedPage * 100).prefix(100))) { item in
                         Text("ノート\(item.id)：\(item.reason)").font(.footnote)
                     }
@@ -189,7 +203,7 @@ struct DeckExchangeView: View {
         if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }
         shareURL = nil
     }
-    private func clearPreview() { ankiPreview = nil; skippedPage = 0; selected = nil; exportBytes = nil; preview = nil; result = nil; page = 0; removeShareFile() }
+    private func clearPreview() { ankiPreview = nil; skippedPage = 0; warningPage = 0; selected = nil; exportBytes = nil; preview = nil; result = nil; page = 0; removeShareFile() }
     private func deckPath(_ id: UUID, in package: DeckPackage) -> String {
         var cursor: UUID? = id, names: [String] = []
         let byID = Dictionary(uniqueKeysWithValues: package.decks.map { ($0.id, $0) })

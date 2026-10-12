@@ -442,8 +442,8 @@ SessionScopeは開始時にだけ設定する実行中セッションの条件�
 - 詳細な上限・互換性・原子性・テストは[デッキ交換仕様](deck-exchange.md)。
 
 ### Issue #14: Anki .apkg第一段階
-- Legacy1/2 schema11（collection.anki2/anki21）の標準基本・逆方向・穴埋めと限定メディアを、SQLite read-only・上限付きZIP検証で取込。HTML/JSは実行しない。
-- 最新anki21b、任意テンプレート、複数メディアや履歴引継ぎは未対応。対応/非対応・元件数と生成数・理由・新規開始を確認して対応部分のみ追加。
+- Latest schema 18（collection.anki21b）およびLegacy1/2 schema 11（collection.anki2/anki21）の基本・逆方向・穴埋め、安全な多フィールドテンプレートと限定メディアを、SQLite read-only・上限付きZIP検証で取込。HTML/JSは実行しない。
+- 条件分岐・スクリプト等の任意テンプレート、複数メディアや履歴引継ぎは未対応。音声欠落時は本文のみの移行を警告する。zstdは公式facebook/zstd v1.5.7（f8745da6ff1ad1e7bab384bd1f9d742439278e99、BSD 3-Clause）に固定。対応/非対応・元件数と生成数・理由・新規開始を確認して対応部分のみ追加。
 - 対応表、上限、安全設計、テストfixtureは[Anki互換性仕様](apkg-compatibility.md)。
 ### タイピング回答の任意保存（#10）
 
