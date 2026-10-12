@@ -278,9 +278,10 @@ enum HomeStudyPresentation {
 }
 
 enum StudyError: LocalizedError {
-    case invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards, noOrderingCards
+    case reviewEditStructure, invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards, noOrderingCards
     var errorDescription: String? {
         switch self {
+        case .reviewEditStructure: return "学習中はカード形式・生成枚数・穴埋め番号・マスクIDを変更できません。構造の変更は学習を中断してライブラリで行ってください。"
         case .invalidContent: return "問題文と解答を入力してください。"
         case .missingRecord: return "対象のカードまたはデッキが見つかりません。"
         case .unsupportedContent: return "このデータ形式はまだ編集できません。"
