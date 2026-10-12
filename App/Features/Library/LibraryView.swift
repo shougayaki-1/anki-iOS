@@ -492,64 +492,64 @@ private struct BulkManagementView: View {
                 if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
                 preview = nil
             } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
-            }
             store.failure = nil
         }
     }
+}
 
 
-    private struct WeakCardListView: View {
-        @Bindable var store: StudyStore
-        @State private var scope = LearningScope()
-        @State private var days = 30
-        @State private var rows: [WeakCardItem] = []
-        @State private var failure: String?
-        @State private var practice: WeakPracticeSession?
+private struct WeakCardListView: View {
+    @Bindable var store: StudyStore
+    @State private var scope = LearningScope()
+    @State private var days = 30
+    @State private var rows: [WeakCardItem] = []
+    @State private var failure: String?
+    @State private var practice: WeakPracticeSession?
 
-        var body: some View {
-            List {
-                Section("絞り込み") {
-                    DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $scope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
-                    Picker("履歴の期間", selection: $days) {
-                        ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
-                    }
-
+    var body: some View {
+        List {
+            Section("絞り込み") {
+                DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $scope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
+                Picker("履歴の期間", selection: $days) {
+                    ForEach([7, 30, 90, 0], id: \.self) { Text($0 == 0 ? "全期間" : "\($0)日").tag($0) }
                 }
-                ContextualTagFilterSections(store: store, scope: $scope)
-                Section {
-                    Text("直近Again、Again2回以上、3回答以上でAgain割合30%以上・難易度8以上・推定想起確率75%未満を基準に抽出します。停止中・未学習は除外します。タグはすべて含む条件です。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Text("重点練習では復習予定・FSRS・回答履歴・今日の学習枚数を変更しません。正式な評価はホームの通常学習で行います。")
-                        .font(.footnote)
-                    Button("重点練習を始める") {
-                        do {
-                            practice = try store.repository.weakPractice(scope: scope, days: days == 0 ? nil : days, now: store.clock())
-                            failure = nil
-                        } catch { failure = error.localizedDescription }
-                    }.disabled(rows.isEmpty).accessibilityIdentifier("startWeakPractice")
-                    Text("兄弟カードは通常の同日抑制に加え、練習内でも1ノート1枚に制限します（短期学習は例外）。")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                if let failure { Section { Text(failure).foregroundStyle(.red); Button("再試行") { refresh() } } }
-                if rows.isEmpty && failure == nil { Text("この条件の苦手カードはありません。期間やデッキ・タグを変更してください。") }
-                Section("苦手カード：\(rows.count)枚") {
-                    ForEach(rows) { row in
-                        NavigationLink { NoteDetailView(store: store, cardID: row.id) } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(row.card.content.question).lineLimit(2)
-                                Text(row.card.deckName).font(.caption).foregroundStyle(.secondary)
-                                ForEach(row.evidence.reasons, id: \.self) { Text($0).font(.footnote) }
-                            }
+
+            }
+            ContextualTagFilterSections(store: store, scope: $scope)
+            Section {
+                Text("直近Again、Again2回以上、3回答以上でAgain割合30%以上・難易度8以上・推定想起確率75%未満を基準に抽出します。停止中・未学習は除外します。タグはすべて含む条件です。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("重点練習では復習予定・FSRS・回答履歴・今日の学習枚数を変更しません。正式な評価はホームの通常学習で行います。")
+                    .font(.footnote)
+                Button("重点練習を始める") {
+                    do {
+                        practice = try store.repository.weakPractice(scope: scope, days: days == 0 ? nil : days, now: store.clock())
+                        failure = nil
+                    } catch { failure = error.localizedDescription }
+                }.disabled(rows.isEmpty).accessibilityIdentifier("startWeakPractice")
+                Text("兄弟カードは通常の同日抑制に加え、練習内でも1ノート1枚に制限します（短期学習は例外）。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let failure { Section { Text(failure).foregroundStyle(.red); Button("再試行") { refresh() } } }
+            if rows.isEmpty && failure == nil { Text("この条件の苦手カードはありません。期間やデッキ・タグを変更してください。") }
+            Section("苦手カード：\(rows.count)枚") {
+                ForEach(rows) { row in
+                    NavigationLink { NoteDetailView(store: store, cardID: row.id) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(row.card.content.question).lineLimit(2)
+                            Text(row.card.deckName).font(.caption).foregroundStyle(.secondary)
+                            ForEach(row.evidence.reasons, id: \.self) { Text($0).font(.footnote) }
                         }
                     }
                 }
             }
-            .navigationTitle("苦手カード")
-            .task { refresh() }
-            .onChange(of: scope) { _, _ in refresh() }
-            .onChange(of: days) { _, _ in refresh() }
-            .sheet(item: $practice, onDismiss: { refresh() }) { session in
-                WeakPracticeView(store: store, initial: session, conditions: practiceConditions)
+        }
+        .navigationTitle("苦手カード")
+        .task { refresh() }
+        .onChange(of: scope) { _, _ in refresh() }
+        .onChange(of: days) { _, _ in refresh() }
+        .sheet(item: $practice, onDismiss: { refresh() }) { session in
+            WeakPracticeView(store: store, initial: session, conditions: practiceConditions)
         }
     }
     private var practiceConditions: String {
