@@ -23,6 +23,7 @@ struct StudyOptions: Codable, Equatable {
     var deckLearning: [DeckLearningOverride]? = nil
     var deckNewUsage: [DeckNewUsage]? = nil
     var sessionResponseMode: SessionResponseMode? = nil
+    var librarySearch: LibrarySearchPreferences? = nil
     var activeSessionProgress: StudySessionProgressSnapshot? = nil
 }
 
@@ -629,4 +630,39 @@ struct CardMark: Codable, Equatable {
     let cardID: UUID
     var flag: CardFlag?
     var hiddenUntil: Date?
+}
+
+// Conditions are shared by the reader and UI; saved searches never retain card IDs.
+struct LibrarySearchConditions: Codable, Equatable {
+    var text = ""
+    var deckID: UUID?
+    var descendants = true
+    var tags: [UUID] = []
+    var anyTag = false
+    var state = LibrarySearchState.all
+    var dueOnly = false
+    var againToday = false
+    var reviewedDays = 0
+    var minimumLapses = 0
+    var minimumDifficulty = 0.0
+    var maximumRecall = 1.0
+    var missingFSRS = false
+    var flag: CardFlag?
+    var oldestFirst = false
+    var requiresSchedule: Bool {
+        state != .all || minimumLapses > 0 || minimumDifficulty > 0 || maximumRecall < 1 || missingFSRS
+    }
+}
+struct SavedLibrarySearch: Codable, Equatable, Identifiable {
+    var id = UUID()
+    var name: String
+    var conditions: LibrarySearchConditions
+}
+struct LibrarySearchPreferences: Codable, Equatable {
+    var current = LibrarySearchConditions()
+    var saved: [SavedLibrarySearch] = []
+}
+
+enum LibrarySearchState: String, Codable, CaseIterable {
+    case all, new, learning, relearning, review, suspended
 }

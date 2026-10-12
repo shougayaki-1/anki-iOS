@@ -83,6 +83,7 @@ struct LibraryView: View {
         NavigationStack {
             List(selection: $selection) {
                 Section {
+                    NavigationLink("詳細検索・保存済み検索") { AdvancedLibrarySearchView(store: store) }
                     NavigationLink { FlaggedCardsView(store: store) } label: { Label("フラグ付きカード", systemImage: "flag") }
                 }
                 Section("登録数") {
@@ -561,8 +562,10 @@ private struct WeakPracticeView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var session: WeakPracticeSession
     let conditions: String
-    init(store: StudyStore, initial: WeakPracticeSession, conditions: String) {
+    var customSearch = false
+    init(store: StudyStore, initial: WeakPracticeSession, conditions: String, customSearch: Bool = false) {
         self.conditions = conditions
+        self.customSearch = customSearch
         self.store = store; _session = State(initialValue: initial)
     }
     var body: some View {
@@ -597,7 +600,7 @@ private struct WeakPracticeView: View {
                         VStack(spacing: 24) {
                             Image(systemName: "checkmark.circle.fill")
                                 .font(.system(size: 68)).foregroundStyle(.green).accessibilityHidden(true)
-                            Text("重点練習が完了しました").font(.title2.bold())
+                            Text(customSearch ? "カスタム学習が完了しました" : "重点練習が完了しました").font(.title2.bold())
                                 .accessibilityIdentifier("weakPracticeCompleted")
                             Text("練習したカード：\(session.completedCount)枚")
                                 .accessibilityIdentifier("weakPracticeCompletedCount")
@@ -607,16 +610,16 @@ private struct WeakPracticeView: View {
                             Button("同じカードをもう一度練習する") { session.restart() }
                                 .buttonStyle(.borderedProminent).controlSize(.large)
                                 .accessibilityIdentifier("restartWeakPractice")
-                            Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                            Button(customSearch ? "検索結果に戻る" : "苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
                         }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 24)
                     } else {
                         ContentUnavailableView("練習するカードがありません", systemImage: "rectangle.on.rectangle",
                                                description: Text("苦手カード一覧で対象条件を変更してください。"))
-                        Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                        Button(customSearch ? "検索結果に戻る" : "苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
                     }
                 }.padding()
             }
-            .navigationTitle("重点練習")
+            .navigationTitle(customSearch ? "カスタム学習" : "重点練習")
             .toolbar { Button("終了") { dismiss() } }
         }
     }
@@ -745,5 +748,219 @@ struct FlaggedCardsView: View {
         }
         .onChange(of: search) { _, _ in selection.removeAll() }
         .onChange(of: flag) { _, _ in selection.removeAll() }
+    }
+}
+
+
+struct AdvancedLibrarySearchView: View {
+    @Bindable var store: StudyStore
+    @State private var preferences = LibrarySearchPreferences()
+    @State private var restored = false
+    @State private var index: LibraryIndex?
+    @State private var results = LibraryResults()
+    @State private var evaluatedAt = Date()
+    @State private var loading = false
+    @State private var failure: String?
+    @State private var filters = false
+    @State private var name = ""
+    @State private var editingSaved: UUID?
+    @State private var selection: Set<UUID> = []
+    @State private var editMode = EditMode.inactive
+    @State private var bulk = false
+    @State private var practice: WeakPracticeSession?
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refresh = 0
+    private struct Request: Equatable {
+        let conditions: LibrarySearchConditions
+        let revision: Int
+        let refresh: Int
+        let restored: Bool
+    }
+    private var cards: [LibraryCard] {
+        results.cardsByDeck.values.flatMap { $0 }.sorted {
+            if $0.createdAt == $1.createdAt { return $0.id.uuidString < $1.id.uuidString }
+            return preferences.current.oldestFirst ? $0.createdAt < $1.createdAt : $0.createdAt > $1.createdAt
+        }
+    }
+    var body: some View {
+        List(selection: $selection) {
+            Section {
+                Button("絞り込み条件・保存済み検索", systemImage: "line.3.horizontal.decrease") { filters = true }
+                Text("\(results.noteCount)ノート / \(results.cardCount)枚")
+                Text("ノートは内容のまとまり、カードは出題単位です。") .font(.footnote).foregroundStyle(.secondary)
+                conditionChips
+                Text("評価時刻: " + evaluatedAt.formatted(date: .abbreviated, time: .shortened))
+                    .font(.caption).foregroundStyle(.secondary)
+                Text("期限・今日・想起確率は評価時刻によって変わります。") .font(.caption).foregroundStyle(.secondary)
+                Button("現在時刻で再評価") { refresh += 1 }
+            }
+            if loading { ProgressView("検索中") }
+            if let failure { Text(failure).foregroundStyle(.red) }
+            if !loading && failure == nil && cards.isEmpty {
+                ContentUnavailableView("検索結果がありません", systemImage: "magnifyingglass",
+                    description: Text("条件を変更してください。削除済みデッキ・タグを指定した条件には一致しません。"))
+            }
+            ForEach(cards) { card in
+                NavigationLink { NoteDetailView(store: store, cardID: card.id) } label: {
+                    LibraryCardRow(card: card, index: index)
+                }.tag(card.id)
+            }
+        }
+        .navigationTitle("詳細検索")
+        .searchable(text: $preferences.current.text, prompt: "問題・解答・デッキ・タグ")
+        .environment(\.editMode, $editMode)
+        .toolbar {
+            Button(editMode.isEditing ? "完了" : "選択") { editMode = editMode.isEditing ? .inactive : .active; selection.removeAll() }
+        }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                if editMode.isEditing {
+                    Button("全選択") { selection = results.cardIDs }
+                    Button("一括操作（\(selection.count)枚）") { bulk = true }.disabled(selection.isEmpty)
+                } else {
+                    Button("検索結果でカスタム学習") {
+                        do {
+                            practice = WeakPracticeSession(cards: try store.repository.noteItems(cardIDs: results.cardIDs))
+                        } catch { failure = error.localizedDescription }
+                    }
+                }
+            }.disabled(loading || failure != nil || results.cardCount == 0).padding().background(.regularMaterial)
+        }
+        .task {
+            do { preferences = try store.repository.options().librarySearch ?? LibrarySearchPreferences(); restored = true }
+            catch { failure = error.localizedDescription }
+        }
+        .task(id: Request(conditions: preferences.current, revision: store.dataRevision, refresh: refresh, restored: restored)) {
+            guard restored else { return }
+            loading = true
+            defer { if !Task.isCancelled { loading = false } }
+            do {
+                try await Task.sleep(for: .milliseconds(180))
+                let conditions = preferences.current, revision = store.dataRevision, now = store.clock()
+                let found = try await store.libraryReader.advancedSearch(conditions, revision: revision, now: now,
+                    calendar: store.repository.calendar, dayStartHour: store.settings.dayStartHour)
+                let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: Set(found.cardsByDeck.keys))
+                try Task.checkCancellation()
+                guard revision == store.dataRevision else { return }
+                results = found; index = loaded; evaluatedAt = now; failure = nil
+                selection.formIntersection(found.cardIDs)
+                try store.repository.saveLibrarySearch(preferences)
+            } catch is CancellationError {} catch { if !Task.isCancelled { failure = error.localizedDescription } }
+        }
+        .task {
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+                if scenePhase == .active { refresh += 1 }
+            }
+        }
+        .onChange(of: preferences.current) { _, _ in selection.removeAll() }
+        .onChange(of: scenePhase) { _, phase in if phase == .active { refresh += 1 } }
+        .onDisappear { if restored { persist() } }
+        .sheet(isPresented: $filters) { filterSheet }
+        .sheet(isPresented: $bulk) {
+            BulkManagementView(store: store, selection: selection, didCommit: { selection.removeAll(); refresh += 1 }) { _ in bulk = false }
+        }
+        .sheet(item: $practice) { session in
+            WeakPracticeView(store: store, initial: session, conditions: "詳細検索の結果 \(results.cardCount)枚・練習のみ", customSearch: true)
+        }
+    }
+    private var conditionChips: some View {
+        ScrollView(.horizontal) {
+            HStack {
+                ForEach(chips, id: \.id) { chip in
+                    Button(chip.title + " ×") { chip.clear() }.buttonStyle(.bordered)
+                }
+                Button("すべて解除") { preferences.current = LibrarySearchConditions() }
+            }
+        }
+    }
+    private struct Chip { let id: String; let title: String; let clear: () -> Void }
+    private var chips: [Chip] {
+        let c = preferences.current
+        var values: [Chip] = []
+        if !c.text.isEmpty { values.append(Chip(id: "text", title: c.text) { preferences.current.text = "" }) }
+        if let id = c.deckID { values.append(Chip(id: "deck", title: store.decks.first { $0.id == id }?.name ?? "削除済みデッキ") { preferences.current.deckID = nil }) }
+        for id in c.tags { values.append(Chip(id: "tag-" + id.uuidString, title: "タグ: " + (store.tags.first { $0.id == id }?.name ?? "削除済み")) { preferences.current.tags.removeAll { $0 == id } }) }
+        if c.state != .all { values.append(Chip(id: "state", title: stateTitle(c.state)) { preferences.current.state = .all }) }
+        if c.dueOnly { values.append(Chip(id: "due", title: "期限到来") { preferences.current.dueOnly = false }) }
+        if c.againToday { values.append(Chip(id: "again", title: "今日Again") { preferences.current.againToday = false }) }
+        if c.reviewedDays > 0 { values.append(Chip(id: "days", title: "直近\(c.reviewedDays)学習日") { preferences.current.reviewedDays = 0 }) }
+        if c.minimumLapses > 0 { values.append(Chip(id: "lapses", title: "忘却\(c.minimumLapses)回以上") { preferences.current.minimumLapses = 0 }) }
+        if c.minimumDifficulty > 0 { values.append(Chip(id: "difficulty", title: "難易度\(Int(c.minimumDifficulty))以上") { preferences.current.minimumDifficulty = 0 }) }
+        if c.maximumRecall < 1 { values.append(Chip(id: "recall", title: "想起確率\(Int(c.maximumRecall * 100))%以下") { preferences.current.maximumRecall = 1 }) }
+        if c.missingFSRS { values.append(Chip(id: "missing", title: "未学習・FSRSデータなし") { preferences.current.missingFSRS = false }) }
+        if let flag = c.flag { values.append(Chip(id: "flag", title: "フラグ: " + flag.title) { preferences.current.flag = nil }) }
+        return values
+    }
+    private func stateTitle(_ state: LibrarySearchState) -> String {
+        state == .suspended ? "停止" : (state == .all ? "すべて" : LearningStatePresentation(state: state.rawValue).title)
+    }
+    private var filterSheet: some View {
+        NavigationStack {
+            Form {
+                if let failure { Section { Text(failure).foregroundStyle(.red) } }
+                Section("対象") {
+                    DeckSelectionField("デッキ", decks: store.decks, selection: $preferences.current.deckID, nilTitle: "すべて")
+                    Toggle("子孫デッキを含む", isOn: $preferences.current.descendants)
+                    Toggle("タグのいずれかを含む（OR）", isOn: $preferences.current.anyTag)
+                    Text(preferences.current.anyTag ? "タグはOR、他条件とはANDです。" : "タグはすべて含むAND条件です。") .font(.footnote)
+                    ForEach(store.tags) { tag in
+                        Toggle(tag.name, isOn: Binding(get: { preferences.current.tags.contains(tag.id) }, set: { selected in
+                            preferences.current.tags.removeAll { $0 == tag.id }
+                            if selected { preferences.current.tags.append(tag.id) }
+                        }))
+                    }
+                }
+                Section("状態・履歴") {
+                    Picker("状態", selection: $preferences.current.state) {
+                        ForEach(LibrarySearchState.allCases, id: \.self) { Text(stateTitle($0)).tag($0) }
+                    }
+                    Toggle("期限到来（新規・停止中を除く）", isOn: $preferences.current.dueOnly)
+                    Toggle("今日Again", isOn: $preferences.current.againToday)
+                    Stepper("直近\(preferences.current.reviewedDays)学習日に回答（0: 指定なし）", value: $preferences.current.reviewedDays, in: 0...365)
+                    Stepper("忘却\(preferences.current.minimumLapses)回以上", value: $preferences.current.minimumLapses, in: 0...100)
+                    Picker("フラグ", selection: $preferences.current.flag) {
+                        Text("すべて").tag(Optional<CardFlag>.none)
+                        ForEach(CardFlag.allCases) { Text($0.title).tag(Optional($0)) }
+                    }
+                }
+                Section("FSRS") {
+                    Stepper("難易度\(Int(preferences.current.minimumDifficulty))以上（0: 指定なし）", value: $preferences.current.minimumDifficulty, in: 0...10)
+                    Text("想起確率\(Int(preferences.current.maximumRecall * 100))%以下（100: 指定なし）")
+                    Slider(value: $preferences.current.maximumRecall, in: 0...1, step: 0.05)
+                    Toggle("未学習・データなし", isOn: $preferences.current.missingFSRS)
+                    Text("難易度・想起確率の数値条件は未学習とデータなしを除外します。欠損値を0として扱いません。") .font(.footnote)
+                }
+                Section("並び順") { Toggle("古い登録から表示", isOn: $preferences.current.oldestFirst) }
+                Section("条件を保存") {
+                    TextField("検索名", text: $name)
+                    Button(editingSaved == nil ? "新しく保存" : "条件・名称を更新") {
+                        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !title.isEmpty else { return }
+                        if let id = editingSaved, let position = preferences.saved.firstIndex(where: { $0.id == id }) {
+                            preferences.saved[position].name = title; preferences.saved[position].conditions = preferences.current
+                        } else { preferences.saved.append(SavedLibrarySearch(name: title, conditions: preferences.current)) }
+                        persist(); name = ""; editingSaved = nil
+                    }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if editingSaved != nil { Button("新規保存に切り替える") { editingSaved = nil; name = "" } }
+                    ForEach(preferences.saved) { saved in
+                        HStack {
+                            Button(saved.name) { preferences.current = saved.conditions; filters = false }
+                            Spacer()
+                            Button("編集") { editingSaved = saved.id; name = saved.name; preferences.current = saved.conditions }
+                            Button("削除", role: .destructive) { preferences.saved.removeAll { $0.id == saved.id }; if editingSaved == saved.id { editingSaved = nil; name = "" }; persist() }
+                        }
+                    }
+                }
+            }.navigationTitle("検索条件").toolbar { Button("完了") { filters = false } }
+        }
+    }
+    private func persist() {
+        do { try store.repository.saveLibrarySearch(preferences); failure = nil }
+        catch {
+            failure = "検索条件を保存できません: " + error.localizedDescription
+            if let persisted = try? store.repository.options().librarySearch { preferences = persisted }
+            else { preferences = LibrarySearchPreferences() }
+        }
     }
 }
