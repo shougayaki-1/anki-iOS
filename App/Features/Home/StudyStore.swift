@@ -62,6 +62,7 @@ final class StudyStore {
     @ObservationIgnored private var statisticsReader: StatisticsReader
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration = 0
+    @ObservationIgnored private var statisticsRevision = 0
     var notificationPermission = NotificationPermission.unknown
     var widgetFailure: String?
     @ObservationIgnored private let widgetSnapshots: WidgetSnapshotPublisher?
@@ -87,6 +88,9 @@ final class StudyStore {
     func reload() throws { try refreshStudy(metadata: true) }
 
     private func refreshStudy(metadata: Bool = false, changed: Bool = true) throws {
+        // Invalidate even if post-save display reads fail. A successful mutation
+        // must never reuse the material from before that mutation.
+        if changed { statisticsRevision += 1 }
         do {
             repository.calendar = .current
             let now = clock()
@@ -179,10 +183,11 @@ final class StudyStore {
         let calendar = repository.calendar
         let startHour = settings.dayStartHour
         let scope = statisticsScope
+        let revision = statisticsRevision
         statisticsTask = Task { [weak self] in
             do {
                 let report = try await reader.load(now: now, calendar: calendar,
-                                                   startHour: startHour, scope: scope)
+                                                   startHour: startHour, scope: scope, revision: revision)
                 guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
                 self?.statistics = report
                 self?.statisticsLoading = false
@@ -199,6 +204,10 @@ final class StudyStore {
         refreshStatistics()
     }
     func sceneChanged(active: Bool) {
+        if !active {
+            let reader = statisticsReader
+            Task { await reader.clearCache() }
+        }
         do {
             if let draft = try repository.session(), (draft.activeSince != nil) != (active && showingReview && draft.cardID != nil) {
                 try repository.setSessionActive(active && showingReview, now: clock())

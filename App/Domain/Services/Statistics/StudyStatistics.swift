@@ -129,14 +129,31 @@ struct StudyStatistics {
             cursor = studyDay.interval(containing: calendar.date(byAdding: .day, value: -1, to: cursor)!).start
         }
 
+        let report = Self(days: days, weeks: weeks, months: months, streak: streak,
+                          ratings: all.ratings, durationMs: all.durationMs,
+                          meanRetrievability: nil, overdueCount: 0,
+                          unattributedAnswers: unattributedAnswers)
+        return report.updatingCurrentCards(cards, now: now, selectedDeckIDs: selectedDeckIDs,
+                                           selectedTagIDs: selectedTagIDs, fallback: retrievabilities)
+    }
+
+    func updatingCurrentCards(_ cards: [StatisticCardState], now: Date,
+                              selectedDeckIDs: Set<UUID>?, selectedTagIDs: Set<UUID>,
+                              fallback: [Double] = []) -> Self {
+        func included(deckID: UUID?, tags: [UUID]) -> Bool {
+            if let selectedDeckIDs {
+                guard let deckID, selectedDeckIDs.contains(deckID) else { return false }
+            }
+            return selectedTagIDs.isSubset(of: Set(tags))
+        }
         let scopedCards = cards.filter { included(deckID: $0.deckID, tags: $0.tagIDs) && !$0.isSuspended }
-        let probabilities = (cards.isEmpty ? retrievabilities : scopedCards.compactMap(\.retrievability))
+        let probabilities = (cards.isEmpty ? fallback : scopedCards.compactMap(\.retrievability))
             .filter { $0.isFinite && (0...1).contains($0) }
         let mean = probabilities.isEmpty ? nil : probabilities.reduce(0, +) / Double(probabilities.count)
         let overdue = scopedCards.filter { !$0.isNew && $0.dueDate < now }.count
 
         return Self(days: days, weeks: weeks, months: months, streak: streak,
-                    ratings: all.ratings, durationMs: all.durationMs,
+                    ratings: ratings, durationMs: durationMs,
                     meanRetrievability: mean, overdueCount: overdue,
                     unattributedAnswers: unattributedAnswers)
     }

@@ -12,6 +12,117 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         return repo
     }
+    func testCachedStatisticsHistoryFutureLogsBackwardClockAndDayBoundary() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        try create(repo)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .easy, date: now)
+        try repo.transaction { try XCTUnwrap(repo.logs().first).reviewedAt = now.addingTimeInterval(60) }
+        let reader = StatisticsReader(container: container)
+        var calendar = repo.calendar
+        calendar.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        for delta in [0.0, 120, 0, 86400, -86400] {
+            let date = now.addingTimeInterval(delta)
+            let cached = try await reader.load(now: date, calendar: calendar, startHour: 4, scope: LearningScope(), revision: 1)
+            let uncached = try await StatisticsReader(container: container).load(now: date, calendar: calendar, startHour: 4, scope: LearningScope())
+            XCTAssertEqual(cached.days.map(\.date), uncached.days.map(\.date))
+            XCTAssertEqual(cached.days.map(\.answers), uncached.days.map(\.answers))
+            XCTAssertEqual(cached.ratings, uncached.ratings)
+            XCTAssertEqual(cached.streak, uncached.streak)
+            XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
+        }
+        for _ in 0..<8 {
+            _ = try await reader.load(now: now, calendar: calendar, startHour: 4, scope: LearningScope(tagIDs: [UUID()]), revision: 1)
+        }
+        let historyCount = await reader.cachedHistoryCount, cost = await reader.cachedCost
+        XCTAssertEqual(historyCount, 4)
+        XCTAssertLessThanOrEqual(cost, 16 * 1024 * 1024)
+    }
+    func testStatisticsStoreInvalidatesAfterGradeUndoAndFailedPostSaveProjection() async throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try create(store.repository); try create(store.repository)
+        try store.reload()
+        func report() async throws {
+            store.refreshStatistics()
+            for _ in 0..<200 {
+                if !store.statisticsLoading { return }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTFail("Statistics task did not finish")
+        }
+        try await report()
+        XCTAssertNil(store.statisticsError)
+        XCTAssertEqual(store.statistics?.days.first?.answers, 0)
+        store.start(.new); store.draft(revealed: true); store.grade(.good)
+        try await report()
+        XCTAssertEqual(store.statistics?.days.first?.answers, 1)
+        store.undo()
+        try await report()
+        XCTAssertEqual(store.statistics?.days.first?.answers, 0)
+        // Save succeeds, then queue projection fails. A cached report from the
+        // old revision must not hide the newly persisted invalid FSRS data.
+        let id = try XCTUnwrap(store.review?.card?.cardID)
+        XCTAssertFalse(store.perform {
+            try store.repository.transaction {
+                try XCTUnwrap(store.repository.card(id)).fsrsPayload = Data("invalid".utf8)
+            }
+        })
+        try await report()
+        XCTAssertNotNil(store.statisticsError)
+    }
+    func testStatisticsMaterialRevisionTimeScopeLimitsAndCancellation() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: root, now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", tagNames: ["Tag"]), now: now)
+        let tag = try XCTUnwrap(repo.tags().first?.id)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.easy, now: now)
+        let reader = StatisticsReader(container: container)
+        let cold = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 1)
+        let warm = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(deckID: root, tagIDs: [tag]), revision: 1)
+        XCTAssertEqual(cold.days.first?.answers, warm.days.first?.answers)
+        let reads = await reader.materialReads
+        XCTAssertEqual(reads, 1)
+        var calendar = repo.calendar
+        calendar.timeZone = TimeZone(secondsFromGMT: -8 * 3600)!
+        let future = now.addingTimeInterval(86400 * 3)
+        let cached = try await reader.load(now: future, calendar: calendar, startHour: 7, scope: LearningScope(), revision: 1)
+        let uncached = try await StatisticsReader(container: container).load(now: future, calendar: calendar, startHour: 7, scope: LearningScope())
+        XCTAssertEqual(cached.days.map(\.date), uncached.days.map(\.date))
+        XCTAssertEqual(cached.days.map(\.answers), uncached.days.map(\.answers))
+        XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
+        XCTAssertNotEqual(cached.meanRetrievability, cold.meanRetrievability)
+        try repo.undo(now: now)
+        let undone = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 2)
+        XCTAssertEqual(undone.days.first?.answers, 0)
+        XCTAssertNil(undone.meanRetrievability)
+        let afterUndoReads = await reader.materialReads
+        XCTAssertEqual(afterUndoReads, 2)
+        let bounded = StatisticsReader(container: container, maximumCacheCost: 0)
+        _ = try await bounded.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 1)
+        let cost = await bounded.cachedCost
+        XCTAssertEqual(cost, 0)
+        let expiring = StatisticsReader(container: container, cacheLifetime: .milliseconds(20))
+        _ = try await expiring.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 1)
+        try await Task.sleep(for: .milliseconds(80))
+        let expiredCost = await expiring.cachedCost
+        XCTAssertEqual(expiredCost, 0)
+        let task = Task {
+            try await reader.load(now: self.now, calendar: calendar, startHour: 4, scope: LearningScope(), revision: 2)
+        }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Cancelled report must not be published") }
+        catch is CancellationError { }
+        await reader.clearCache()
+        let clearedCost = await reader.cachedCost
+        XCTAssertEqual(clearedCost, 0)
+    }
     @discardableResult
     func create(_ repo: StudyRepository, kind: NoteKind = .basic, mode: ResponseMode = .mental) throws -> UUID {
         try repo.createNote(NoteInput(deckID: repo.decks()[0].id, kind: kind, question: "日本の首都は？",

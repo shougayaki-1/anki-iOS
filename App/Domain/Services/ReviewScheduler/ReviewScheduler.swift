@@ -86,6 +86,19 @@ struct ReviewScheduler {
         engine.getRetrievability(card: try decode(input), now: now).number
     }
 
+    // A value-only, read-only input for repeated statistical predictions. The
+    // upstream Card stays encapsulated here and is never a persistence model.
+    struct PredictionState {
+        fileprivate let card: Card
+        var isNew: Bool { card.state.stringValue == "new" }
+    }
+    func predictionState(_ input: SchedulerSnapshot) throws -> PredictionState {
+        PredictionState(card: try decode(input))
+    }
+    func retrievability(_ input: PredictionState, now: Date) -> Double {
+        engine.getRetrievability(card: input.card, now: now).number
+    }
+
     private func snapshot(_ card: Card) throws -> SchedulerSnapshot {
         SchedulerSnapshot(schemaVersion: 1, algorithmVersion: Self.algorithmVersion,
                           cardData: try JSONEncoder().encode(card))

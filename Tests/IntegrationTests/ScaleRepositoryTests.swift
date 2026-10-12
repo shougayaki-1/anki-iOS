@@ -4,6 +4,71 @@ import SwiftData
 
 @MainActor
 final class ScaleRepositoryTests: XCTestCase {
+    func testStatisticsMaterialCacheThreeThousandCardsTenThousandLogs() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, scheduler = try ReviewScheduler()
+        let before = try JSONEncoder().encode(scheduler.newCard(now: now))
+        let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
+        let after = try JSONEncoder().encode(transition.after)
+        var cards: [StudyCard] = []
+        try repo.transaction {
+            for index in 0..<1000 {
+                let input = NoteInput(deckID: deck, kind: .cloze, question: "Q \(index) {{c1::one}} {{c2::two}} {{c3::three}}", answer: "")
+                let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: "", explanation: "")), now: now)
+                repo.context.insert(note)
+                for variant in 1...3 {
+                    let card = StudyCard(noteID: note.id, variantKey: "cloze:\(variant)", payload: after, now: now)
+                    card.dueDate = try scheduler.summary(transition.after).dueDate
+                    repo.context.insert(card); cards.append(card)
+                }
+            }
+            for index in 0..<10000 {
+                let log = StudyReviewLog(card: cards[index % cards.count], transition: transition, before: before, after: after,
+                                         mode: .mental, durationMs: 1000, wasNew: index < 3000, sequence: index + 1)
+                log.reviewedAt = now.addingTimeInterval(-Double(index) * 3600)
+                repo.context.insert(log)
+            }
+        }
+        let reader = StatisticsReader(container: container)
+        for iteration in 0..<3 {
+            let start = Date()
+            let report = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: iteration)
+            let coldMs = Date().timeIntervalSince(start) * 1000
+            let warmStart = Date()
+            let warm = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(deckID: deck), revision: iteration)
+            let warmMs = Date().timeIntervalSince(warmStart) * 1000
+            let revisitStart = Date()
+            let revisit = try await reader.load(now: now.addingTimeInterval(60), calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: iteration)
+            let revisitMs = Date().timeIntervalSince(revisitStart) * 1000
+            XCTAssertEqual(revisit.days.map(\.answers), report.days.map(\.answers))
+            XCTAssertEqual(warm.days.map(\.answers), report.days.map(\.answers))
+            XCTAssertEqual(warm.weeks.map(\.answers), report.weeks.map(\.answers))
+            XCTAssertEqual(warm.months.map(\.answers), report.months.map(\.answers))
+            XCTAssertEqual(warm.meanRetrievability, report.meanRetrievability)
+            XCTAssertEqual(warm.ratings, report.ratings)
+            XCTAssertEqual(warm.durationMs, report.durationMs)
+            XCTAssertEqual(warm.streak, report.streak)
+            XCTAssertEqual(warm.overdueCount, report.overdueCount)
+            XCTAssertEqual(warm.unattributedAnswers, report.unattributedAnswers)
+            for (actual, expected) in [(warm.days, report.days), (warm.weeks, report.weeks), (warm.months, report.months)] {
+                XCTAssertEqual(actual.map(\.date), expected.map(\.date))
+                XCTAssertEqual(actual.map(\.cards), expected.map(\.cards))
+                XCTAssertEqual(actual.map(\.newAnswers), expected.map(\.newAnswers))
+                XCTAssertEqual(actual.map(\.reviewAnswers), expected.map(\.reviewAnswers))
+                XCTAssertEqual(actual.map(\.ratings), expected.map(\.ratings))
+                XCTAssertEqual(actual.map(\.durationMs), expected.map(\.durationMs))
+            }
+            let reads = await reader.materialReads, decodes = await reader.fsrsDecodes, cost = await reader.cachedCost
+            XCTAssertEqual(reads, iteration + 1)
+            XCTAssertEqual(decodes, (iteration + 1) * 3000)
+            let aggregations = await reader.historyAggregations
+            XCTAssertEqual(aggregations, (iteration + 1) * 2)
+            print("STATISTICS_CACHE iteration=\(iteration) cold_ms=\(coldMs) new_scope_ms=\(warmMs) same_scope_revisit_ms=\(revisitMs) material_reads=\(reads) fsrs_decodes=\(decodes) history_aggregations=\(aggregations) cost=\(cost)")
+        }
+    }
     func testThousandNotesThreeThousandCardsTenThousandLogsAndBackup() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
