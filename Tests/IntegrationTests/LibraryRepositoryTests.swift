@@ -886,3 +886,26 @@ extension LibraryRepositoryTests {
     }
 
 }
+
+
+extension LibraryRepositoryTests {
+    func testOperationCompletionUsesReceiptCountsAndKeepsWarningsSeparate() {
+        let target = UUID()
+        var completion = LibraryOperationCompletion(operation: "移動", notes: 2, cards: 5,
+            targetName: "移動先", destinationID: target)
+        XCTAssertTrue(completion.isSuccess)
+        XCTAssertEqual(completion.destinationID, target)
+        XCTAssertTrue(completion.summary.contains("2ノート・5枚"))
+        XCTAssertTrue(completion.summary.contains("移動先"))
+        completion.warning = "画面更新に失敗"
+        XCTAssertFalse(completion.isSuccess)
+        XCTAssertTrue(completion.hasChanges)
+        XCTAssertTrue(completion.title.contains("保存しました"))
+        let zero = LibraryOperationCompletion(operation: "削除", notes: 0, cards: 0,
+            targetName: "元デッキ", destinationID: nil)
+        XCTAssertFalse(zero.hasChanges)
+        XCTAssertFalse(zero.isSuccess)
+        XCTAssertEqual(zero.title, "変更対象はありません")
+        XCTAssertNil(zero.destinationID)
+    }
+}

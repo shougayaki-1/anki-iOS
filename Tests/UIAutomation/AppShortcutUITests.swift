@@ -9,6 +9,21 @@ final class AppShortcutUITests: XCTestCase {
         return app
     }
 
+    func testEmptyShortcutDeckAddsIntoSelectedDeck() {
+        let app = launch(["-study-test-shortcut", "deck:first"])
+        let path = app.staticTexts["shortcutDeckPath"]
+        XCTAssertTrue(path.waitForExistence(timeout: 10))
+        let name = path.label
+        let add = app.buttons["emptyDeckAdd"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10)); add.tap()
+        let picker = app.buttons["noteDeckPicker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5)); XCTAssertTrue(picker.label.contains(name))
+        app.buttons["closeEditor"].tap()
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+        app.buttons["ライブラリに戻る"].tap()
+        XCTAssertTrue(app.buttons["emptyLibraryAdd"].waitForExistence(timeout: 5))
+    }
+
     func testProgressOpensExistingStatisticsWithoutStartingStudy() {
         let app = launch(["-study-test-shortcut", "progress"])
         XCTAssertTrue(app.tabBars.buttons["記録"].isSelected)

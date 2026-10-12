@@ -7,6 +7,7 @@ import Observation
 struct AnkiIOSApp: App {
     private let notificationDelegate = StudyNotificationDelegate()
     init() {
+        PronunciationPractice.cleanAbandonedRecordings()
         UNUserNotificationCenter.current().delegate = notificationDelegate
         StudyAppShortcuts.updateAppShortcutParameters()
     }

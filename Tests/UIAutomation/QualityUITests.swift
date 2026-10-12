@@ -1,6 +1,40 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testEmptyLibraryStartsAddAndImportDirectly() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        let add = app.buttons["emptyLibraryAdd"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10)); add.tap()
+        XCTAssertTrue(app.buttons["closeEditor"].waitForExistence(timeout: 5))
+        app.buttons["closeEditor"].tap()
+        let importing = app.buttons["emptyLibraryImport"]
+        XCTAssertTrue(importing.waitForExistence(timeout: 5)); importing.tap()
+        XCTAssertTrue(app.buttons["closeImport"].waitForExistence(timeout: 5))
+        app.buttons["closeImport"].tap()
+        XCTAssertTrue(add.waitForExistence(timeout: 5))
+    }
+
+    func testNoLibrarySearchResultsCanClearConditions() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-hints"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        app.swipeDown()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("No matching keyword\n")
+        let clear = app.buttons["emptyLibraryClearSearch"]
+        XCTAssertTrue(clear.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["emptyLibraryImport"].exists)
+        clear.tap()
+        XCTAssertFalse(clear.exists)
+        XCTAssertFalse(app.buttons["emptyLibraryAdd"].exists)
+    }
+
     func testContextualTagsSearchCountsAndKeepSelectionOutsideDeck() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-tag-filters"]

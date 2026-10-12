@@ -1,13 +1,19 @@
 import SwiftUI
+import PencilKit
 
 struct ReviewView: View {
     @Bindable var store: StudyStore
+    @State private var whiteboardPresented = false
+    @State private var whiteboardDrawing = PKDrawing()
     @FocusState private var typingFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var speechPlayer = StudySpeechPlayer()
+    @StateObject private var pronunciation = PronunciationPractice()
     @State private var lastSpeechEvent: SpeechPresentationKey?
+    @State private var editingCard: NoteItem?
+    @State private var confirmingEdit = false
     @State private var autoSpeechPaused = false
     @State private var swipeGate = ReviewSwipeGate()
     @State private var swipePadFrame = CGRect.zero
@@ -24,6 +30,45 @@ struct ReviewView: View {
 
     var body: some View {
         NavigationStack {
+            reviewContent
+            .sheet(isPresented: $whiteboardPresented) { whiteboardContent }
+            .sheet(item: $editingCard, onDismiss: { pronunciation.discard(); lastSpeechEvent = nil }) { item in
+                NoteEditorView(store: store, item: item, duringReview: true)
+            }
+            .confirmationDialog("編集画面では解答も表示されます", isPresented: $confirmingEdit, titleVisibility: .visible) {
+                Button("解答を確認して編集") { openEditor() }
+            } message: { Text("編集を開くと回答表示済みとして扱います。保存後は同じカードを再提示します。") }
+            .navigationTitle(store.review?.mode.title ?? "学習")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { reviewToolbar }
+            .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
+                Button("閉じる", role: .cancel) { store.failure = nil }
+            } message: { Text(store.failure ?? "") }
+            .task(id: store.review?.card == nil ? store.review?.nextShortDue : nil) {
+                guard store.review?.card == nil, let due = store.review?.nextShortDue else { return }
+                let delay = max(0, due.timeIntervalSince(store.clock()))
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                guard !Task.isCancelled else { return }
+                store.refreshQueue()
+            }
+        }.interactiveDismissDisabled()
+    }
+
+    @ViewBuilder private var whiteboardContent: some View {
+        if let review = store.review, let item = review.card {
+            ReviewWhiteboard(drawing: $whiteboardDrawing, answerRevealed: review.answerRevealed,
+                             canReveal: imageAvailable(item), onReveal: {
+                speechPlayer.stop()
+                store.draft(revealed: true)
+            }) {
+                questionContent(item)
+                reviewImage(review, item: item)
+                if review.answerRevealed { Divider(); answerContent(review, item: item) }
+            }
+        }
+    }
+
+    private var reviewContent: some View {
             GeometryReader { geometry in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
@@ -35,6 +80,7 @@ struct ReviewView: View {
                             }
                             questionContent(item)
                             speechControls(review, item: item)
+                            pronunciationControls
                             reviewImage(review, item: item)
                             if !review.answerRevealed {
                                 StudyHintView(hint: item.content.hint).id(item.cardID)
@@ -118,6 +164,7 @@ struct ReviewView: View {
                             store.draft(revealed: true)
                         },
                         onGrade: { grade in
+                            pronunciation.discard()
                             speechPlayer.stop()
                             typingFocused = false
                             store.grade(grade)
@@ -152,32 +199,77 @@ struct ReviewView: View {
             .onAppear { speechEventChanged(speechEvent) }
             .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
             .onChange(of: scenePhase) { _, phase in
-                if phase != .active { speechPlayer.stop() }
+                if phase != .active {
+                    speechPlayer.stop()
+                    if phase == .background { pronunciation.discard() }
+                    else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
+                }
                 else { speechEventChanged(speechEvent) }
+            }
+            .onChange(of: store.showingReview) { _, showing in
+                if !showing { clearWhiteboard(); pronunciation.discard() }
             }
             .onChange(of: voiceOver) { _, enabled in if enabled { speechPlayer.stop() } }
             .onChange(of: store.review?.answerRevealed) { _, revealed in
                 swipeGate.invalidate()
                 if revealed == true { typingFocused = false; readingFocus = .answer }
             }
-            .onChange(of: store.review?.card?.cardID) { _, _ in swipeGate.invalidate(); readingFocus = .question }
+            .onChange(of: store.review?.card?.cardID) { _, _ in
+                clearWhiteboard()
+                swipeGate.invalidate(); readingFocus = .question
+            }
             .onDisappear {
                 swipeGate.cancel()
                 speechPlayer.stop()
+                pronunciation.discard()
                 lastSpeechEvent = nil
                 autoSpeechPaused = false
             }
             .onChange(of: store.review?.sessionProgress?.answered) { old, new in
+                if old != new { clearWhiteboard(); pronunciation.discard() }
                 if old != new, let progress = store.review?.sessionProgress, progress.isComplete {
                     UIAccessibility.post(notification: .announcement, argument: "今回の\(progress.limit)問を完了しました。")
                 }
             }
-            .navigationTitle(store.review?.mode.title ?? "学習")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
+    }
+
+    private var speechEvent: SpeechPresentationKey? {
+        guard let item = store.review?.card else { return nil }
+        return SpeechPresentationKey(cardID: item.cardID, revealed: store.review?.answerRevealed == true)
+    }
+
+    @ToolbarContentBuilder private var reviewToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                guard editingCard == nil, !confirmingEdit else { return }
+                typingFocused = false
+                speechPlayer.stop()
+                swipeGate.cancel()
+                if pronunciation.phase == .requestingPermission { pronunciation.discard() }
+                else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
+                whiteboardPresented = true
+            } label: { Image(systemName: "pencil.tip.crop.circle") }
+            .disabled(store.review?.card == nil || editingCard != nil || confirmingEdit)
+            .accessibilityLabel("手書きを開く")
+            .accessibilityIdentifier("openWhiteboard")
+        }
+
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("カードを編集", systemImage: "pencil") {
+                            speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
+                            if store.review?.answerRevealed == true { openEditor() }
+                            else { confirmingEdit = true }
+                        }.disabled(store.review?.card == nil || whiteboardPresented || editingCard != nil)
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("カードの操作")
+                    .accessibilityIdentifier("reviewCardActions")
+                }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(store.review?.card == nil ? "閉じる" : "中断") {
                         speechPlayer.stop()
+                        pronunciation.discard()
+                        clearWhiteboard()
                         store.pause()
                     }
                         .keyboardShortcut(.escape, modifiers: [])
@@ -185,7 +277,7 @@ struct ReviewView: View {
                         .accessibilityHint("学習を中断し、セッションを保存してホームへ戻ります")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Undo") { speechPlayer.stop(); store.undo() }
+                    Button("Undo") { speechPlayer.stop(); pronunciation.discard(); clearWhiteboard(); store.undo() }
                         .keyboardShortcut("z", modifiers: .command)
                         .disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
                         .accessibilityLabel("直前の評価を取り消す")
@@ -201,30 +293,70 @@ struct ReviewView: View {
                     .accessibilityIdentifier("toggleAutoSpeech")
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { typingFocused = false } }
-            }
-            .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
-                Button("閉じる", role: .cancel) { store.failure = nil }
-            } message: { Text(store.failure ?? "") }
-            .task(id: store.review?.card == nil ? store.review?.nextShortDue : nil) {
-                guard store.review?.card == nil, let due = store.review?.nextShortDue else { return }
-                let delay = max(0, due.timeIntervalSince(store.clock()))
-                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-                guard !Task.isCancelled else { return }
-                store.refreshQueue()
-            }
-        }.interactiveDismissDisabled()
     }
 
-    private var speechEvent: SpeechPresentationKey? {
-        guard let item = store.review?.card else { return nil }
-        return SpeechPresentationKey(cardID: item.cardID, revealed: store.review?.answerRevealed == true)
+    private var pronunciationControls: some View {
+        DisclosureGroup("発音を練習") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("録音は一時的です。カード移動・中断で削除します（最大2分）。")
+                    .font(.caption).foregroundStyle(.secondary)
+                if pronunciation.phase == .recording, let date = pronunciation.startedAt {
+                    HStack {
+                        Label("録音中", systemImage: "mic.fill").foregroundStyle(.red)
+                        Text(date, style: .timer).monospacedDigit()
+                        Button("録音を停止") { pronunciation.stopRecording() }
+                    }
+                } else {
+                    Button(pronunciation.phase == .requestingPermission ? "マイクを確認中…" : "録音を開始") {
+                        speechPlayer.stop()
+                        Task {
+                            guard editingCard == nil, !confirmingEdit, !whiteboardPresented, scenePhase == .active else { return }
+                            await pronunciation.start()
+                        }
+                    }.disabled(pronunciation.phase == .requestingPermission)
+                    if pronunciation.phase == .ready || pronunciation.phase == .playing {
+                        Button(pronunciation.phase == .playing ? "自分の音声を停止" : "自分の音声を再生") {
+                            speechPlayer.stop()
+                            if pronunciation.phase == .playing { pronunciation.stopPlayback() }
+                            else { pronunciation.play() }
+                        }
+                        Button("録音を削除") { pronunciation.discard() }
+                    }
+                }
+                if let notice = pronunciation.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
+                if pronunciation.permissionDenied {
+                    Button("設定を開く") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
+                    }
+                }
+            }.buttonStyle(.borderless)
+        }.accessibilityIdentifier("pronunciationPractice")
     }
 
-    /// Invoked only for a visible card-side transition, never for ordinary SwiftUI redraws.
+    private func clearWhiteboard() {
+        whiteboardPresented = false
+        whiteboardDrawing = PKDrawing()
+    }
+
+    private func openEditor() {
+        guard editingCard == nil, !whiteboardPresented, let item = store.review?.card else { return }
+        clearWhiteboard()
+        pronunciation.discard()
+        // The editor exposes the answer even if the user later cancels.
+        editingCard = item
+        store.draft(revealed: true)
+        guard store.failure == nil else { editingCard = nil; return }
+        speechPlayer.stop()
+    }
+
     private func speechEventChanged(_ event: SpeechPresentationKey?) {
+        guard editingCard == nil, !confirmingEdit else { speechPlayer.stop(); return }
         guard event != lastSpeechEvent else { return }
         speechPlayer.stop()
+        if event?.cardID != lastSpeechEvent?.cardID { pronunciation.discard() }
+        else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
         guard let event else { lastSpeechEvent = nil; return }
+        guard !whiteboardPresented else { return }
         guard scenePhase == .active else { SpeechDiagnostics.record("autoplaySkipped reason=inactive"); return }
         lastSpeechEvent = event
         guard let item = store.review?.card, item.cardID == event.cardID else { return }
@@ -242,6 +374,9 @@ struct ReviewView: View {
     }
 
     private func playPreferredAudio(_ side: SpeechSide, item: NoteItem) {
+        guard editingCard == nil, !confirmingEdit, !whiteboardPresented else { return }
+        guard pronunciation.phase != .recording, pronunciation.phase != .requestingPermission else { return }
+        pronunciation.stopPlayback()
         guard side == .question || store.review?.answerRevealed == true else { return }
         if let id = item.content.audioID(for: side) {
             if let url = try? store.repository.assetURL(id: id) { speechPlayer.playAttached(url: url) }
@@ -250,6 +385,9 @@ struct ReviewView: View {
     }
 
     private func playSpeech(_ side: SpeechSide, item: NoteItem) {
+        guard editingCard == nil, !confirmingEdit, !whiteboardPresented else { return }
+        guard pronunciation.phase != .recording, pronunciation.phase != .requestingPermission else { return }
+        pronunciation.stopPlayback()
         // An answer can be read manually only after it has been revealed.
         guard side == .question || store.review?.answerRevealed == true else {
             SpeechDiagnostics.record("requestRejected reason=unrevealedAnswer"); return
@@ -299,6 +437,7 @@ struct ReviewView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
             .accessibilityIdentifier("speakQuestion")
+            .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if hasAnswer {
             Button { playPreferredAudio(.answer, item: item) } label: {
@@ -306,6 +445,7 @@ struct ReviewView: View {
                     .fixedSize(horizontal: true, vertical: false)
             }
             .accessibilityIdentifier("speakAnswer")
+            .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if (item.content.questionAudioID != nil || (store.review?.answerRevealed == true && item.content.answerAudioID != nil)) &&
            (SpeechReadout.text(kind: item.kind, displayed: item.content, side: .question) != nil ||
@@ -319,6 +459,7 @@ struct ReviewView: View {
                     Button("解答の英文を読む") { playSpeech(.answer, item: item) }.accessibilityIdentifier("ttsAnswer")
                 }
             }.accessibilityIdentifier("chooseTTS")
+            .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if speechPlayer.playing {
             Button { speechPlayer.stop() } label: {
@@ -416,7 +557,7 @@ struct ReviewView: View {
                 typingFocused = false
                 switch action {
                 case .reveal: store.draft(revealed: true)
-                case .grade(let grade): store.grade(grade)
+                case .grade(let grade): pronunciation.discard(); store.grade(grade)
                 }
             })
     }
@@ -657,5 +798,98 @@ private struct ReviewEmptyStateView: View {
             }
         }.frame(maxWidth: .infinity)
             .multilineTextAlignment(.center)
+    }
+}
+
+
+/// Session-only ink; never passed to StudyStore or persistence.
+private struct ReviewWhiteboard<Content: View>: View {
+    @Binding var drawing: PKDrawing
+    let answerRevealed: Bool
+    let canReveal: Bool
+    let onReveal: () -> Void
+    @ViewBuilder let content: () -> Content
+    @Environment(\.dismiss) private var dismiss
+    @State private var erasing = false
+    @State private var confirmingClear = false
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12, content: content)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding()
+                }
+                .frame(maxHeight: 240)
+                HStack {
+                    Picker("描画ツール", selection: $erasing) {
+                        Text("ペン").tag(false)
+                        Text("消しゴム").tag(true)
+                    }.pickerStyle(.segmented)
+                    Button("全消去", role: .destructive) { confirmingClear = true }
+                        .disabled(drawing.strokes.isEmpty)
+                }.padding(.horizontal)
+                ReviewInkCanvas(drawing: $drawing, erasing: erasing)
+                    .accessibilityLabel("指で描く手書きキャンバス")
+                    .accessibilityIdentifier("whiteboardCanvas")
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.3)))
+                    .padding(.horizontal)
+                Text("筆跡はこのカードのみ。評価・Undo・中断で消去されます。")
+                    .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                if !answerRevealed {
+                    Button("答えを見る", action: onReveal)
+                        .buttonStyle(.borderedProminent).disabled(!canReveal)
+                        .accessibilityIdentifier("whiteboardRevealAnswer")
+                }
+            }.padding(.bottom)
+            .navigationTitle("手書き").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("閉じる") { dismiss() } }
+            }
+            .confirmationDialog("筆跡をすべて消去しますか？", isPresented: $confirmingClear, titleVisibility: .visible) {
+                Button("全消去", role: .destructive) { drawing = PKDrawing() }
+                Button("キャンセル", role: .cancel) { }
+            }
+        }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.visible)
+    }
+}
+
+private struct ReviewInkCanvas: UIViewRepresentable {
+    @Binding var drawing: PKDrawing
+    let erasing: Bool
+
+    func makeCoordinator() -> Coordinator { Coordinator(drawing: $drawing) }
+
+    func makeUIView(context: Context) -> PKCanvasView {
+        let canvas = PKCanvasView()
+        canvas.drawingPolicy = .anyInput
+        canvas.isScrollEnabled = false
+        canvas.backgroundColor = .secondarySystemBackground
+        canvas.delegate = context.coordinator
+        canvas.drawing = drawing
+        return canvas
+    }
+
+    func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        context.coordinator.drawing = $drawing
+        canvas.tool = erasing ? PKEraserTool(.vector) : PKInkingTool(.pen, color: .label, width: 3)
+        if canvas.drawing != drawing { canvas.drawing = drawing }
+    }
+
+    static func dismantleUIView(_ canvas: PKCanvasView, coordinator: Coordinator) {
+        canvas.delegate = nil
+    }
+
+    final class Coordinator: NSObject, PKCanvasViewDelegate {
+        var drawing: Binding<PKDrawing>
+        init(drawing: Binding<PKDrawing>) { self.drawing = drawing }
+        func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
+            if drawing.wrappedValue != canvasView.drawing {
+                drawing.wrappedValue = canvasView.drawing
+            }
+        }
     }
 }

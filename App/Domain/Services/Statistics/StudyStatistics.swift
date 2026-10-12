@@ -176,7 +176,11 @@ struct WeakPracticeSession: Identifiable {
     let cards: [NoteItem]
     private(set) var index = 0
     private(set) var revealed = false
+    enum Phase { case empty, practicing, completed }
+    var phase: Phase { cards.isEmpty ? .empty : (index == cards.count ? .completed : .practicing) }
+    var completedCount: Int { index }
     var current: NoteItem? { cards.indices.contains(index) ? cards[index] : nil }
+    mutating func restart() { index = 0; revealed = false }
     mutating func reveal() { if current != nil { revealed = true } }
     mutating func next() { guard current != nil, revealed else { return }; index += 1; revealed = false }
     mutating func previous() { guard index > 0 else { return }; index -= 1; revealed = false }

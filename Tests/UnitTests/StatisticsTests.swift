@@ -2,6 +2,16 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testEmptyWeakPracticeNeverReportsCompletion() {
+        var session = WeakPracticeSession(cards: [])
+        XCTAssertEqual(session.phase, .empty)
+        XCTAssertEqual(session.completedCount, 0)
+        session.reveal(); session.next(); session.previous(); session.restart()
+        XCTAssertEqual(session.phase, .empty)
+        XCTAssertNil(session.current)
+        XCTAssertFalse(session.revealed)
+    }
+
     func testWeakEvidenceThresholdsAndNoFutureOrInsufficientHistory() {
         let now = Date(timeIntervalSince1970: 1000), id = UUID()
         func log(_ grade: ReviewGrade, _ offset: Double = 0) -> StatisticLog {

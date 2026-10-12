@@ -1,9 +1,12 @@
 import SwiftUI
+import UIKit
 
 struct LibraryView: View {
     @Bindable var store: StudyStore
     @Binding var shortcutDeck: ShortcutDeckDestination?
     var deckFilter: UUID? = nil
+    @State private var clearedDeckFilter = false
+    private var activeDeckFilter: UUID? { clearedDeckFilter ? nil : deckFilter }
     @State private var adding = false
     @State private var ocr = false
     @State private var importing = false
@@ -29,6 +32,40 @@ struct LibraryView: View {
         _shortcutDeck = shortcutDeck
         self.deckFilter = deckFilter
         _savedExpansion = AppStorage(wrappedValue: "", "libraryExpandedDeckIDs.\(store.storageLocation.canonicalStore.lastPathComponent)")
+    }
+
+    private var hasSearch: Bool { !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+    private var emptyLibrary: some View {
+        let isFirstCard = (index?.cardCount ?? 0) == 0 && !hasSearch
+        return ContentUnavailableView {
+            Label(isFirstCard ? "カードがありません" : (hasSearch ? "検索結果がありません" : "このデッキにはカードがありません"),
+                  systemImage: hasSearch && !isFirstCard ? "magnifyingglass" : "rectangle.on.rectangle")
+        } description: {
+            Text(isFirstCard ? "問題と解答を登録して、学習を始めましょう。" : (hasSearch ? "問題・解答・デッキ・タグの検索条件を変えてください。" : "このデッキと下位デッキにカードを追加できます。"))
+        } actions: {
+            if isFirstCard || !hasSearch {
+                Button(activeDeckFilter == nil ? "カードを追加" : "このデッキにカードを追加") {
+                    selection.removeAll(); editMode = .inactive; adding = true
+                }
+                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+                .accessibilityIdentifier("emptyLibraryAdd")
+                if isFirstCard {
+                    Button("一括登録") { selection.removeAll(); editMode = .inactive; importing = true }
+                        .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryImport")
+                }
+            }
+            if hasSearch {
+                Button("検索条件をクリア") { search = ""; selection.removeAll(); editMode = .inactive }
+                    .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryClearSearch")
+            }
+            if activeDeckFilter != nil {
+                Button("デッキの絞り込みを解除") {
+                    clearedDeckFilter = true; selection.removeAll(); editMode = .inactive
+                }
+                .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryClearDeck")
+            }
+        }
     }
 
     private struct Request: Equatable {
@@ -67,8 +104,7 @@ struct LibraryView: View {
                 }
                 if loading { ProgressView("カードを読み込み中") }
                 if results.cardCount == 0 && !loading && libraryFailure == nil {
-                    ContentUnavailableView(search.isEmpty ? "カードがありません" : "検索結果がありません", systemImage: search.isEmpty ? "rectangle.on.rectangle" : "magnifyingglass",
-                                           description: Text(search.isEmpty ? "＋からカードを追加できます。写真の文字認識やファイルの一括登録も使えます。" : "問題・解答・デッキ・タグのキーワードを変えて検索してください。"))
+                    emptyLibrary
                 }
                 ForEach(tree?.rows(expanded: LibraryTreeProjection.expandedIDs(savedExpansion)) ?? []) { row in
                     if let deck = row.deck {
@@ -119,14 +155,14 @@ struct LibraryView: View {
                     }
                 }
             }
-            .task(id: Request(revision: store.dataRevision, query: search, deck: deckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
+            .task(id: Request(revision: store.dataRevision, query: search, deck: activeDeckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
                 guard store.selectedTab == 1 else { return }
                 let revision = store.dataRevision, query = search
                 loading = true
                 defer { if !Task.isCancelled { loading = false } }
                 do {
                     if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
-                    let allowed = try deckFilter.map { try store.repository.descendants(of: $0) }
+                    let allowed = try activeDeckFilter.map { try store.repository.descendants(of: $0) }
                     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
                     let metadata = try await store.libraryReader.load(revision: revision)
                     let found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
@@ -146,7 +182,7 @@ struct LibraryView: View {
                 catch { if !Task.isCancelled { libraryFailure = error.localizedDescription } }
             }
             .environment(\.editMode, $editMode)
-            .onChange(of: deckFilter) { _, _ in selection.removeAll(); editMode = .inactive }
+            .onChange(of: deckFilter) { _, _ in clearedDeckFilter = false; selection.removeAll(); editMode = .inactive }
             .onChange(of: search) { _, _ in selection.removeAll() }
             .onChange(of: editMode) { _, mode in if !mode.isEditing { selection.removeAll() } }
             .safeAreaInset(edge: .bottom) {
@@ -166,7 +202,7 @@ struct LibraryView: View {
                 }
             }
             .searchable(text: $search, prompt: "問題・解答・デッキ・タグを検索")
-            .navigationTitle(editMode.isEditing ? "カードを選択" : (deckFilter.flatMap { id in store.decks.first { $0.id == id }?.shortName } ?? "ライブラリ"))
+            .navigationTitle(editMode.isEditing ? "カードを選択" : (activeDeckFilter.flatMap { id in store.decks.first { $0.id == id }?.shortName } ?? "ライブラリ"))
             .onDisappear { selection.removeAll(); editMode = .inactive }
             .navigationDestination(item: $shortcutDeck) { destination in
                 ShortcutDeckContentsView(store: store, deckID: destination.id)
@@ -208,7 +244,7 @@ struct LibraryView: View {
                     bulkEditing = false
                 }
             }
-            .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: deckFilter) }
+            .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: activeDeckFilter) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
             .sheet(isPresented: $importing) { ImportView(store: store) }
             .sheet(isPresented: $ocr) { OCRImportView(store: store) }
@@ -330,7 +366,7 @@ private struct BulkManagementView: View {
     @State private var tagText = ""
     @State private var removedTags = Set<UUID>()
     @State private var preview: BulkEditPreview?
-    @State private var result: String?
+    @State private var result: LibraryOperationCompletion?
     @State private var failure: String?
     @State private var confirmDelete = false
     private var action: BulkEditAction? {
@@ -347,8 +383,8 @@ private struct BulkManagementView: View {
         NavigationStack {
             Form {
                 if let result {
-                    Section("結果") { Text(result).accessibilityIdentifier("bulkResult") }
-                    Button("閉じる") { close(true) }.accessibilityIdentifier("closeBulkResult")
+                    LibraryOperationCompletionSection(store: store, result: result, identifier: "bulkResult")
+                    Button("ライブラリへ戻る") { close(true) }.accessibilityIdentifier("closeBulkResult")
                 } else {
                     Section {
                         Text("選択カード: \(selection.count)枚")
@@ -420,12 +456,17 @@ private struct BulkManagementView: View {
         catch { preview = nil; failure = error.localizedDescription }
     }
     private func commit(_ value: BulkEditPreview) {
+        guard result == nil else { return }
+        let targetName = operation == .move ? store.decks.first(where: { $0.id == destination })?.name : nil
         var receipt: BulkEditResult?
         let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
         if let receipt {
             didCommit()
-            result = "変更済み: \(receipt.changedNotes)ノート・\(receipt.changedCards)枚"
-            if !refreshed { result! += "。表示を更新できません。閉じてアプリを開き直してください。" }
+            result = LibraryOperationCompletion(operation: operation.title, notes: receipt.changedNotes,
+                cards: receipt.changedCards, targetName: targetName,
+                destinationID: operation == .move ? destination : nil,
+                warning: refreshed ? nil : "変更は保存済みですが、画面を更新できません。アプリを開き直してください。再実行は不要です。")
+            if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
             preview = nil
         } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
         store.failure = nil
@@ -484,8 +525,15 @@ private struct WeakCardListView: View {
         .onChange(of: scope) { _, _ in refresh() }
         .onChange(of: days) { _, _ in refresh() }
         .sheet(item: $practice, onDismiss: { refresh() }) { session in
-            WeakPracticeView(store: store, initial: session)
+            WeakPracticeView(store: store, initial: session, conditions: practiceConditions)
         }
+    }
+    private var practiceConditions: String {
+        let deck = scope.deckID.flatMap { id in store.decks.first { $0.id == id }?.name } ?? "すべてのデッキ"
+        let period = days == 0 ? "全期間" : "直近\(days)日"
+        let tags = scope.tagIDs.compactMap { id in store.tags.first { $0.id == id }?.name }
+        let tagDescription = tags.isEmpty ? "タグ指定なし" : "タグ：" + tags.joined(separator: "、") + "（すべて含む）"
+        return "\(deck)（子孫を含む）・\(period)・\(tagDescription)"
     }
     private func refresh() {
         do { rows = try store.repository.weakCards(scope: scope, days: days == 0 ? nil : days, now: store.clock()); failure = nil }
@@ -497,7 +545,9 @@ private struct WeakPracticeView: View {
     @Bindable var store: StudyStore
     @Environment(\.dismiss) private var dismiss
     @State private var session: WeakPracticeSession
-    init(store: StudyStore, initial: WeakPracticeSession) {
+    let conditions: String
+    init(store: StudyStore, initial: WeakPracticeSession, conditions: String) {
+        self.conditions = conditions
         self.store = store; _session = State(initialValue: initial)
     }
     var body: some View {
@@ -519,20 +569,80 @@ private struct WeakPracticeView: View {
                         if session.revealed {
                             Text(item.content.answer).accessibilityIdentifier("weakPracticeAnswer")
                             if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
-                            Button("次のカード") { session.next() }.accessibilityIdentifier("nextWeakPractice")
+                            Button("次のカード") {
+                                session.next()
+                                if session.phase == .completed { store.haptics.play(.reveal, mode: store.settings.hapticsMode) }
+                            }.accessibilityIdentifier("nextWeakPractice")
                         } else {
                             StudyHintView(hint: item.content.hint).id(item.cardID)
                             Button("答えを表示") { session.reveal() }.accessibilityIdentifier("revealWeakPractice")
                         }
                         if session.index > 0 { Button("前のカード") { session.previous() } }
+                    } else if session.phase == .completed {
+                        VStack(spacing: 24) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 68)).foregroundStyle(.green).accessibilityHidden(true)
+                            Text("重点練習が完了しました").font(.title2.bold())
+                                .accessibilityIdentifier("weakPracticeCompleted")
+                            Text("練習したカード：\(session.completedCount)枚")
+                                .accessibilityIdentifier("weakPracticeCompletedCount")
+                            Text(conditions).font(.footnote).foregroundStyle(.secondary)
+                            Text("練習のみです。FSRS・回答履歴・復習予定は変更されていません。正式な復習はホームから行えます。")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            Button("同じカードをもう一度練習する") { session.restart() }
+                                .buttonStyle(.borderedProminent).controlSize(.large)
+                                .accessibilityIdentifier("restartWeakPractice")
+                            Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                        }.multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.vertical, 24)
                     } else {
-                        Text("重点練習を完了しました")
-                        Button("閉じる") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
+                        ContentUnavailableView("練習するカードがありません", systemImage: "rectangle.on.rectangle",
+                                               description: Text("苦手カード一覧で対象条件を変更してください。"))
+                        Button("苦手カード一覧に戻る") { dismiss() }.accessibilityIdentifier("finishWeakPractice")
                     }
                 }.padding()
             }
             .navigationTitle("重点練習")
             .toolbar { Button("終了") { dismiss() } }
+        }
+    }
+}
+
+/// Shared completion layout. Feedback belongs to commit, never view appearance.
+struct LibraryOperationCompletionSection: View {
+    let store: StudyStore
+    let result: LibraryOperationCompletion
+    let identifier: String
+    @State private var announced = false
+    var body: some View {
+        Section {
+            VStack(spacing: 12) {
+                Image(systemName: result.isSuccess ? "checkmark.circle.fill" : "info.circle.fill")
+                    .font(.system(size: 52))
+                    .foregroundStyle(result.isSuccess ? Color.green : Color.orange)
+                    .accessibilityHidden(true)
+                Text(result.title).font(.headline)
+                Text(result.summary).accessibilityIdentifier(identifier)
+            }
+            .frame(maxWidth: .infinity).padding(.vertical, 16)
+            .accessibilityElement(children: .combine)
+            if result.operation == "削除" || result.operation == "ノート削除" {
+                Text("削除したカードは元に戻せません。過去の回答履歴は残ります。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let warning = result.warning {
+                Label(warning, systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+            if let destination = result.destinationID {
+                NavigationLink("移動先を見る") { ShortcutDeckContentsView(store: store, deckID: destination) }
+            }
+        }
+        .task {
+            guard !announced else { return }
+            announced = true
+            if UIAccessibility.isVoiceOverRunning {
+                UIAccessibility.post(notification: .announcement,
+                    argument: result.title + "。" + result.summary + "。" + (result.warning ?? ""))
+            }
         }
     }
 }

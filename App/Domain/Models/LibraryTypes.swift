@@ -599,3 +599,19 @@ struct LibraryTreeProjection {
         ids.map(\.uuidString).sorted().joined(separator: ",")
     }
 }
+
+/// A receipt is created only after persistence succeeds. Warnings never reopen the operation.
+struct LibraryOperationCompletion {
+    let operation: String
+    let notes: Int
+    let cards: Int
+    let targetName: String?
+    let destinationID: UUID?
+    var warning: String?
+    var hasChanges: Bool { notes > 0 || cards > 0 }
+    var isSuccess: Bool { hasChanges && warning == nil }
+    var title: String { hasChanges ? "\(operation)を保存しました" : "変更対象はありません" }
+    var summary: String {
+        "\(operation)：\(notes)ノート・\(cards)枚" + (targetName.map { " · \($0)" } ?? "")
+    }
+}

@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct NoteEditorView: View {
     @Bindable var store: StudyStore
     let item: NoteItem?
+    let duringReview: Bool
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.dismiss) private var dismiss
     @FocusedValue(\.numericSettingEditing) private var numericSettingEditing
@@ -35,8 +36,8 @@ struct NoteEditorView: View {
     @State private var audioImport: Task<Void, Never>?
     @StateObject private var audioPreview = StudySpeechPlayer()
 
-    init(store: StudyStore, item: NoteItem?, initialDeckID: UUID? = nil) {
-        self.store = store; self.item = item
+    init(store: StudyStore, item: NoteItem?, initialDeckID: UUID? = nil, duringReview: Bool = false) {
+        self.store = store; self.item = item; self.duringReview = duringReview
         _tagText = State(initialValue: item?.tagNames.joined(separator: ", ") ?? "")
         _input = State(initialValue: NoteInput(deckID: item?.deckID ?? initialDeckID ?? store.decks.first?.id ?? UUID(),
                                                kind: item?.kind ?? .basic,
@@ -52,8 +53,11 @@ struct NoteEditorView: View {
                                                speechAnswer: item?.sourceContent.speechAnswer, questionAudioID: item?.sourceContent.questionAudioID,
                                                answerAudioID: item?.sourceContent.answerAudioID, questionLayout: item?.sourceContent.questionLayout, answerLayout: item?.sourceContent.answerLayout))
         do {
-            if let saved = try store.repository.editorDraft(key: item.map { "edit:\($0.noteID.uuidString)" } ?? "new") {
-                _input = State(initialValue: saved)
+            if !duringReview, let saved = try store.repository.editorDraft(key: item.map { "edit:\($0.noteID.uuidString)" } ?? "new") {
+                var restored = saved
+                // A deck-specific add action keeps its destination even when a draft exists.
+                if item == nil, let initialDeckID { restored.deckID = initialDeckID }
+                _input = State(initialValue: restored)
                 _tagText = State(initialValue: saved.tagNames.joined(separator: ", "))
             }
         } catch { _failure = State(initialValue: "下書きを読み込めません: " + error.localizedDescription) }
@@ -62,11 +66,15 @@ struct NoteEditorView: View {
     var body: some View {
         NavigationStack {
             Form {
+                if duringReview {
+                    Text("保存後は同じカードを再提示します。回答の下書きと直前のUndoは解除します。カード形式・生成カードの変更と未学習へのリセットは学習中にはできません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
                     DeckSelectionField("デッキ", decks: store.decks, selection: $input.deckID).accessibilityIdentifier("noteDeckPicker")
                     Picker("形式", selection: $input.kind) {
                         ForEach(NoteKind.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }.accessibilityIdentifier("noteKindPicker")
+                    }.accessibilityIdentifier("noteKindPicker").disabled(duringReview)
                     Picker("標準の回答方法", selection: $input.responseMode) {
                         ForEach(ResponseMode.allCases, id: \.self) { mode in
                             Text(mode.title).tag(mode)
@@ -209,8 +217,8 @@ struct NoteEditorView: View {
                     } else if input.imageID != nil { Text("画像を読み込めません。写真を再選択してください。").foregroundStyle(.red) }
                 }
                 Section {
-                    Button("下書きを破棄して閉じる", role: .destructive) {
-                        do { try store.repository.discardEditorDraft(key: draftKey); committed = true; dismiss() }
+                    Button(duringReview ? "変更を破棄して閉じる" : "下書きを破棄して閉じる", role: .destructive) {
+                        do { if !duringReview { try store.repository.discardEditorDraft(key: draftKey) }; committed = true; dismiss() }
                         catch { failure = error.localizedDescription }
                     }
                 }
@@ -261,7 +269,7 @@ struct NoteEditorView: View {
                         Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
                     }
                 }
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.keyboardShortcut(.escape, modifiers: []).accessibilityIdentifier("closeEditor").accessibilityHint("入力中の下書きを保持します") }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.keyboardShortcut(.escape, modifiers: []).accessibilityIdentifier("closeEditor").accessibilityHint(duringReview ? "入力中の変更を破棄して学習に戻ります" : "入力中の下書きを保持します") }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { requestSave(next: false) }.keyboardShortcut("s", modifiers: .command).accessibilityIdentifier("saveNote")
                         .disabled(!canSave)
@@ -269,7 +277,7 @@ struct NoteEditorView: View {
             }
             .confirmationDialog("同じデッキに重複候補があります", isPresented: $duplicateChoice, titleVisibility: .visible) {
                 Button("スキップして閉じる") {
-                    do { try store.repository.discardEditorDraft(key: draftKey); committed = true; dismiss() }
+                    do { if !duringReview { try store.repository.discardEditorDraft(key: draftKey) }; committed = true; dismiss() }
                     catch { failure = error.localizedDescription }
                 }
                 Button("別ノートとして追加") { save(reset: false) }
@@ -277,7 +285,7 @@ struct NoteEditorView: View {
             }
             .confirmationDialog("学習済みの内容を変更します", isPresented: $historyChoice, titleVisibility: .visible) {
                 Button("復習予定を維持して保存") { save(reset: false) }
-                Button("未学習に戻して保存", role: .destructive) { save(reset: true) }
+                if !duringReview { Button("未学習に戻して保存", role: .destructive) { save(reset: true) } }
             } message: { Text("学習の意味が変わる場合は未学習に戻せます。過去の履歴は残ります。") }
             .alert("操作を完了できませんでした", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil; saveFailure = false } })) {
                 if saveFailure { Button("再試行") { save(reset: pendingReset, updateID: pendingUpdateID) } }
@@ -341,6 +349,7 @@ struct NoteEditorView: View {
         return UIImage(contentsOfFile: url.path)
     }
     private func persistDraft() {
+        guard !duringReview else { return }
         do { try store.repository.saveEditorDraft(key: draftKey, input: input, now: store.clock()) }
         catch { failure = error.localizedDescription }
     }
@@ -381,7 +390,7 @@ struct NoteEditorView: View {
         pendingUpdateID = updateID
         input.tagNames = tagText.components(separatedBy: ",")
         do {
-            if let id = updateID ?? item?.noteID { try store.repository.updateNote(id: id, input: input, resetHistory: reset, clearingDraft: draftKey, now: store.clock()) }
+            if let id = updateID ?? item?.noteID { try store.repository.updateNote(id: id, input: input, resetHistory: reset, duringReview: duringReview, clearingDraft: duringReview ? nil : draftKey, now: store.clock()) }
             else { try store.repository.createNote(input, clearingDraft: draftKey, now: store.clock()) }
             committed = true
             do { try store.reload() }
