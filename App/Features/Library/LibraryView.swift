@@ -15,6 +15,7 @@ struct LibraryView: View {
     @State private var search = ""
     @State private var editMode = EditMode.inactive
     @State private var selection = Set<UUID>()
+    @State private var replacing = false
     @State private var bulkEditing = false
     @State private var bulkCommitted = false
 
@@ -188,6 +189,7 @@ struct LibraryView: View {
             .safeAreaInset(edge: .bottom) {
                 if editMode.isEditing {
                     HStack {
+                        Button("検索して置換") { replacing = true }.disabled(loading || libraryFailure != nil)
                         Menu("選択", systemImage: "checkmark.circle") {
                             Button("表示中を全選択") { selection = results.cardIDs }
                                 .disabled(loading || libraryFailure != nil).accessibilityIdentifier("selectAllLibraryCards")
@@ -220,6 +222,8 @@ struct LibraryView: View {
                     ToolbarItem(placement: .topBarLeading) { Button("デッキ管理") { addingDeck = true } }
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu("ライブラリ操作", systemImage: "ellipsis.circle") {
+                            Button("検索して置換", systemImage: "text.magnifyingglass") { replacing = true }
+                                .disabled(loading || libraryFailure != nil)
                             Button("カードを選択", systemImage: "checkmark.circle") {
                                 selection.removeAll(); editMode = .active
                             }.disabled(results.cardCount == 0 || loading || libraryFailure != nil).accessibilityIdentifier("selectLibraryCards")
@@ -243,6 +247,9 @@ struct LibraryView: View {
                     if committed { selection.removeAll(); editMode = .inactive }
                     bulkEditing = false
                 }
+            }
+            .sheet(isPresented: $replacing) {
+                TextReplacementView(store: store, resultIDs: results.cardIDs, selectedIDs: selection, initialDeckID: activeDeckFilter)
             }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: activeDeckFilter) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
