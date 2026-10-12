@@ -19,8 +19,10 @@ final class OperationsUITests: XCTestCase {
     func create(_ app: XCUIApplication) {
         tab(app, "ライブラリ").tap(); app.buttons["addNote"].tap()
         let question = app.descendants(matching: .any)["questionInput"]
+        scrollTo(question, in: app)
         XCTAssertTrue(question.waitForExistence(timeout: 5)); question.tap(); question.typeText("Backup question")
         let answer = app.descendants(matching: .any)["answerInput"]
+        scrollTo(answer, in: app)
         answer.tap(); answer.typeText("Backup answer"); app.buttons["saveNote"].tap()
         XCTAssertTrue(app.staticTexts["Backup question"].waitForExistence(timeout: 5))
     }
@@ -193,6 +195,17 @@ final class OperationsUITests: XCTestCase {
         tab(app, "設定").tap()
         let open = app.buttons["openBackup"]; scrollTo(open, in: app); open.tap()
         app.buttons["exportBackup"].tap()
+        XCTAssertTrue(app.textFields.firstMatch.waitForExistence(timeout: 10))
+        let cancel = app.buttons["キャンセル"].exists ? app.buttons["キャンセル"] : app.buttons["Cancel"]
+        if cancel.exists { cancel.tap() }
+        else {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.085)).press(forDuration: 0.1,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)))
+        }
+        XCTAssertTrue(app.staticTexts["backupResult"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["backupResult"].label.contains("取り消しました"))
+        XCTAssertFalse(app.buttons["backupReturnHome"].exists)
+        app.buttons["exportBackup"].tap()
         let filenameField = app.textFields.firstMatch
         XCTAssertTrue(filenameField.waitForExistence(timeout: 10))
         filenameField.tap()
@@ -224,8 +237,14 @@ final class OperationsUITests: XCTestCase {
         backupFile.tap()
         let restore = app.buttons["restoreBackup"]; scrollTo(restore, in: app); XCTAssertTrue(restore.exists); restore.tap()
         app.buttons["confirmRestoreBackup"].firstMatch.tap()
-        XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("復元しました"))
-        attach(app, name: "Phase4-backup-restored")
+        XCTAssertTrue(result.waitForExistence(timeout: 10)); XCTAssertTrue(result.label.contains("復元が完了しました"))
+        XCTAssertTrue(app.staticTexts["restoredBackupCounts"].label.contains("1カード"))
+        XCTAssertFalse(app.buttons["restoreBackup"].exists)
+        attach(app, name: "Backup-restored-completion")
+        app.buttons["backupReturnHome"].tap()
+        XCTAssertTrue(tab(app, "ホーム").waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["exportBackup"].exists)
+        XCTAssertTrue(tab(app, "ホーム").isSelected)
         app.terminate(); app.launch()
         XCTAssertTrue(tab(app, "記録").waitForExistence(timeout: 15)); tab(app, "記録").tap()
         XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("1回"))
