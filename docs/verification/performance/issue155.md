@@ -36,3 +36,9 @@ Widget比較は同じ最終コードのforce有無であり旧main独立ビル�
 ## 未確認
 
 実機はdevicectl上でunavailable。冷間起動/ホーム再訪/foreground/手動Widgetの実機前後時間、fetch件数・ハング・ピークRAM・実OS再予約回数は未検証。全条件が完了したとは扱わず、Draft PR・Issue自動クローズなし。
+
+## 実機再確認（2026-10-12）
+
+C（要修正・Open）。同一Widget10要求で追加write 0、通知mockで追加plan/add 0。Aホーム復帰392〜398ms、B259〜265msのpotential hangは全件キュー/Note/Card投影。B起動後407〜414msはautomaticSnapshotIfDue→BackupData.capture→logs()のMainActor収集（関連#127）。実OS通知UIは許可ダイアログの自動応答失敗で予約/配信を確認できず、コード不具合とは断定しない。専用App Groupの署名不足でWidget OS連携も未確認。
+
+環境はiPhone 15 Pro / iOS 27.0.1 / Xcode 27 / Debug、専用Bundle ID・隔離ストア。実機データ・全標本・未確認条件・再現方法は[共通実機レポート](README.md)と[CSV](device-20261012.csv)を参照。先行Simulatorの値との改善率は算出しない。
