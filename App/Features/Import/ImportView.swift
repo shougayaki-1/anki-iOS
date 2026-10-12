@@ -291,6 +291,7 @@ struct ImageZIPImportView: View {
     @State var deckID: UUID
     @Environment(\.dismiss) private var dismiss
     @State private var page = 0
+    @State private var imageDisplayNamespace = UUID()
     @State private var duplicates = Set<UUID>()
     @State private var action = DuplicateAction.skip
     @State private var confirming = false
@@ -320,8 +321,8 @@ struct ImageZIPImportView: View {
                         ForEach(page * 20..<min((page + 1) * 20, package.rows.count), id: \.self) { index in
                             VStack(alignment: .leading) {
                                 Toggle("\(package.rows[index].line)行を取り込む", isOn: $package.rows[index].included)
-                                if let data = package.images[package.rows[index].imagePath], let image = UIImage(data: data) {
-                                    Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 140)
+                                if let data = package.images[package.rows[index].imagePath] {
+                                    AsyncStudyImageView(data: data, namespace: imageDisplayNamespace, identity: package.rows[index].imagePath, maximumHeight: 140)
                                 }
                                 Text(package.rows[index].imagePath).font(.caption)
                                 if !package.rows[index].tags.isEmpty { Text("タグ: " + package.rows[index].tags.joined(separator: "、")).font(.caption) }

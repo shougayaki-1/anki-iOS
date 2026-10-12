@@ -1,6 +1,21 @@
 import XCTest
 
 final class GeneratedCardUITests: XCTestCase {
+    func testAsyncMaskImageRevealGradeAndUndo() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-numeric-mask"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.images["対象のマスクを隠した画像"].waitForExistence(timeout: 10))
+        app.buttons["revealAnswer"].tap()
+        XCTAssertTrue(app.images["対象のマスクを開いた画像"].waitForExistence(timeout: 5))
+        for _ in 0..<4 where !app.buttons["grade-4"].isHittable { scroll(app, up: true) }
+        app.buttons["grade-4"].tap()
+        XCTAssertTrue(app.buttons["undoReview"].waitForExistence(timeout: 5))
+        app.buttons["undoReview"].tap()
+        XCTAssertTrue(app.images["対象のマスクを隠した画像"].waitForExistence(timeout: 10))
+    }
     func launch() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]

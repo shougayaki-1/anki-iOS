@@ -301,8 +301,8 @@ struct NoteDetailView: View {
                     Section("問題") { Text(item.content.question).textSelection(.enabled) }
                     if let id = item.sourceContent.imageID {
                         Section("画像") {
-                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
-                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
+                            if let url = try? store.repository.assetURL(id: id) {
+                                AsyncStudyImageView(file: url, namespace: store.mediaDisplayNamespace, revision: store.dataRevision, identity: id.uuidString, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
                                                targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
                                                hideAll: item.sourceContent.hideAllMasks ?? true, revealed: true)
                             } else { Label("画像を読み込めません。編集から写真を再選択してください。", systemImage: "exclamationmark.triangle") }
@@ -575,8 +575,8 @@ private struct WeakPracticeView: View {
                         Text("\(session.index + 1)／\(session.cards.count)枚")
                         Text(item.content.question).font(.title2).accessibilityIdentifier("weakPracticeQuestion")
                         if let id = item.sourceContent.imageID {
-                            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
-                                StudyImageView(image: image, masks: item.kind == .imageOcclusion ? item.sourceContent.masks ?? [] : [],
+                            if let url = try? store.repository.assetURL(id: id) {
+                                AsyncStudyImageView(file: url, namespace: store.mediaDisplayNamespace, revision: store.dataRevision, identity: id.uuidString, masks: item.kind == .imageOcclusion ? item.sourceContent.masks ?? [] : [],
                                     targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
                                     hideAll: item.sourceContent.hideAllMasks ?? true, revealed: session.revealed)
                             } else { Text("画像を読み込めません。ライブラリで画像を確認してください。") }
