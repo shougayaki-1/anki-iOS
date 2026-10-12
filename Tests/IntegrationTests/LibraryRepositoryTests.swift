@@ -11,6 +11,46 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.initialize(now: now); return repo
     }
 
+    func testLibraryInlineTreeCountsGroupingSearchAndSavedExpansion() throws {
+        let root = UUID(), child = UUID(), grandchild = UUID(), empty = UUID(), other = UUID()
+        let note = UUID(), directNote = UUID()
+        let decks = [
+            DeckItem(id: root, name: "英語", shortName: "英語"),
+            DeckItem(id: child, name: "英語 / Final Draft", shortName: "Final Draft", parentID: root),
+            DeckItem(id: grandchild, name: "英語 / Final Draft / Lesson4", shortName: "Lesson4", parentID: child),
+            DeckItem(id: empty, name: "空", shortName: "空"),
+            DeckItem(id: other, name: "国語", shortName: "国語")
+        ]
+        func card(_ note: UUID, deck: UUID) -> LibraryCard {
+            LibraryCard(id: UUID(), noteID: note, deckID: deck, variantKey: "basic:front", isSuspended: false, createdAt: now)
+        }
+        let direct = card(directNote, deck: root)
+        let generated = (0..<3).map { _ in card(note, deck: grandchild) }
+        var index = LibraryIndex()
+        index.cardsByDeck = [root: [direct], grandchild: generated]
+        index.siblingCounts = [directNote: 1, note: 3]; index.cardCount = 4
+        let tree = LibraryTreeProjection(decks: decks, index: index, results: index.results(), search: "")
+        XCTAssertEqual(Set(tree.rows(expanded: []).compactMap { $0.deck?.id }), [root, empty, other])
+        XCTAssertEqual(tree.subtreeCards[root], 4)
+        XCTAssertFalse(try XCTUnwrap(tree.rows(expanded: []).first { $0.deck?.id == empty }).expandable)
+        let expanded: Set<UUID> = [root, child, grandchild]
+        let saved = LibraryTreeProjection.saveExpanded(expanded)
+        XCTAssertEqual(LibraryTreeProjection.expandedIDs(saved), expanded)
+        let open = tree.rows(expanded: expanded)
+        XCTAssertEqual(open.compactMap { $0.note?.id }, [directNote, note])
+        XCTAssertEqual(open.first { $0.note?.id == note }?.cardCount, 3)
+        XCTAssertEqual(open.first { $0.deck?.id == grandchild }?.depth, 2)
+        XCTAssertFalse(tree.rows(expanded: [child, grandchild]).contains { $0.note != nil })
+        XCTAssertEqual(tree.rows(expanded: LibraryTreeProjection.expandedIDs(saved)).compactMap { $0.note?.id }, [directNote, note])
+        let matches = index.results(matching: [generated[0].id])
+        let search = LibraryTreeProjection(decks: decks, index: index, results: matches, search: "Question")
+        XCTAssertEqual(search.rows(expanded: []).compactMap { $0.deck?.id }, [root, child, grandchild])
+        XCTAssertEqual(search.rows(expanded: []).compactMap { $0.note?.id }, [note])
+        XCTAssertEqual(LibraryTreeProjection.expandedIDs(saved), expanded)
+        let nameSearch = LibraryTreeProjection(decks: decks, index: index, results: LibraryResults(), search: "Lesson4")
+        XCTAssertEqual(nameSearch.rows(expanded: []).compactMap { $0.deck?.id }, [root, child, grandchild])
+    }
+
     func testHintOnlyEditOfLegacyContentPreservesActiveSession() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         var input = NoteInput(deckID: deck, question: "Legacy Q", answer: "Legacy A")

@@ -631,7 +631,7 @@ actor LibraryReader {
         return index.results(deckIDs: deckIDs, matching: matches)
     }
 
-    private func contents(revision: Int, deckIDs: Set<UUID>?) throws -> LibraryIndex {
+    func contents(revision: Int, deckIDs: Set<UUID>?) throws -> LibraryIndex {
         var index = try load(revision: revision)
         let missing = (deckIDs ?? Set(index.cardsByDeck.keys)).subtracting(loadedDecks)
         guard !missing.isEmpty else { return index }
