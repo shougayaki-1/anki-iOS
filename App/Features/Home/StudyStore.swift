@@ -199,6 +199,7 @@ final class StudyStore {
         refreshStatistics()
     }
     func sceneChanged(active: Bool) {
+        if !active { Task { await libraryReader.clearContents() } }
         do {
             if let draft = try repository.session(), (draft.activeSince != nil) != (active && showingReview && draft.cardID != nil) {
                 try repository.setSessionActive(active && showingReview, now: clock())

@@ -22,6 +22,9 @@ struct LibraryView: View {
     @AppStorage("libraryExpandedDeckIDs") private var savedExpansion = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tree: LibraryTreeProjection?
+    @State private var visibleRows: [LibraryTreeRow] = []
+    @State private var projectionKey: ProjectionKey?
+    @State private var shownExpansion = ""
     @State private var cardMarks: [UUID: CardMark] = [:]
     @State private var index: LibraryIndex?
     @State private var results = LibraryResults()
@@ -78,6 +81,16 @@ struct LibraryView: View {
         let attempt: Int
         let expansion: String
     }
+    private struct ProjectionKey: Equatable {
+        let revision: Int
+        let query: String
+        let deck: UUID?
+        let attempt: Int
+    }
+    private var request: Request {
+        Request(revision: store.dataRevision, query: search, deck: activeDeckFilter, tab: store.selectedTab,
+                attempt: loadAttempt, expansion: savedExpansion)
+    }
 
     var body: some View {
         NavigationStack {
@@ -111,7 +124,7 @@ struct LibraryView: View {
                 if results.cardCount == 0 && !loading && libraryFailure == nil {
                     emptyLibrary
                 }
-                ForEach(tree?.rows(expanded: LibraryTreeProjection.expandedIDs(savedExpansion)) ?? []) { row in
+                ForEach(visibleRows) { row in
                     if let deck = row.deck {
                         Button {
                             guard row.expandable, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -146,7 +159,7 @@ struct LibraryView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: note.cardIDs.isSubset(of: selection) ? "checkmark.circle.fill" : (selection.isDisjoint(with: note.cardIDs) ? "circle" : "minus.circle.fill"))
-                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag)
+                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
                                 }.foregroundStyle(.primary)
                             }
                             .buttonStyle(.plain)
@@ -154,38 +167,49 @@ struct LibraryView: View {
                             .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         } else {
                             NavigationLink { NoteDetailView(store: store, cardID: note.card.id) } label: {
-                                LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag)
+                                LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
                             }.padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         }
                     }
                 }
             }
-            .task(id: Request(revision: store.dataRevision, query: search, deck: activeDeckFilter, tab: store.selectedTab, attempt: loadAttempt, expansion: savedExpansion)) {
+            .task(id: request) {
                 guard store.selectedTab == 1 else { return }
-                let revision = store.dataRevision, query = search
+                let wanted = request
+                let revision = wanted.revision, query = wanted.query
                 loading = true
-                defer { if !Task.isCancelled { loading = false } }
+                defer { if !Task.isCancelled, wanted == request { loading = false } }
                 do {
                     if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
-                    let allowed = try activeDeckFilter.map { try store.repository.descendants(of: $0) }
+                    let allowed = try wanted.deck.map { try store.repository.descendants(of: $0) }
                     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
                     let metadata = try await store.libraryReader.load(revision: revision)
-                    let found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
-                    let decks = store.decks.filter { allowed?.contains($0.id) ?? true }
-                    let projection = LibraryTreeProjection(decks: decks, index: metadata, results: found, search: query)
-                    let expanded = LibraryTreeProjection.expandedIDs(savedExpansion)
-                    let visibleExpanded = Set(projection.rows(expanded: expanded).filter(\.expanded).compactMap { $0.deck?.id })
+                    let key = ProjectionKey(revision: revision, query: query, deck: wanted.deck, attempt: wanted.attempt)
+                    let found: LibraryResults, projection: LibraryTreeProjection
+                    if projectionKey == key, let tree {
+                        found = results; projection = tree
+                    } else {
+                        found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
+                        let decks = store.decks.filter { allowed?.contains($0.id) ?? true }
+                        projection = LibraryTreeProjection(decks: decks, index: metadata, results: found, search: query)
+                    }
+                    let expanded = LibraryTreeProjection.expandedIDs(wanted.expansion)
+                    let rows = projection.rows(expanded: expanded)
+                    let visibleExpanded = Set(rows.filter(\.expanded).compactMap { $0.deck?.id })
                     let requested = query.isEmpty ? visibleExpanded : Set(found.cardsByDeck.keys)
                     let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: requested)
                     try Task.checkCancellation()
-                    guard revision == store.dataRevision else { return }
+                    guard wanted == request else { return }
                     cardMarks = Dictionary(uniqueKeysWithValues: (try store.repository.options().cardMarks ?? []).map { ($0.cardID, $0) })
-                    index = loaded; results = found; tree = projection; libraryFailure = nil
+                    let animate = projectionKey == key && shownExpansion != wanted.expansion
+                    index = loaded; results = found; tree = projection; projectionKey = key; libraryFailure = nil
+                    withAnimation(animate && !reduceMotion ? .easeInOut(duration: 0.18) : nil) { visibleRows = rows }
+                    shownExpansion = wanted.expansion
                     let valid = expanded.intersection(Set(store.decks.map(\.id)))
                     if valid != expanded { savedExpansion = LibraryTreeProjection.saveExpanded(valid) }
                     selection.formIntersection(found.cardIDs)
                 } catch is CancellationError { }
-                catch { if !Task.isCancelled { libraryFailure = error.localizedDescription } }
+                catch { if !Task.isCancelled, wanted == request { libraryFailure = error.localizedDescription } }
             }
             .environment(\.editMode, $editMode)
             .onChange(of: deckFilter) { _, _ in clearedDeckFilter = false; selection.removeAll(); editMode = .inactive }
@@ -266,19 +290,25 @@ struct LibraryView: View {
 }
 
 /// List creates row bodies on demand; hidden decks never render generated text.
-struct LibraryCardRow: View {
-    let card: LibraryCard
-    let index: LibraryIndex?
+struct LibraryCardRow: View, Equatable {
+    let content: LibraryRowContent
     var flag: CardFlag? = nil
+
+    init(card: LibraryCard, index: LibraryIndex?, flag: CardFlag? = nil) {
+        content = index?.rowContents[card.id] ?? LibraryRowContent(question: "カードを表示できません",
+            kindTitle: index?.notes[card.noteID]?.kind.title ?? "", siblingCount: index?.siblingCounts[card.noteID] ?? 1,
+            isSuspended: card.isSuspended)
+        self.flag = flag
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             if let flag { CardFlagLabel(flag: flag) }
-            Text((try? index?.displayed(card).question) ?? "カードを表示できません").lineLimit(2)
-            if let count = index?.siblingCounts[card.noteID], count > 1 {
-                Text("同じノートから\(count)枚").font(.caption).foregroundStyle(.secondary)
+            Text(content.question).lineLimit(2)
+            if content.siblingCount > 1 {
+                Text("同じノートから\(content.siblingCount)枚").font(.caption).foregroundStyle(.secondary)
             }
-            Text((index?.notes[card.noteID]?.kind.title ?? "") + (card.isSuspended ? " · 停止中" : ""))
+            Text(content.kindTitle + (content.isSuspended ? " · 停止中" : ""))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

@@ -75,14 +75,20 @@ final class OperationsUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Tree parent question"].exists)
         root.tap(); XCTAssertFalse(leaf.exists)
         root.tap(); XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home)
         app.terminate(); app.launch(); XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 15))
         tab(app, "ライブラリ").tap()
+        XCTAssertEqual(root.value as? String, "展開中")
+        for _ in 0..<4 where !app.staticTexts["Tree leaf question"].exists { app.swipeUp() }
         XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 10))
+        for _ in 0..<4 where !root.isHittable { app.swipeDown() }
         root.tap()
         let field = app.searchFields.firstMatch
-        field.tap(); field.typeText("Tree leaf")
+        for _ in 0..<4 where !field.exists { app.swipeDown() }
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap(); field.typeText("Tree leaf\n")
+        for _ in 0..<4 where !app.staticTexts["Tree leaf question"].exists { app.swipeUp() }
         XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 10))
-        field.typeText("\n")
         app.swipeUp()
         let screenshot = XCTAttachment(screenshot: app.screenshot())
         screenshot.name = "Issue112-inline-tree-search"; screenshot.lifetime = .keepAlways

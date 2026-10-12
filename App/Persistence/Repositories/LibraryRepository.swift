@@ -603,13 +603,40 @@ actor LibraryReader {
     private var cached: LibraryIndex?
     private var searchText: [UUID: String] = [:]
     private var loadedDecks = Set<UUID>()
+    private var contentCosts: [UUID: Int] = [:]
+    private var deckRecency: [UUID] = []
+    private var searchBytes = 0
+    private let maximumContentBytes: Int
+    private let maximumCachedDecks: Int
+    private let maximumSearchBytes: Int
+    #if DEBUG
+    private(set) var contentFetches = 0
+    private(set) var contentDecodes = 0
+    private(set) var rowPreparations = 0
+    var retainedContentBytes: Int { contentCosts.values.reduce(0, +) }
+    var retainedSearchBytes: Int { searchBytes }
+    #endif
 
-    init(container: ModelContainer) { self.container = container }
+    init(container: ModelContainer, maximumContentBytes: Int = 8 * 1024 * 1024,
+         maximumCachedDecks: Int = 32, maximumSearchBytes: Int = 2 * 1024 * 1024) {
+        self.container = container; self.maximumContentBytes = max(0, maximumContentBytes)
+        self.maximumCachedDecks = max(0, maximumCachedDecks); self.maximumSearchBytes = max(0, maximumSearchBytes)
+    }
+
+    func clearContents() {
+        guard !loadedDecks.isEmpty || !searchText.isEmpty else { return }
+        guard var index = cached else { return }
+        for id in index.notes.keys { index.notes[id]?.content = nil }
+        index.rowContents = [:]; cached = index
+        loadedDecks = []; contentCosts = [:]; deckRecency = []
+        searchText = [:]; searchBytes = 0
+    }
 
     func load(revision: Int) throws -> LibraryIndex {
         if self.revision == revision, let cached { return cached }
         let index = try Self.read(context: ModelContext(container))
         self.revision = revision; cached = index; searchText = [:]; loadedDecks = []
+        contentCosts = [:]; deckRecency = []; searchBytes = 0
         return index
     }
 
@@ -626,7 +653,13 @@ actor LibraryReader {
                 let displayed = try index.displayed(card)
                 guard let note = index.notes[card.noteID] else { throw StudyError.missingRecord }
                 text = "\(displayed.question) \(displayed.answer) \(note.deckName) \(note.tagNames)"
-                searchText[card.id] = text
+                let cost = text.utf8.count * 2 + 128
+                if cost <= maximumSearchBytes {
+                    if searchBytes + cost > maximumSearchBytes || searchText.count >= 4096 {
+                        searchText = [:]; searchBytes = 0
+                    }
+                    searchText[card.id] = text; searchBytes += cost
+                }
             }
             if text.localizedCaseInsensitiveContains(query) { matches.insert(card.id) }
         }
@@ -635,7 +668,11 @@ actor LibraryReader {
 
     func contents(revision: Int, deckIDs: Set<UUID>?) throws -> LibraryIndex {
         var index = try load(revision: revision)
-        let missing = (deckIDs ?? Set(index.cardsByDeck.keys)).subtracting(loadedDecks)
+        let requestedDecks = (deckIDs ?? Set(index.cardsByDeck.keys)).intersection(index.cardsByDeck.keys)
+        for id in requestedDecks.sorted(by: { $0.uuidString < $1.uuidString }) {
+            deckRecency.removeAll { $0 == id }; deckRecency.append(id)
+        }
+        let missing = requestedDecks.subtracting(loadedDecks)
         guard !missing.isEmpty else { return index }
         let requested = Array(missing)
         var fetch = FetchDescriptor<Note>(predicate: #Predicate { requested.contains($0.deckID) })
@@ -647,6 +684,9 @@ actor LibraryReader {
             let masks: [ImageMask]?
         }
         // Read only requested decks, once per revision. No detail or FSRS decoding.
+        #if DEBUG
+        contentFetches += 1
+        #endif
         for note in try ModelContext(container).fetch(fetch) {
             try Task.checkCancellation()
             guard index.siblingCounts[note.id] != nil else { continue }
@@ -655,8 +695,43 @@ actor LibraryReader {
             var content = TextContent(question: projection.question, answer: projection.answer, explanation: "")
             content.masks = projection.masks
             index.notes[note.id]?.content = content
+            #if DEBUG
+            contentDecodes += 1
+            #endif
         }
-        cached = index; loadedDecks.formUnion(missing)
+        var updatedCosts = contentCosts
+        for deck in missing {
+            var cost = 0, seen = Set<UUID>()
+            for card in index.cardsByDeck[deck] ?? [] {
+                try Task.checkCancellation()
+                let displayed = try index.displayed(card)
+                guard let note = index.notes[card.noteID] else { throw StudyError.missingRecord }
+                index.rowContents[card.id] = LibraryRowContent(question: displayed.question, kindTitle: note.kind.title,
+                    siblingCount: index.siblingCounts[card.noteID] ?? 1, isSuspended: card.isSuspended)
+                cost += displayed.question.utf8.count * 2 + 128
+                if seen.insert(card.noteID).inserted, let content = note.content {
+                    cost += (content.question.utf8.count + content.answer.utf8.count) * 2 + 256
+                    cost += (content.masks ?? []).reduce(0) { $0 + 256 + $1.answer.utf8.count * 2 }
+                }
+                #if DEBUG
+                rowPreparations += 1
+                #endif
+            }
+            updatedCosts[deck] = cost
+        }
+        try Task.checkCancellation()
+        contentCosts = updatedCosts
+        loadedDecks.formUnion(missing)
+        // Return the full requested value, but keep only bounded deck content in the actor.
+        var retained = index
+        while contentCosts.values.reduce(0, +) > maximumContentBytes || loadedDecks.count > maximumCachedDecks {
+            guard let oldest = deckRecency.first else { break }
+            deckRecency.removeFirst(); loadedDecks.remove(oldest); contentCosts.removeValue(forKey: oldest)
+            for card in retained.cardsByDeck[oldest] ?? [] {
+                retained.notes[card.noteID]?.content = nil; retained.rowContents.removeValue(forKey: card.id)
+            }
+        }
+        cached = retained
         return index
     }
 
@@ -667,6 +742,7 @@ actor LibraryReader {
         noteFetch.propertiesToFetch = [\.id, \.deckID, \.type, \.tagIDs]
         var index = LibraryIndex(), deckIDs: [UUID: UUID] = [:]
         for note in try context.fetch(noteFetch) {
+            try Task.checkCancellation()
             guard let kind = NoteKind(rawValue: note.type) else { throw StudyError.missingRecord }
             index.notes[note.id] = LibraryNote(kind: kind, content: nil, deckName: paths[note.deckID] ?? "", tagNames: note.tagIDs.compactMap { tags[$0] }.joined(separator: " "))
             deckIDs[note.id] = note.deckID
@@ -674,6 +750,7 @@ actor LibraryReader {
         var cardFetch = FetchDescriptor<StudyCard>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
         cardFetch.propertiesToFetch = [\.id, \.noteID, \.variantKey, \.isSuspended, \.createdAt]
         for card in try context.fetch(cardFetch) {
+            try Task.checkCancellation()
             guard let deck = deckIDs[card.noteID] else { throw StudyError.missingRecord }
             index.cardsByDeck[deck, default: []].append(LibraryCard(id: card.id, noteID: card.noteID, deckID: deck, variantKey: card.variantKey, isSuspended: card.isSuspended, createdAt: card.createdAt))
             index.siblingCounts[card.noteID, default: 0] += 1

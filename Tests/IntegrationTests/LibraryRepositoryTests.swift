@@ -602,6 +602,53 @@ final class LibraryRepositoryTests: XCTestCase {
 }
 
 extension LibraryRepositoryTests {
+    func testLibraryContentBudgetsKeepSearchResultsAndRefetchEvictedDeckOnly() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", now: now)
+        let other = try repo.createDeck(name: "Other", now: now)
+        for deck in [root, child, other] {
+            _ = try repo.createNote(NoteInput(deckID: deck, question: "Question \(deck)", answer: "Answer", reverseEnabled: true), now: now)
+        }
+        let before = try BackupData.capture(repo)
+        let reader = LibraryReader(container: container, maximumContentBytes: 3000, maximumCachedDecks: 2, maximumSearchBytes: 400)
+        _ = try await reader.contents(revision: 1, deckIDs: [root])
+        let firstCount = await reader.contentDecodes
+        _ = try await reader.contents(revision: 1, deckIDs: [root])
+        let repeated = await reader.contentDecodes
+        XCTAssertEqual(firstCount, repeated)
+        _ = try await reader.contents(revision: 1, deckIDs: [child])
+        _ = try await reader.contents(revision: 1, deckIDs: [other])
+        let retained = try await reader.load(revision: 1)
+        XCTAssertEqual(retained.notes.values.filter { $0.content != nil }.count, 2)
+        XCTAssertEqual(retained.rowContents.count, 4)
+        let fetched = await reader.contentDecodes
+        _ = try await reader.contents(revision: 1, deckIDs: [root])
+        let refetched = await reader.contentDecodes
+        XCTAssertEqual(refetched, fetched + 1)
+        let found = try await reader.search("Answer", revision: 1, deckIDs: nil)
+        XCTAssertEqual(found.cardCount, 6)
+        let contentCost = await reader.retainedContentBytes, searchCost = await reader.retainedSearchBytes
+        XCTAssertLessThanOrEqual(contentCost, 3000); XCTAssertLessThanOrEqual(searchCost, 400)
+        let tiny = LibraryReader(container: container, maximumContentBytes: 1, maximumSearchBytes: 0)
+        let uncached = try await tiny.contents(revision: 1, deckIDs: [root])
+        XCTAssertEqual(uncached.rowContents.count, 2, "Oversized content must still be returned to the visible caller")
+        let empty = try await tiny.load(revision: 1)
+        XCTAssertTrue(empty.rowContents.isEmpty)
+        let complete = try await tiny.search("Answer", revision: 1, deckIDs: nil)
+        XCTAssertEqual(complete.cardCount, 6)
+        await reader.clearContents()
+        let cleared = try await reader.load(revision: 1)
+        XCTAssertEqual(cleared.cardCount, 6)
+        XCTAssertTrue(cleared.rowContents.isEmpty); XCTAssertTrue(cleared.notes.values.allSatisfy { $0.content == nil })
+        let loaded = try await reader.contents(revision: 1, deckIDs: [root])
+        for card in loaded.cardsByDeck[root] ?? [] {
+            XCTAssertEqual(loaded.rowContents[card.id]?.question, try loaded.displayed(card).question)
+        }
+        XCTAssertEqual(try BackupData.capture(repo), before)
+    }
     func testImportCountsTenNotesCardsAndDistinctRepeatedUpdates() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let rows = (1...10).map { ImportRow(line: $0, question: "Q\($0)", answer: "A\($0)") }
