@@ -4,6 +4,64 @@ import SwiftData
 
 @MainActor
 final class ScaleRepositoryTests: XCTestCase {
+    func testReviewHotPathThreeThousandCardsTenThousandLogs() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let writer = StudyRepository(container: container)
+        try writer.initialize(now: now)
+        let deck = try writer.decks()[0].id, scheduler = try ReviewScheduler()
+        let before = try JSONEncoder().encode(scheduler.newCard(now: now))
+        let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
+        let after = try JSONEncoder().encode(transition.after)
+        var cards: [StudyCard] = []
+        try writer.transaction {
+            for index in 0..<1000 {
+                let input = NoteInput(deckID: deck, kind: .cloze, question: "Q \(index) {{c1::one}} {{c2::two}} {{c3::three}}", answer: "")
+                let content = try JSONEncoder().encode(TextContent(question: input.question, answer: "", explanation: ""))
+                let note = Note(input: input, content: content, now: now)
+                writer.context.insert(note)
+                for variant in 1...3 {
+                    let card = StudyCard(noteID: note.id, variantKey: "cloze:\(variant)", payload: before, now: now)
+                    writer.context.insert(card); cards.append(card)
+                }
+            }
+            for index in 0..<10000 {
+                let log = StudyReviewLog(card: cards[index % cards.count], transition: transition, before: before, after: after,
+                                         mode: .mental, durationMs: 1000, wasNew: false, sequence: index + 1)
+                log.reviewedAt = now.addingTimeInterval(-86400 * Double(index + 1))
+                writer.context.insert(log)
+            }
+        }
+        let store = try StudyStore(container: container, clock: { now })
+        for iteration in 0..<3 {
+            let repo = store.repository
+            let fullBefore = repo.fullHistoryFetchCount, rowsBefore = repo.historyRowsFetched
+            let projectionsBefore = repo.queueProjectionCount, decodeBefore = repo.queueStateDecodeCount
+            let projectionBefore = repo.queueProjectionSeconds
+            let start = Date()
+            try repo.start(mode: .new, now: now)
+            let startMs = Date().timeIntervalSince(start) * 1000
+            let first = try XCTUnwrap(repo.session()?.cardID)
+            try repo.updateDraft(revealed: true, now: now)
+            let gradeStart = Date()
+            store.grade(.good)
+            let gradeMs = Date().timeIntervalSince(gradeStart) * 1000
+            XCTAssertNil(store.failure)
+            let undoStart = Date()
+            store.undo()
+            let undoMs = Date().timeIntervalSince(undoStart) * 1000
+            XCTAssertNil(store.failure)
+            XCTAssertEqual(try repo.session()?.cardID, first)
+            XCTAssertEqual(try repo.card(first)?.fsrsPayload, before)
+            XCTAssertEqual(repo.fullHistoryFetchCount - fullBefore, 0)
+            print("REVIEW_HOT_PATH iteration=\(iteration) start_ms=\(startMs) grade_ms=\(gradeMs) undo_ms=\(undoMs) full_history_fetches=\(repo.fullHistoryFetchCount - fullBefore) history_rows=\(repo.historyRowsFetched - rowsBefore) queue_projections=\(repo.queueProjectionCount - projectionsBefore) queue_ms=\((repo.queueProjectionSeconds - projectionBefore) * 1000) fsrs_decodes=\(repo.queueStateDecodeCount - decodeBefore)")
+        }
+        XCTAssertEqual(try store.repository.context.fetchCount(FetchDescriptor<StudyReviewLog>()), 10000)
+    }
+
     func testThousandNotesThreeThousandCardsTenThousandLogsAndBackup() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

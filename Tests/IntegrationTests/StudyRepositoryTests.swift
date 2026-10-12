@@ -12,6 +12,38 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         return repo
     }
+    func testTodayQueueLogsMatchLegacyQuotaFallbackAndExcludeOldHistory() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", reverseEnabled: true), now: now)
+        let card = try XCTUnwrap(repo.cards().first)
+        let scheduler = try ReviewScheduler()
+        let transition = try scheduler.review(scheduler.newCard(now: now), grade: .good, now: now)
+        let after = try JSONEncoder().encode(transition.after)
+        try repo.transaction {
+            for index in 0..<3 {
+                let row = StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                                         mode: .mental, durationMs: 100, wasNew: true, sequence: index + 1)
+                row.reviewedAt = index == 0 ? now.addingTimeInterval(-86400) : now
+                repo.context.insert(row)
+            }
+            // One entry has a saved historical quota; another is a legacy log
+            // requiring the current deck fallback. Keep even deleted deck IDs.
+            var options = try repo.options()
+            options.deckNewUsage = [DeckNewUsage(sequence: 2, cardID: card.id, quotaDeckIDs: [UUID()])]
+            try repo.writeOptionsInTransaction(options)
+        }
+        let cards = try repo.queueCards(), settings = try repo.settings()
+        let day = StudyDay(calendar: repo.calendar, startHour: settings.dayStartHour).interval(containing: now)
+        let expected = try repo.queueLogs().filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+        let actual = try repo.todayQueueLogs(cards: cards, settings: settings, now: now)
+        XCTAssertEqual(actual.count, 2)
+        func signature(_ rows: [QueueLog]) -> [String] {
+            rows.map { "\($0.cardID)|\($0.noteID?.uuidString ?? "")|\($0.quotaDeckIDs.map(\.uuidString).joined(separator: ","))" }.sorted()
+        }
+        XCTAssertEqual(signature(actual), signature(expected))
+        XCTAssertEqual(try repo.counts(now: now), ReviewQueueBuilder(calendar: repo.calendar).counts(cards: cards, logs: expected, settings: settings, now: now))
+    }
     @discardableResult
     func create(_ repo: StudyRepository, kind: NoteKind = .basic, mode: ResponseMode = .mental) throws -> UUID {
         try repo.createNote(NoteInput(deckID: repo.decks()[0].id, kind: kind, question: "日本の首都は？",
