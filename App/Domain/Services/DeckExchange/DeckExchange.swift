@@ -207,6 +207,8 @@ extension StudyRepository {
         try importDeckPackageReceipt(validated, skipDuplicates: skipDuplicates, now: now).createdNotes
     }
     func importDeckPackageReceipt(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date) throws -> DeckImportReceipt {
+        let interval = PerformanceProbe.begin("Import.deckPackage")
+        defer { PerformanceProbe.end(interval) }
         // Only decode can construct this immutable, fully validated value. Do not
         // decode audio again on the UI actor when publishing the transaction.
         try Task.checkCancellation()

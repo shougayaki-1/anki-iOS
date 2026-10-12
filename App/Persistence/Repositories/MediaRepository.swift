@@ -111,6 +111,8 @@ extension StudyRepository {
 
 extension StudyRepository {
     func importImagePackage(_ package: ImageImportPackage, deckID: UUID, action: DuplicateAction, now: Date) throws -> ImportResult {
+        let interval = PerformanceProbe.begin("Import.imageZIP")
+        defer { PerformanceProbe.end(interval) }
         let initialNoteIDs = Set(try notes().map(\.id))
         var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
         var duplicates = 0

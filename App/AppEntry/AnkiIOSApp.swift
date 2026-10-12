@@ -77,6 +77,8 @@ struct AppRootView: View {
     }
 
     func load() {
+        let interval = PerformanceProbe.begin("Workspace.load")
+        defer { PerformanceProbe.end(interval) }
         do {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-study-test-accessibility") { UITestFixtures.configureAccessibilityScene() }
@@ -134,8 +136,8 @@ struct AppRootView: View {
                 if studyURL != nil, args.contains("-study-test-new-review-due"), let store {
                     try UITestFixtures.populateNewReviewDue(store)
                 }
-                if studyURL != nil, args.contains("-study-test-scale"), let store {
-                    try UITestFixtures.populateScale(store.repository, now: store.clock())
+                if studyURL != nil, (args.contains("-study-test-scale") || args.contains("-study-test-scale-basic")), let store {
+                    try UITestFixtures.populateScale(store.repository, now: store.clock(), basic: args.contains("-study-test-scale-basic"), multipleDecks: args.contains("-study-performance"))
                     try store.reload()
                 }
                 if studyURL != nil, args.contains("-study-test-tag-filters"), let store {

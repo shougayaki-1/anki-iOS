@@ -32,22 +32,27 @@ enum UITestFixtures {
         try store.reload()
         store.showingReview = true
     }
-    @MainActor static func populateScale(_ repository: StudyRepository, now: Date) throws {
+    @MainActor static func populateScale(_ repository: StudyRepository, now: Date, basic: Bool = false, multipleDecks: Bool = false) throws {
         guard try repository.notes().isEmpty else { return }
         let base = now.addingTimeInterval(-300 * 86400), scheduler = try ReviewScheduler()
         let fresh = try JSONEncoder().encode(scheduler.newCard(now: base)), deck = try repository.decks()[0].id
         try repository.transaction {
             var cards: [StudyCard] = []
-            for index in 0..<1000 {
-                let input = NoteInput(deckID: deck, kind: .cloze, question: "Scale \(index) {{c1::one}} {{c2::two}} {{c3::three}}")
-                let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: "", explanation: "")), now: base)
+            let decks = [deck] + (1..<(multipleDecks ? 20 : 1)).map { _ in UUID() }
+            for (index, id) in decks.dropFirst().enumerated() {
+                let model = Deck(name: "Scale deck \(index + 1)", now: base); model.id = id; repository.context.insert(model)
+            }
+            for index in 0..<(basic ? 3000 : 1000) {
+                let input = NoteInput(deckID: decks[index % decks.count], kind: basic ? .basic : .cloze,
+                    question: basic ? "Scale \(index)" : "Scale \(index) {{c1::one}} {{c2::two}} {{c3::three}}", answer: basic ? "Answer" : "")
+                let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: "")), now: base)
                 repository.context.insert(note)
-                for variant in 1...3 {
-                    let card = StudyCard(noteID: note.id, variantKey: "cloze:\(variant)", payload: fresh, now: base)
+                for variant in 1...(basic ? 1 : 3) {
+                    let card = StudyCard(noteID: note.id, variantKey: basic ? "basic:front" : "cloze:\(variant)", payload: fresh, now: base)
                     repository.context.insert(card); cards.append(card)
                 }
             }
-            for index in 0..<10000 {
+            for index in 0..<(basic ? 0 : 10000) {
                 let card = cards[index % cards.count], date = base.addingTimeInterval(Double(index) * 60)
                 let before = try repository.snapshot(card), wasNew = try scheduler.summary(before).state == "new"
                 let transition = try scheduler.review(before, grade: .easy, now: date)
@@ -210,3 +215,40 @@ enum UITestFixtures {
     }
 }
 #endif
+
+import Foundation
+#if DEBUG
+import os
+#endif
+
+// Constant interval names only. Available solely for an explicit isolated profiling run.
+enum PerformanceProbe {
+    struct Interval {
+        #if DEBUG
+        let name: StaticString
+        let state: OSSignpostIntervalState
+        #endif
+    }
+    #if DEBUG
+    private static let signposter = OSSignposter(subsystem: "dev.shoug.AnkiIOS", category: "Performance")
+    private static let enabled: Bool = {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-study-performance"), let index = args.firstIndex(of: "-study-test-store"),
+              args.count > index + 1, UUID(uuidString: args[index + 1]) != nil else { return false }
+        return true
+    }()
+    #endif
+    @inline(__always) static func begin(_ name: StaticString) -> Interval? {
+        #if DEBUG
+        guard enabled else { return nil }
+        return Interval(name: name, state: signposter.beginInterval(name, id: signposter.makeSignpostID()))
+        #else
+        return nil
+        #endif
+    }
+    @inline(__always) static func end(_ interval: Interval?) {
+        #if DEBUG
+        if let interval { signposter.endInterval(interval.name, interval.state) }
+        #endif
+    }
+}

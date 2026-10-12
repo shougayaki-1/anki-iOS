@@ -10,6 +10,8 @@ actor StatisticsReader {
     init(container: ModelContainer) { self.container = container }
 
     func load(now: Date, calendar: Calendar, startHour: Int, scope: LearningScope) throws -> StudyStatistics {
+        let interval = PerformanceProbe.begin("Statistics.load")
+        defer { PerformanceProbe.end(interval) }
         try Task.checkCancellation()
         let context = ModelContext(container)
         let notes = try context.fetch(FetchDescriptor<Note>())

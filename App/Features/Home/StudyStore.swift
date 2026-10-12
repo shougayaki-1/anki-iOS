@@ -87,6 +87,8 @@ final class StudyStore {
     func reload() throws { try refreshStudy(metadata: true) }
 
     private func refreshStudy(metadata: Bool = false, changed: Bool = true) throws {
+        let interval = PerformanceProbe.begin("Store.refreshStudy")
+        defer { PerformanceProbe.end(interval) }
         do {
             repository.calendar = .current
             let now = clock()
@@ -140,6 +142,8 @@ final class StudyStore {
         homeFailure = nil
     }
     func refreshHome(reconcileNotifications: Bool = false) {
+        let interval = PerformanceProbe.begin("Store.refreshHome")
+        defer { PerformanceProbe.end(interval) }
         do {
             repository.calendar = .current
             let now = clock()
@@ -335,12 +339,16 @@ final class StudyStore {
         perform(metadata: false, changed: false) { try repository.applyHomeScope(value) }
     }
     func start(_ mode: StudyMode) {
+        let interval = PerformanceProbe.begin("Store.start")
+        defer { PerformanceProbe.end(interval) }
         if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
     }
     func resume() {
         if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
     }
     func grade(_ grade: ReviewGrade) {
+        let interval = PerformanceProbe.begin("Store.grade")
+        defer { PerformanceProbe.end(interval) }
         let previouslyComplete = review?.sessionProgress?.isComplete == true
         do { try repository.grade(grade, now: clock()) }
         catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
@@ -350,6 +358,8 @@ final class StudyStore {
         haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
     }
     func undo() {
+        let interval = PerformanceProbe.begin("Store.undo")
+        defer { PerformanceProbe.end(interval) }
         do { try repository.undo(now: clock()) }
         catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
         do { try refreshStudy() }

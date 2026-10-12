@@ -205,6 +205,8 @@ extension StudyRepository {
     // rolls back every inserted Note/Card/Tag and reports no successful import.
     func importRows(_ rows: [ImportRow], deckID: UUID, kind: NoteKind, tagNames: [String],
                     action: DuplicateAction, resetHistory: Bool = false, source: String, now: Date) throws -> ImportResult {
+        let interval = PerformanceProbe.begin("Import.CSV")
+        defer { PerformanceProbe.end(interval) }
         var valid: [(ImportRow, NoteInput, Data)] = [], errors: [String] = []
         let initialNoteIDs = Set(try notes().map(\.id))
         var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
@@ -607,6 +609,8 @@ actor LibraryReader {
     init(container: ModelContainer) { self.container = container }
 
     func load(revision: Int) throws -> LibraryIndex {
+        let interval = PerformanceProbe.begin("Library.metadata")
+        defer { PerformanceProbe.end(interval) }
         if self.revision == revision, let cached { return cached }
         let index = try Self.read(context: ModelContext(container))
         self.revision = revision; cached = index; searchText = [:]; loadedDecks = []
@@ -614,6 +618,8 @@ actor LibraryReader {
     }
 
     func search(_ query: String, revision: Int, deckIDs: Set<UUID>?) throws -> LibraryResults {
+        let interval = PerformanceProbe.begin("Library.search")
+        defer { PerformanceProbe.end(interval) }
         let index = try contents(revision: revision, deckIDs: deckIDs)
         let scope = index.results(deckIDs: deckIDs)
         guard !query.isEmpty else { return scope }
@@ -634,6 +640,8 @@ actor LibraryReader {
     }
 
     func contents(revision: Int, deckIDs: Set<UUID>?) throws -> LibraryIndex {
+        let interval = PerformanceProbe.begin("Library.contents")
+        defer { PerformanceProbe.end(interval) }
         var index = try load(revision: revision)
         let missing = (deckIDs ?? Set(index.cardsByDeck.keys)).subtracting(loadedDecks)
         guard !missing.isEmpty else { return index }

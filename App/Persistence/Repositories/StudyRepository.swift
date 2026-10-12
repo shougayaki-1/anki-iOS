@@ -242,6 +242,8 @@ final class StudyRepository {
     }
 
     func noteItems(cardID: UUID? = nil, cardIDs: Set<UUID>? = nil) throws -> [NoteItem] {
+        let interval = PerformanceProbe.begin("Repository.noteItems")
+        defer { PerformanceProbe.end(interval) }
         if cardID == nil, cardIDs?.isEmpty == true { return [] }
         let scheduler = try ReviewScheduler()
         let marks = Dictionary(uniqueKeysWithValues: (try options().cardMarks ?? []).map { ($0.cardID, $0) })
@@ -296,6 +298,8 @@ final class StudyRepository {
     }
 
     func queueCards() throws -> [QueueCard] {
+        let interval = PerformanceProbe.begin("Repository.queueCards")
+        defer { PerformanceProbe.end(interval) }
         let scheduler = try ReviewScheduler()
         let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
         let ancestors = try deckAncestorMap()
@@ -483,6 +487,8 @@ final class StudyRepository {
     }
 
     func grade(_ grade: ReviewGrade, now: Date) throws {
+        let interval = PerformanceProbe.begin("Repository.grade")
+        defer { PerformanceProbe.end(interval) }
         try transaction {
             guard let draft = try session(), let cardID = draft.cardID, draft.answerRevealed,
                   let card = try card(cardID), !card.isSuspended,
@@ -547,6 +553,8 @@ final class StudyRepository {
     }
 
     func undo(now: Date) throws {
+        let interval = PerformanceProbe.begin("Repository.undo")
+        defer { PerformanceProbe.end(interval) }
         try transaction {
             guard let draft = try session(), let logID = draft.undoLogID,
                   let latest = try latestReviewLog(), latest.id == logID,
