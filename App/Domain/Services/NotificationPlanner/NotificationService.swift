@@ -63,6 +63,21 @@ final class NotificationService {
     private var generation = 0
     private var reconciling = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
+    private struct Input: Equatable {
+        let due: Date
+        let hiddenUntil: Date?
+    }
+    private struct PlanKey: Equatable {
+        let cards: [Input]
+        let options: NotificationOptions
+        let calendar: Calendar
+        let permission: NotificationPermission
+        let delivered: Set<String>
+    }
+    private var cachedPlan: (key: PlanKey, evaluatedAt: Date, validUntil: Date, desired: [PlannedNotification])?
+    #if DEBUG
+    private(set) var planningCount = 0
+    #endif
     init(center: (any LocalNotificationCenter)? = nil, identifierPrefix: String = "review-") {
         self.identifierPrefix = identifierPrefix
         self.center = center ?? AppleNotificationCenter(identifierPrefix: identifierPrefix)
@@ -88,9 +103,29 @@ final class NotificationService {
         let delivered = await center.delivered()
         guard current == generation, !Task.isCancelled else { return permission }
         let planner = NotificationPlanner(calendar: calendar, identifierPrefix: identifierPrefix)
-        let desired = planner.plan(cards: cards, options: options, authorized: permission == .allowed, delivered: delivered, now: now)
+        let inputs = cards.filter { !$0.suspended && $0.state != "new" }.map {
+            Input(due: $0.due, hiddenUntil: $0.hiddenUntil)
+        }.sorted {
+            if $0.due != $1.due { return $0.due < $1.due }
+            return ($0.hiddenUntil ?? .distantPast) < ($1.hiddenUntil ?? .distantPast)
+        }
+        let key = PlanKey(cards: inputs, options: options, calendar: calendar, permission: permission,
+                          delivered: delivered.filter { planner.owns($0) })
+        let desired: [PlannedNotification]
+        if let cached = cachedPlan, cached.key == key, now >= cached.evaluatedAt, now < cached.validUntil {
+            desired = cached.desired
+        } else {
+            desired = planner.plan(cards: cards, options: options, authorized: permission == .allowed, delivered: delivered, now: now)
+            #if DEBUG
+            planningCount += 1
+            #endif
+            let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+            let time = calendar.date(bySettingHour: options.hour, minute: options.minute, second: 0, of: now)
+            let boundary = min(midnight, time.flatMap { $0 > now ? $0 : nil } ?? midnight)
+            cachedPlan = inputs.count <= 10000 && key.delivered.count <= 1000 ? (key, now, boundary, desired) : nil
+        }
         let difference = planner.difference(pending: pending, desired: desired)
-        center.remove(difference.remove)
+        if !difference.remove.isEmpty { center.remove(difference.remove) }
         for item in difference.add {
             guard current == generation, !Task.isCancelled else { break }
             try await center.add(item)

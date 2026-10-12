@@ -5,7 +5,9 @@ import SwiftData
 extension StudyRepository {
     func assets() throws -> [MediaAsset] { try context.fetch(FetchDescriptor<MediaAsset>()) }
     func assetURL(id: UUID) throws -> URL {
-        guard let asset = try assets().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
+        var fetch = FetchDescriptor<MediaAsset>(predicate: #Predicate { $0.id == id })
+        fetch.fetchLimit = 1
+        guard let asset = try context.fetch(fetch).first else { throw StudyError.missingRecord }
         return try mediaStore.url(for: asset.relativePath)
     }
     func addImage(_ data: Data, crop: MaskRect? = nil, now: Date) throws -> UUID {
@@ -111,7 +113,8 @@ extension StudyRepository {
 
 extension StudyRepository {
     func importImagePackage(_ package: ImageImportPackage, deckID: UUID, action: DuplicateAction, now: Date) throws -> ImportResult {
-        let initialNoteIDs = Set(try notes().map(\.id))
+        let initialNotes = try notes()
+        let initialNoteIDs = Set(initialNotes.map(\.id))
         var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
         var duplicates = 0
         let selected = package.rows.filter { $0.included && $0.error == nil }
@@ -123,8 +126,21 @@ extension StudyRepository {
                 var imported = 0, skipped = package.rows.filter { !$0.included }.count
                 var errors = package.rows.filter { $0.included }.compactMap { row in row.error.map { "\(row.line)行: \($0)" } }
                 var deckCache = try decks(), imageCache: [String: UUID] = [:]
-                var known = try assets(), allNotes = try notes(), hashCache: [String: String] = [:]
+                let known = try assets()
+                var assetHashes: [UUID: String] = [:], assetIDsByHash: [String: UUID] = [:]
+                for asset in known {
+                    assetHashes[asset.id] = asset.sha256
+                    if assetIDsByHash[asset.sha256] == nil { assetIDsByHash[asset.sha256] = asset.id }
+                }
+                var notesByImage: [[String]: Note] = [:], hashCache: [String: String] = [:]
+                for note in initialNotes where note.type == NoteKind.basic.rawValue {
+                    guard let content = try? JSONDecoder().decode(TextContent.self, from: note.contentPayload),
+                          let id = content.imageID, let hash = assetHashes[id] else { continue }
+                    let key = [note.deckID.uuidString, ImportParser.normalized(content.question), ImportParser.normalized(content.answer), hash]
+                    if notesByImage[key] == nil { notesByImage[key] = note }
+                }
                 for row in selected {
+                    try Task.checkCancellation()
                     guard !ImportParser.normalized(row.question).isEmpty, !ImportParser.normalized(row.answer).isEmpty,
                           let bytes = package.images[row.imagePath] else { errors.append("\(row.line)行: 問題・解答・画像を確認してください。"); continue }
                     var destination = deckID
@@ -142,21 +158,15 @@ extension StudyRepository {
                     }
                     let hash = hashCache[row.imagePath] ?? SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
                     hashCache[row.imagePath] = hash
-                    let existing = allNotes.first { note in
-                        guard note.deckID == destination, note.type == NoteKind.basic.rawValue,
-                              let content = try? JSONDecoder().decode(TextContent.self, from: note.contentPayload),
-                              ImportParser.normalized(content.question) == ImportParser.normalized(row.question),
-                              ImportParser.normalized(content.answer) == ImportParser.normalized(row.answer),
-                              let image = known.first(where: { $0.id == content.imageID }) else { return false }
-                        return image.sha256 == hash
-                    }
+                    let key = [destination.uuidString, ImportParser.normalized(row.question), ImportParser.normalized(row.answer), hash]
+                    let existing = notesByImage[key]
                     if existing != nil && action == .skip { skipped += 1; duplicates += 1; continue }
                     let imageID: UUID
                     if let cached = imageCache[row.imagePath] { imageID = cached }
-                    else if let asset = known.first(where: { $0.sha256 == hash }) { imageID = asset.id; imageCache[row.imagePath] = imageID }
+                    else if let id = assetIDsByHash[hash] { imageID = id; imageCache[row.imagePath] = imageID }
                     else {
                         let image = try mediaStore.store(bytes); createdPaths.append(image.relativePath)
-                        let asset = MediaAsset(image: image, now: now); context.insert(asset); known.append(asset); imageID = image.id; imageCache[row.imagePath] = imageID
+                        let asset = MediaAsset(image: image, now: now); context.insert(asset); assetIDsByHash[asset.sha256] = image.id; imageID = image.id; imageCache[row.imagePath] = imageID
                     }
                     let input = NoteInput(deckID: destination, question: row.question, answer: row.answer,
                                           explanation: row.explanation, tagNames: row.tags, imageID: imageID)
@@ -164,7 +174,8 @@ extension StudyRepository {
                     if let existing, action == .update {
                         if initialNoteIDs.contains(existing.id) {
                             updatedNoteIDs.insert(existing.id)
-                            maintainedCardIDs.formUnion(try cards().filter { $0.noteID == existing.id }.map(\.id))
+                            let noteID = existing.id
+                            maintainedCardIDs.formUnion(try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID })).map(\.id))
                         }
                         var content = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
                         content.explanation = row.explanation
@@ -172,7 +183,8 @@ extension StudyRepository {
                         existing.tagIDs = try tagIDs(for: row.tags); existing.updatedAt = now
                     } else {
                         let note = Note(input: input, content: payload, now: now)
-                        note.tagIDs = try tagIDs(for: row.tags); context.insert(note); allNotes.append(note); createdNoteIDs.insert(note.id)
+                        note.tagIDs = try tagIDs(for: row.tags); context.insert(note); createdNoteIDs.insert(note.id)
+                        if notesByImage[key] == nil { notesByImage[key] = note }
                         let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: fresh, now: now)
                         context.insert(card); createdCardIDs.insert(card.id)
                     }

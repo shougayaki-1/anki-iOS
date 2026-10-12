@@ -20,7 +20,7 @@ struct StudyDay {
     }
 }
 
-struct QueueCard: Sendable {
+struct QueueCard: Sendable, Equatable {
     let id: UUID
     let state: String
     let due: Date
@@ -32,7 +32,7 @@ struct QueueCard: Sendable {
     var deckLimits: [UUID: Int] = [:]
 }
 
-struct QueueLog: Sendable {
+struct QueueLog: Sendable, Equatable {
     let cardID: UUID
     let reviewedAt: Date
     let wasNew: Bool

@@ -8,14 +8,22 @@ struct DelimitedTable {
 struct ImportParser {
     // RFC 4180 style quoting, including multiline fields and escaped double quotes.
     static func table(_ text: String, delimiter: Character) throws -> DelimitedTable {
-        let chars = Array(text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n"))
+        // Keep only one-character lookahead rather than a whole Character array.
+        var characters = text.makeIterator()
+        func nextCharacter() -> Character? {
+            guard let value = characters.next() else { return nil }
+            return value == "\r\n" || value == "\r" ? "\n" : value
+        }
+        var current = nextCharacter()
         var rows: [[String]] = [], lines: [Int] = [], row: [String] = [], field = ""
-        var quoted = false, closed = false, line = 1, rowLine = 1, index = 0
-        while index < chars.count {
-            let char = chars[index]
+        var quoted = false, closed = false, line = 1, rowLine = 1, characterCount = 0
+        while let char = current {
+            characterCount += 1
+            if characterCount % 4096 == 0 { try Task.checkCancellation() }
+            var next = nextCharacter()
             if quoted {
                 if char == "\"" {
-                    if index + 1 < chars.count && chars[index + 1] == "\"" { field.append("\""); index += 1 }
+                    if next == "\"" { field.append("\""); next = nextCharacter() }
                     else { quoted = false; closed = true }
                 } else { field.append(char); if char == "\n" { line += 1 } }
             } else if char == delimiter {
@@ -31,7 +39,7 @@ struct ImportParser {
                 guard !closed else { throw LibraryError.malformedCSV(line) }
                 field.append(char)
             }
-            index += 1
+            current = next
         }
         guard !quoted else { throw LibraryError.malformedCSV(rowLine) }
         row.append(field)
@@ -118,7 +126,7 @@ struct ImportParser {
     }
 }
 
-struct ImageImportRow: Identifiable {
+struct ImageImportRow: Identifiable, Sendable {
     var id = UUID()
     var line: Int
     var question: String
@@ -130,7 +138,7 @@ struct ImageImportRow: Identifiable {
     var error: String?
     var included = true
 }
-struct ImageImportPackage: Identifiable {
+struct ImageImportPackage: Identifiable, Sendable {
     let id = UUID()
     var rows: [ImageImportRow]
     let images: [String: Data]
@@ -147,8 +155,13 @@ struct ImageImportPackage: Identifiable {
         guard let header = table.rows.first else { throw ImageImportError.invalidTable }
         let keys = header.map { ImportParser.normalized($0).lowercased() }
         guard Set(keys).count == keys.count, keys.contains("answer"), keys.contains("image") else { throw ImageImportError.invalidTable }
+        let imageColumn = keys.firstIndex(of: "image")!
+        let referencedImages = Set(table.rows.dropFirst().compactMap { values in
+            values.indices.contains(imageColumn) ? ImportParser.normalized(values[imageColumn]) : nil
+        })
         var images: [String: Data] = [:], errors: [String: String] = [:]
-        for (name, bytes) in files where name.hasPrefix("images/") {
+        for (name, bytes) in files where name.hasPrefix("images/") && referencedImages.contains(name) {
+            try Task.checkCancellation()
             guard ["png", "jpg", "jpeg"].contains((name as NSString).pathExtension.lowercased()) else { errors[name] = "PNG / JPEG の画像を指定してください。"; continue }
             guard bytes.starts(with: [137, 80, 78, 71, 13, 10, 26, 10]) || bytes.starts(with: [255, 216]) else {
                 errors[name] = "画像の実データがPNG / JPEGではありません。"; continue

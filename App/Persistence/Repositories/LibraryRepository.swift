@@ -206,7 +206,8 @@ extension StudyRepository {
     func importRows(_ rows: [ImportRow], deckID: UUID, kind: NoteKind, tagNames: [String],
                     action: DuplicateAction, resetHistory: Bool = false, source: String, now: Date) throws -> ImportResult {
         var valid: [(ImportRow, NoteInput, Data)] = [], errors: [String] = []
-        let initialNoteIDs = Set(try notes().map(\.id))
+        let initialNotes = try notes()
+        let initialNoteIDs = Set(initialNotes.map(\.id))
         var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
         let excluded = rows.filter { !$0.included }.count
         var duplicates = 0, skipped = 0
@@ -223,8 +224,21 @@ extension StudyRepository {
         let fresh = try JSONEncoder().encode(scheduler.newCard(now: now))
         return try transaction {
             var imported = 0
+            var duplicatesByText: [[String]: Note] = [:]
+            for note in initialNotes where !valid.isEmpty && note.deckID == deckID && note.type == kind.rawValue {
+                let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+                let key = [ImportParser.normalized(content.question), ImportParser.normalized(content.answer)]
+                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
+            }
+            var importTagIDs: [UUID]?
+            @MainActor func tagsForImport() throws -> [UUID] {
+                if let importTagIDs { return importTagIDs }
+                let ids = try tagIDs(for: tagNames); importTagIDs = ids; return ids
+            }
             for (row, input, content) in valid {
-                if let existing = try duplicate(of: input) {
+                try Task.checkCancellation()
+                let key = [ImportParser.normalized(input.question), ImportParser.normalized(input.answer)]
+                if let existing = duplicatesByText[key] {
                     if action == .skip { skipped += 1; duplicates += 1; continue }
                     if action == .update {
                         var merged = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
@@ -235,8 +249,9 @@ extension StudyRepository {
                         if let value = input.answerLayout { merged.answerLayout = value }
                         existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
                         if row.responseMode != nil { existing.defaultResponseMode = input.responseMode.rawValue }
-                        existing.tagIDs = try tagIDs(for: tagNames)
-                        let existingCards = try cards().filter { $0.noteID == existing.id }
+                        existing.tagIDs = try tagsForImport()
+                        let noteID = existing.id
+                        let existingCards = try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
                         if initialNoteIDs.contains(existing.id) {
                             updatedNoteIDs.insert(existing.id); maintainedCardIDs.formUnion(existingCards.map(\.id))
                         }
@@ -249,7 +264,8 @@ extension StudyRepository {
                     }
                 }
                 let note = Note(input: input, content: content, now: now)
-                note.tagIDs = try tagIDs(for: tagNames); context.insert(note); createdNoteIDs.insert(note.id)
+                note.tagIDs = try tagsForImport(); context.insert(note); createdNoteIDs.insert(note.id)
+                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
                 let value = try JSONDecoder().decode(TextContent.self, from: content)
                 for key in try CardGeneration.variants(kind: kind, content: value) {
                     let card = StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now)
@@ -616,6 +632,8 @@ actor LibraryReader {
     var retainedContentBytes: Int { contentCosts.values.reduce(0, +) }
     var retainedSearchBytes: Int { searchBytes }
     #endif
+    private var scheduleRevision: Int?
+    private var scheduleCache: [UUID: LibrarySearchSchedule] = [:]
 
     init(container: ModelContainer, maximumContentBytes: Int = 8 * 1024 * 1024,
          maximumCachedDecks: Int = 32, maximumSearchBytes: Int = 2 * 1024 * 1024) {
@@ -842,4 +860,112 @@ extension StudyRepository {
         return try ids.map { ImportDestination(id: $0, name: try deckPath($0)) }
             .sorted { $0.name < $1.name }
     }
+}
+
+
+extension StudyRepository {
+    func saveLibrarySearch(_ value: LibrarySearchPreferences) throws {
+        try transaction {
+            var saved = try options()
+            guard saved.librarySearch != value else { return }
+            saved.librarySearch = value
+            try writeOptionsInTransaction(saved)
+        }
+    }
+}
+
+extension LibraryReader {
+    // Revision-scoped snapshots are decoded only for schedule filters. No payload
+    // is decoded on each text keystroke; this cache is bounded by the current store.
+    func advancedSearch(_ conditions: LibrarySearchConditions, revision: Int, now: Date,
+                        calendar: Calendar = .current, dayStartHour: Int) throws -> LibraryResults {
+        let context = ModelContext(container)
+        var allowed: Set<UUID>?
+        if let deck = conditions.deckID {
+            let rows = try context.fetch(FetchDescriptor<Deck>())
+            var ids: Set<UUID> = rows.contains(where: { $0.id == deck }) ? [deck] : []
+            if conditions.descendants {
+                var pending = Array(ids)
+                while let parent = pending.popLast() {
+                    for child in rows where child.parentID == parent && ids.insert(child.id).inserted { pending.append(child.id) }
+                }
+            }
+            allowed = ids
+        }
+        let base = try search(conditions.text, revision: revision, deckIDs: allowed)
+        var matches = base.cardIDs
+        if !conditions.tags.isEmpty {
+            var fetch = FetchDescriptor<Note>()
+            fetch.propertiesToFetch = [\.id, \.tagIDs]
+            let selected = Set(conditions.tags)
+            let notes = Set(try context.fetch(fetch).filter {
+                conditions.anyTag ? !selected.isDisjoint(with: $0.tagIDs) : selected.isSubset(of: Set($0.tagIDs))
+            }.map(\.id))
+            matches = Set(base.cardsByDeck.values.joined().filter { notes.contains($0.noteID) }.map(\.id))
+        }
+        if conditions.againToday || conditions.reviewedDays > 0 {
+            let start = StudyDay(calendar: calendar, startHour: dayStartHour).interval(containing: now).start
+            let recent = calendar.date(byAdding: .day, value: -(max(1, conditions.reviewedDays) - 1), to: start)!
+            let earliest = conditions.againToday ? min(start, recent) : recent
+            var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.reviewedAt >= earliest && $0.reviewedAt <= now })
+            fetch.propertiesToFetch = [\.cardID, \.reviewedAt, \.grade]
+            let logs = try context.fetch(fetch)
+            if conditions.againToday {
+                matches.formIntersection(logs.filter { $0.reviewedAt >= start && $0.grade == ReviewGrade.again.rawValue }.map(\.cardID))
+            }
+            if conditions.reviewedDays > 0 { matches.formIntersection(logs.filter { $0.reviewedAt >= recent }.map(\.cardID)) }
+        }
+        if conditions.requiresSchedule || conditions.dueOnly || conditions.state == .suspended {
+            let preferences = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
+            let options = try preferences.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) }
+            let scheduler = try ReviewScheduler(parameters: options?.fsrsOptimization?.activeParameters)
+            let states = try scheduleRows(revision: revision)
+            matches = Set(matches.filter { id in
+                guard let row = states[id] else { return false }
+                if conditions.dueOnly && (row.suspended || row.due > now || row.summary == nil || row.summary?.state == "new") { return false }
+                if conditions.state == .suspended && !row.suspended { return false }
+                if conditions.requiresSchedule {
+                    let summary = row.summary
+                    let missing = summary == nil || summary?.lastReview == nil
+                    if conditions.missingFSRS && !missing { return false }
+                    if conditions.state != .all && conditions.state != .suspended && summary?.state != conditions.state.rawValue { return false }
+                    if conditions.minimumLapses > 0 && (summary == nil || summary!.lapses < conditions.minimumLapses) { return false }
+                    if conditions.minimumDifficulty > 0 && (missing || summary!.difficulty < conditions.minimumDifficulty) { return false }
+                    if conditions.maximumRecall < 1 {
+                        guard !missing, let snapshot = row.snapshot,
+                              let recall = try? scheduler.retrievability(snapshot, now: now), recall <= conditions.maximumRecall else { return false }
+                    }
+                }
+                return true
+            })
+        }
+        if let flag = conditions.flag {
+            let options = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
+            let marks = try options.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload).cardMarks ?? [] } ?? []
+            matches.formIntersection(marks.filter { $0.flag == flag }.map(\.cardID))
+        }
+        var result = try load(revision: revision).results(deckIDs: allowed, matching: matches)
+        if conditions.oldestFirst { for id in result.cardsByDeck.keys { result.cardsByDeck[id]?.reverse() } }
+        return result
+    }
+    private func scheduleRows(revision: Int) throws -> [UUID: LibrarySearchSchedule] {
+        if scheduleRevision == revision { return scheduleCache }
+        let scheduler = try ReviewScheduler()
+        var fetch = FetchDescriptor<StudyCard>()
+        fetch.propertiesToFetch = [\.id, \.fsrsPayload, \.dueDate, \.isSuspended]
+        var rows: [UUID: LibrarySearchSchedule] = [:]
+        for card in try ModelContext(container).fetch(fetch) {
+            try Task.checkCancellation()
+            let snapshot = try? JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
+            rows[card.id] = LibrarySearchSchedule(snapshot: snapshot, summary: snapshot.flatMap { try? scheduler.summary($0) }, due: card.dueDate, suspended: card.isSuspended)
+        }
+        scheduleCache = rows; scheduleRevision = revision
+        return rows
+    }
+}
+private struct LibrarySearchSchedule {
+    let snapshot: SchedulerSnapshot?
+    let summary: ScheduleSummary?
+    let due: Date
+    let suspended: Bool
 }

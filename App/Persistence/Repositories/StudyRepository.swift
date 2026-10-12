@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 extension PersistenceController {
-    static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
+    static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false, mediaStore: MediaStore = MediaStore()) throws -> ModelContainer {
         let schema = Schema(versionedSchema: StudySchemaV5.self)
         let config: ModelConfiguration
         if let storeURL {
@@ -15,7 +15,15 @@ extension PersistenceController {
             config = ModelConfiguration("Study", schema: schema,
                                         url: try StudyStorageLocation(canonicalStore: directory.appendingPathComponent("Study.store")).activeStore(), cloudKitDatabase: .none)
         }
-        return try ModelContainer(for: schema, migrationPlan: StudyMigrationPlan.self, configurations: [config])
+        let location = StudyStorageLocation(canonicalStore: storeURL ?? StudyStorageLocation.defaultStore)
+        let rescue = MigrationRescue(location: location)
+        let schemaID = "5.0.0" // Keep in sync with the schema selected above.
+        // All production opens share this preflight, including shortcuts.
+        // UI-test/custom stores use their own Media root from the caller.
+        if !inMemory { try rescue.preserveIfNeeded(schema: schemaID, mediaStore: mediaStore) }
+        let container = try ModelContainer(for: schema, migrationPlan: StudyMigrationPlan.self, configurations: [config])
+        if !inMemory { try? rescue.markOpened(schema: schemaID) }
+        return container
     }
 }
 
@@ -26,6 +34,12 @@ final class StudyRepository {
     var mediaStore: MediaStore
     private var queueStates: [UUID: (payload: Data, state: String)] = [:]
     private(set) var queueStateDecodeCount = 0
+    #if DEBUG
+    private(set) var queueProjectionCount = 0
+    private(set) var queueProjectionSeconds = 0.0
+    private(set) var fullHistoryFetchCount = 0
+    private(set) var historyRowsFetched = 0
+    #endif
     var save: (ModelContext) throws -> Void
 
     init(container: ModelContainer, calendar: Calendar = .current, mediaStore: MediaStore = MediaStore(),
@@ -73,7 +87,12 @@ final class StudyRepository {
     func notes() throws -> [Note] { try context.fetch(FetchDescriptor<Note>()) }
     func cards() throws -> [StudyCard] { try context.fetch(FetchDescriptor<StudyCard>()) }
     func logs() throws -> [StudyReviewLog] {
-        try context.fetch(FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence)]))
+        let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence)]))
+        #if DEBUG
+        fullHistoryFetchCount += 1
+        historyRowsFetched += rows.count
+        #endif
+        return rows
     }
     func session() throws -> SessionDraft? { try context.fetch(FetchDescriptor<SessionDraft>()).first }
     func preferences() throws -> StudyPreferences {
@@ -257,17 +276,33 @@ final class StudyRepository {
                 selectedNotes = try context.fetch(noteFetch)
             } else { return [] }
         } else if let cardIDs {
-            selectedCards = try cards().filter { cardIDs.contains($0.id) }
+            selectedCards = try fetchIDBatches(cardIDs) { ids in
+                FetchDescriptor<StudyCard>(predicate: #Predicate { ids.contains($0.id) })
+            }
             let noteIDs = Set(selectedCards.map(\.noteID))
-            selectedNotes = try notes().filter { noteIDs.contains($0.id) }
+            selectedNotes = try fetchIDBatches(noteIDs) { ids in
+                FetchDescriptor<Note>(predicate: #Predicate { ids.contains($0.id) })
+            }
         } else { selectedCards = try cards(); selectedNotes = try notes() }
         let noteMap = Dictionary(uniqueKeysWithValues: selectedNotes.map { ($0.id, $0) })
         let deckMap: [UUID: String]
         let tagMap: [UUID: String]
-        if cardID != nil, let note = selectedNotes.first {
-            deckMap = [note.deckID: try targetedDeckPath(note.deckID)]
-            let ids = note.tagIDs
-            let selectedTags = ids.isEmpty ? [] : try context.fetch(FetchDescriptor<Tag>(predicate: #Predicate { ids.contains($0.id) }))
+        if cardID != nil || cardIDs != nil {
+            var selectedDecks: [UUID: Deck] = [:]
+            var pending = Set(selectedNotes.map(\.deckID))
+            var visited: Set<UUID> = []
+            while !pending.isEmpty {
+                visited.formUnion(pending)
+                let rows = try fetchIDBatches(pending) { ids in
+                    FetchDescriptor<Deck>(predicate: #Predicate { ids.contains($0.id) })
+                }
+                for row in rows { selectedDecks[row.id] = row }
+                pending = Set(rows.compactMap(\.parentID)).subtracting(visited)
+            }
+            deckMap = LibraryIndex.deckPaths(Array(selectedDecks.values))
+            let selectedTags = try fetchIDBatches(Set(selectedNotes.flatMap(\.tagIDs))) { ids in
+                FetchDescriptor<Tag>(predicate: #Predicate { ids.contains($0.id) })
+            }
             tagMap = Dictionary(uniqueKeysWithValues: selectedTags.map { ($0.id, $0.name) })
         } else {
             deckMap = LibraryIndex.deckPaths(try decks())
@@ -285,6 +320,19 @@ final class StudyRepository {
         }
     }
 
+    // Keep captured IN lists below SQLite's conservative bind-parameter limit.
+    // Managed objects stay on this repository's context and main actor.
+    private func fetchIDBatches<T: PersistentModel>(_ ids: Set<UUID>,
+        descriptor: ([UUID]) -> FetchDescriptor<T>) throws -> [T] {
+        let values = Array(ids)
+        var result: [T] = []
+        for start in stride(from: 0, to: values.count, by: 400) {
+            let batch = Array(values[start..<min(start + 400, values.count)])
+            result.append(contentsOf: try context.fetch(descriptor(batch)))
+        }
+        return result
+    }
+
     func siblingCardCount(noteID: UUID) throws -> Int {
         try context.fetchCount(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
     }
@@ -296,6 +344,11 @@ final class StudyRepository {
     }
 
     func queueCards() throws -> [QueueCard] {
+        #if DEBUG
+        let started = Date()
+        queueProjectionCount += 1
+        defer { queueProjectionSeconds += Date().timeIntervalSince(started) }
+        #endif
         let scheduler = try ReviewScheduler()
         let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
         let ancestors = try deckAncestorMap()
@@ -339,12 +392,41 @@ final class StudyRepository {
         let rows = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
             $0.reviewedAt >= start && $0.reviewedAt < end
         }))
-        let quotas = try quotaMap()
-        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID], quotaDeckIDs: quotas.usage[$0.sequence] ?? quotas.cards[$0.cardID] ?? []) }
+        #if DEBUG
+        historyRowsFetched += rows.count
+        #endif
+        let usage = Dictionary(uniqueKeysWithValues: (try options().deckNewUsage ?? []).map { ($0.sequence, $0.quotaDeckIDs) })
+        // Legacy logs without a saved quota snapshot use the current deck, just
+        // as quotaMap does. Fetch only cards referenced by today's missing entries.
+        let missing = Set(rows.filter { usage[$0.sequence] == nil }.map(\.cardID))
+        let selectedCards: [StudyCard] = try fetchQueueIDBatches(missing) { ids in
+            FetchDescriptor<StudyCard>(predicate: #Predicate { ids.contains($0.id) })
+        }
+        let selectedNotes: [Note] = try fetchQueueIDBatches(Set(selectedCards.map(\.noteID))) { ids in
+            FetchDescriptor<Note>(predicate: #Predicate { ids.contains($0.id) })
+        }
+        let decksByNote = Dictionary(uniqueKeysWithValues: selectedNotes.map { ($0.id, $0.deckID) })
+        let ancestors = selectedCards.isEmpty ? [:] : try deckAncestorMap()
+        let fallback = Dictionary(uniqueKeysWithValues: selectedCards.map {
+            ($0.id, decksByNote[$0.noteID].flatMap { ancestors[$0] } ?? [])
+        })
+        return rows.map { QueueLog(cardID: $0.cardID, reviewedAt: $0.reviewedAt, wasNew: $0.wasNew, noteID: noteIDs[$0.cardID], quotaDeckIDs: usage[$0.sequence] ?? fallback[$0.cardID] ?? []) }
     }
     func counts(now: Date) throws -> HomeCounts {
-        try ReviewQueueBuilder(calendar: calendar).counts(cards: queueCards(), logs: queueLogs(),
-                                                        settings: settings(), now: now)
+        let cards = try queueCards(), settings = try settings()
+        return try ReviewQueueBuilder(calendar: calendar).counts(cards: cards, logs: todayQueueLogs(cards: cards, settings: settings, now: now),
+                                                                settings: settings, now: now)
+    }
+
+    private func fetchQueueIDBatches<T: PersistentModel>(_ ids: Set<UUID>,
+        descriptor: ([UUID]) -> FetchDescriptor<T>) throws -> [T] {
+        let values = Array(ids)
+        var result: [T] = []
+        for start in stride(from: 0, to: values.count, by: 400) {
+            let batch = Array(values[start..<min(start + 400, values.count)])
+            result.append(contentsOf: try context.fetch(descriptor(batch)))
+        }
+        return result
     }
 
     // A fixed number of confirmed answers provides an honest end to each study set.
@@ -367,8 +449,9 @@ final class StudyRepository {
         try transaction {
             let normalized = try normalizedScope(scope)
             let selectedResponse = try responseMode ?? options().sessionResponseMode ?? .cardDefault
+            let cards = try queueCards(), settings = try settings()
             let available = try ReviewQueueBuilder(calendar: calendar).queue(
-                cards: responseEligibleCards(scopedQueueCards(normalized), mode: selectedResponse), logs: queueLogs(), settings: settings(),
+                cards: responseEligibleCards(scopedQueueCards(normalized, cards: cards), mode: selectedResponse), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
                 mode: mode, touched: [], reviewStreak: 0, now: now)
             // Check before replacing an interrupted draft, even if home counts were stale.
             guard !available.isEmpty else {
@@ -387,7 +470,9 @@ final class StudyRepository {
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
-            try selectNext(draft: draft, now: now)
+            // The validated queue already uses the new session's scope, mode,
+            // response and timestamp. No card/log mutation occurred in between.
+            try selectCard(available.first, draft: draft, now: now)
         }
     }
     func startAnotherSession(now: Date) throws {
@@ -495,8 +580,28 @@ final class StudyRepository {
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
             if summary.state == "new" {
-                let single = try queueCards().filter { $0.id == cardID }
-                let available = try ReviewQueueBuilder(calendar: calendar).counts(cards: single, logs: queueLogs(), settings: settings(), now: now)
+                let ancestors = Set(try deckAncestors(note.deckID))
+                let overrides = try options().deckLearning ?? []
+                let limits = Dictionary(uniqueKeysWithValues: overrides.compactMap { value -> (UUID, Int)? in
+                    guard ancestors.contains(value.deckID), let limit = value.newLimit else { return nil }
+                    return (value.deckID, limit)
+                })
+                let single = QueueCard(id: card.id, state: summary.state, due: card.dueDate,
+                                       createdAt: card.createdAt, suspended: card.isSuspended,
+                                       hiddenUntil: try cardMark(card.id)?.hiddenUntil, noteID: note.id, deckLimits: limits)
+                let settings = try settings()
+                let logs = try todayQueueLogs(cards: [single], settings: settings, now: now)
+                // Today's sibling IDs must be resolved even though this check only
+                // projects the evaluated card. They may lie outside the single DTO.
+                let noteID = note.id
+                let siblingIDs = settings.siblingBuryEnabled && !logs.isEmpty
+                    ? Set(try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID })).map(\.id)) : []
+                let quotaLogs = logs.map { log in
+                    var value = log
+                    if siblingIDs.contains(log.cardID) { value.noteID = note.id }
+                    return value
+                }
+                let available = ReviewQueueBuilder(calendar: calendar).counts(cards: [single], logs: quotaLogs, settings: settings, now: now)
                 guard available.newRemaining > 0 else { throw StudyError.newLimitReached }
             }
             let transition = try scheduler.review(before, grade: grade, now: now)
@@ -577,9 +682,10 @@ final class StudyRepository {
 
     func presentation(now: Date, cards: [QueueCard]? = nil) throws -> ReviewPresentation? {
         guard let draft = try session() else { return nil }
+        let all = try cards ?? queueCards()
         let mode = StudyMode(rawValue: draft.mode) ?? .review
         let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
-        let short = try responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
+        let short = try responseEligibleCards(scopedQueueCards(scope(), cards: all), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
             !$0.suspended && !$0.isHidden(at: now) && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()
@@ -593,18 +699,19 @@ final class StudyRepository {
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
                                   canUndo: draft.undoLogID != nil, nextShortDue: short,
                                   ordering: ordering, orderingUnavailable: reason,
-                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now) : nil,
+                                  emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now, all: all) : nil,
                                   sessionProgress: try sessionProgress())
     }
-    private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date) throws -> ReviewEmptyState {
+    private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date, all: [QueueCard]) throws -> ReviewEmptyState {
         let sessionCount = try sessionProgress()
         if let progress = sessionCount, progress.isComplete {
             return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
                                     message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
         }
-        let scoped = try scopedQueueCards(scope())
+        let scoped = try scopedQueueCards(scope(), cards: all)
         let response = try options().activeSessionProgress?.responseMode ?? .cardDefault
-        let cards = try responseEligibleCards(scoped, mode: response), logs = try queueLogs(), settings = try settings()
+        let cards = try responseEligibleCards(scoped, mode: response), settings = try settings()
+        let logs = try todayQueueLogs(cards: all, settings: settings, now: now)
         let builder = ReviewQueueBuilder(calendar: calendar)
         let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
         let queue = builder.queue(cards: cards, logs: logs, settings: settings, mode: mode,
@@ -617,7 +724,7 @@ final class StudyRepository {
                                     message: "英文の一問一答・記述式カードが対象です。ホームの学習設定で回答形式または学習対象を変更してください。", suggestsScopeChange: true)
         }
         let limit = mode != .review && counts.eligibleNew > 0 && counts.newRemaining == 0
-        let global = builder.counts(cards: try queueCards(), logs: logs, settings: settings, now: now)
+        let global = builder.counts(cards: all, logs: logs, settings: settings, now: now)
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let globalUsed = Set(logs.filter { $0.wasNew && $0.reviewedAt >= day.start && $0.reviewedAt < day.end }.map(\.cardID)).count
         let capMessage = counts.eligibleNew > 0 && globalUsed < settings.dailyNewLimit ? "デッキまたは親デッキの新規上限に達しました。ライブラリ > デッキ管理 > デッキ編集で確認できます。" : "今日の新規学習は上限（\(settings.dailyNewLimit)枚）に達しました。設定 > 学習で変更できます。"

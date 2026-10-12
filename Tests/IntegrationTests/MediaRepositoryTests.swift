@@ -6,6 +6,103 @@ import SwiftData
 
 @MainActor
 final class MediaRepositoryTests: XCTestCase {
+    func testImageZIPDoesNotRetainUnreferencedImagesButStillChecksArchiveCRC() throws {
+        let files = ["cards.csv": Data("answer,image\n解答,images/used.png".utf8), "images/used.png": imageData(), "images/unused.png": Data("unused invalid image".utf8)]
+        let archive = try StoredZIP.write(files)
+        let package = try ImageImportPackage.read(archive)
+        XCTAssertEqual(Set(package.images.keys), ["images/used.png"])
+        XCTAssertNil(package.rows[0].error)
+        var corrupt = archive
+        let position = try XCTUnwrap(corrupt.range(of: files["images/unused.png"]!))
+        corrupt[position.lowerBound] ^= 1
+        XCTAssertThrowsError(try ImageImportPackage.read(corrupt))
+    }
+    func testDisplayThumbnailOrientationAlphaCacheBudgetAndInvalidation() async throws {
+        let loader = DisplayImageLoader(maximumBytes: 1_000_000)
+        let original = try XCTUnwrap(UIImage(data: imageData())?.cgImage)
+        for orientation in 1...8 {
+            let bytes = NSMutableData()
+            let destination = try XCTUnwrap(CGImageDestinationCreateWithData(bytes, "public.jpeg" as CFString, 1, nil))
+            CGImageDestinationAddImage(destination, original, [kCGImagePropertyOrientation: orientation] as CFDictionary)
+            XCTAssertTrue(CGImageDestinationFinalize(destination))
+            let image = try await loader.load(data: bytes as Data, pixels: 512)
+            XCTAssertEqual(max(image.width, image.height), 512)
+            XCTAssertEqual(image.width, orientation >= 5 ? 256 : 512)
+            XCTAssertEqual(image.height, orientation >= 5 ? 512 : 256)
+            let cost = await loader.cachedBytes
+            XCTAssertLessThanOrEqual(cost, 1_000_000)
+        }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = false
+        let png = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100), format: format).image { context in
+            UIColor.red.setFill(); context.fill(CGRect(x: 50, y: 25, width: 100, height: 50))
+        }.pngData())
+        let transparent = try await loader.load(data: png, pixels: 256)
+        XCTAssertTrue([CGImageAlphaInfo.premultipliedFirst, .premultipliedLast, .first, .last].contains(transparent.alphaInfo))
+        let before = await loader.decodeCount
+        _ = try await loader.load(data: png, pixels: 256)
+        let after = await loader.decodeCount
+        XCTAssertEqual(before, after)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("image.png"), namespace = UUID()
+        try png.write(to: file)
+        _ = try await loader.load(file: file, namespace: namespace, pixels: 256)
+        _ = try await loader.load(file: file, namespace: UUID(), pixels: 256)
+        let namespaces = await loader.decodeCount
+        XCTAssertEqual(namespaces, after + 2)
+        try imageData().write(to: file)
+        let changed = try await loader.load(file: file, namespace: namespace, pixels: 256)
+        XCTAssertEqual(changed.width, 256)
+        XCTAssertEqual(changed.height, 128)
+        try FileManager.default.removeItem(at: file)
+        do { _ = try await loader.load(file: file, namespace: namespace, pixels: 256); XCTFail("Deleted file must not use cached pixels") } catch { }
+        do { _ = try await loader.load(data: Data("broken".utf8), pixels: 256); XCTFail("Corrupt image accepted") } catch { }
+        let cancelled = Task { try await loader.load(data: png, pixels: 256) }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("Cancelled load returned pixels") } catch is CancellationError { }
+        await loader.clearCache()
+        let empty = await loader.cachedBytes
+        XCTAssertEqual(empty, 0)
+    }
+    func testTwentyLargeImageDisplayDecodesAndCacheStayBounded() async throws {
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        let bytes = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 4000, height: 3000), format: format).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 4000, height: 3000))
+            ("日本語の図表・細字 / PHOTO" as NSString).draw(at: CGPoint(x: 500, y: 500), withAttributes: [.font: UIFont.systemFont(ofSize: 64), .foregroundColor: UIColor.black])
+        }.jpegData(compressionQuality: 0.95))
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let files = (0..<20).map { directory.appendingPathComponent("\($0).jpg") }
+        for file in files { try bytes.write(to: file) }
+        let legacyStart = Date()
+        var fullBytes = 0
+        for file in files {
+            try autoreleasepool {
+                let original = try XCTUnwrap(UIImage(contentsOfFile: file.path))
+                let decoded = UIGraphicsImageRenderer(size: original.size, format: format).image { _ in original.draw(at: .zero) }
+                let cg = try XCTUnwrap(decoded.cgImage)
+                fullBytes = cg.bytesPerRow * cg.height
+            }
+        }
+        let legacyMs = Date().timeIntervalSince(legacyStart) * 1000
+        let loader = DisplayImageLoader(), namespace = UUID(), thumbnailStart = Date()
+        var thumbnailBytes = 0
+        for file in files {
+            let image = try await loader.load(file: file, namespace: namespace, pixels: 1536)
+            XCTAssertLessThanOrEqual(max(image.width, image.height), 1536)
+            thumbnailBytes = image.bytesPerRow * image.height
+        }
+        let thumbnailMs = Date().timeIntervalSince(thumbnailStart) * 1000
+        let held = await loader.cachedBytes
+        XCTAssertLessThanOrEqual(held, 24 * 1024 * 1024)
+        XCTAssertEqual(try Data(contentsOf: files[0]), bytes)
+        print("IMAGE_DISPLAY images=20 source=4000x3000 full_ms=\(legacyMs) thumbnail_ms=\(thumbnailMs) full_bitmap_bytes=\(fullBytes) thumbnail_bitmap_bytes=\(thumbnailBytes) cache_bytes=\(held)")
+        await loader.clearCache()
+        let cleared = await loader.cachedBytes
+        XCTAssertEqual(cleared, 0)
+    }
     enum Failure: Error { case save }
     let now = Date(timeIntervalSince1970: 1_700_000_000)
     func imageData() -> Data {
