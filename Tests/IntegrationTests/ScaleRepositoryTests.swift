@@ -1,9 +1,92 @@
 import XCTest
 import SwiftData
+import UIKit
+import Darwin
 @testable import AnkiIOS
+
+private final class ImportMemoryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var peak: UInt64 = 0
+    static func footprint() -> UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+        let status = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+        }
+        return status == KERN_SUCCESS ? info.phys_footprint : 0
+    }
+    private func sample() {
+        let value = Self.footprint()
+        lock.lock(); peak = max(peak, value); lock.unlock()
+    }
+    static func run<T>(_ name: String, _ body: () throws -> T) rethrows -> T {
+        let probe = Self(), before = footprint(), start = Date()
+        probe.sample()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10))
+        timer.setEventHandler { probe.sample() }; timer.resume()
+        defer { timer.cancel() }
+        let result = try body()
+        probe.sample(); probe.lock.lock(); let peak = probe.peak; probe.lock.unlock()
+        print("IMPORT_BUFFER stage=\(name) ms=\(Date().timeIntervalSince(start) * 1000) before_bytes=\(before) sampled_peak_bytes=\(peak) after_bytes=\(footprint())")
+        return result
+    }
+}
 
 @MainActor
 final class ScaleRepositoryTests: XCTestCase {
+    func testAnkiImportBufferMeasurements() throws {
+        let url = try XCTUnwrap(Bundle(for: ScaleRepositoryTests.self).url(forResource: "latest-vocabulary-1900", withExtension: "apkg", subdirectory: "Anki"))
+        let bytes = try Data(contentsOf: url)
+        let preview = try ImportMemoryProbe.run("apkg_1900_preview") { try AnkiImport.decode(bytes) }
+        XCTAssertEqual(preview.sourceNotes, 1900)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store")), mediaStore: MediaStore(root: root.appendingPathComponent("Media")))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let count = try ImportMemoryProbe.run("apkg_1900_commit") { try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now) }
+        XCTAssertEqual(count, 1900)
+        _ = try ImportMemoryProbe.run("apkg_1900_home") { try StudyStore(container: repo.context.container, clock: { now }, mediaStore: repo.mediaStore) }
+    }
+    func testImportBufferScaleMeasurements() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store")), mediaStore: MediaStore(root: root.appendingPathComponent("Media")))
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id
+        let text = "question,answer\n" + (0..<3000).map { "問題\($0),\"解答・日本語の細字 \(String(repeating: "内容", count: 80))\"" }.joined(separator: "\r\n")
+        let rows = try ImportMemoryProbe.run("csv_preview") { ImportParser.map(try ImportParser.table(text, delimiter: ","), header: true, questionColumn: 0, answerColumn: 1) }
+        XCTAssertEqual(rows.count, 3000)
+        let result = try ImportMemoryProbe.run("csv_commit") { try repo.importRows(rows, deckID: deck, kind: .basic, tagNames: [], action: .skip, source: "CSV", now: now) }
+        XCTAssertEqual(result.createdCards, 3000)
+        _ = try ImportMemoryProbe.run("csv_home") { try StudyStore(container: repo.context.container, clock: { now }, mediaStore: repo.mediaStore) }
+        let share = try await DeckExchange.export(repository: repo, rootID: deck)
+        let validated = try ImportMemoryProbe.run("studydeck_3000_preview") { try DeckExchange.decode(share) }
+        let destinationRoot = root.appendingPathComponent("Destination")
+        try FileManager.default.createDirectory(at: destinationRoot, withIntermediateDirectories: true)
+        let destination = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: destinationRoot.appendingPathComponent("Study.store")), mediaStore: MediaStore(root: destinationRoot.appendingPathComponent("Media")))
+        try destination.initialize(now: now)
+        let sharedCount = try ImportMemoryProbe.run("studydeck_3000_commit") { try destination.importDeckPackage(validated, skipDuplicates: true, now: now) }
+        XCTAssertEqual(sharedCount, 3000)
+        _ = try ImportMemoryProbe.run("studydeck_3000_home") { try StudyStore(container: destination.context.container, clock: { now }, mediaStore: destination.mediaStore) }
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+        let image = try XCTUnwrap(UIGraphicsImageRenderer(size: CGSize(width: 1600, height: 1200), format: format).image { context in
+            UIColor.white.setFill(); context.fill(CGRect(x: 0, y: 0, width: 1600, height: 1200))
+            ("日本語の画像・図表" as NSString).draw(at: CGPoint(x: 100, y: 100), withAttributes: [.font: UIFont.systemFont(ofSize: 64)])
+        }.jpegData(compressionQuality: 0.95))
+        var files = Dictionary(uniqueKeysWithValues: (0..<200).map { ("images/\($0).jpg", image) })
+        files["cards.csv"] = Data(("question,answer,image\n" + (0..<200).map { "写真\($0),解答,images/\($0).jpg" }.joined(separator: "\n")).utf8)
+        let zip = try StoredZIP.write(files)
+        let package = try ImportMemoryProbe.run("image_zip_preview") { try ImageImportPackage.read(zip) }
+        XCTAssertEqual(package.rows.count, 200); XCTAssertEqual(package.images.count, 200)
+        let imported = try ImportMemoryProbe.run("image_zip_commit") { try repo.importImagePackage(package, deckID: deck, action: .skip, now: now) }
+        XCTAssertEqual(imported.createdCards, 200); XCTAssertEqual(try repo.assets().count, 1)
+        _ = try ImportMemoryProbe.run("image_zip_home") { try StudyStore(container: repo.context.container, clock: { now }, mediaStore: repo.mediaStore) }
+    }
     func testReviewHotPathThreeThousandCardsTenThousandLogs() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

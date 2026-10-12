@@ -6,6 +6,17 @@ import SwiftData
 
 @MainActor
 final class MediaRepositoryTests: XCTestCase {
+    func testImageZIPDoesNotRetainUnreferencedImagesButStillChecksArchiveCRC() throws {
+        let files = ["cards.csv": Data("answer,image\n解答,images/used.png".utf8), "images/used.png": imageData(), "images/unused.png": Data("unused invalid image".utf8)]
+        let archive = try StoredZIP.write(files)
+        let package = try ImageImportPackage.read(archive)
+        XCTAssertEqual(Set(package.images.keys), ["images/used.png"])
+        XCTAssertNil(package.rows[0].error)
+        var corrupt = archive
+        let position = try XCTUnwrap(corrupt.range(of: files["images/unused.png"]!))
+        corrupt[position.lowerBound] ^= 1
+        XCTAssertThrowsError(try ImageImportPackage.read(corrupt))
+    }
     func testDisplayThumbnailOrientationAlphaCacheBudgetAndInvalidation() async throws {
         let loader = DisplayImageLoader(maximumBytes: 1_000_000)
         let original = try XCTUnwrap(UIImage(data: imageData())?.cgImage)

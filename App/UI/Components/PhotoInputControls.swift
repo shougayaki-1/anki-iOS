@@ -96,6 +96,26 @@ struct CameraCapture: UIViewControllerRepresentable {
 // File panel and Finder drops share the same bounded reader. Neither path
 // grants persistent access or stores a bookmark to the source file.
 enum LocalFileInput {
+    enum ImportContents: Sendable {
+        case text(String)
+        case images(ImageImportPackage)
+    }
+    static func readImport(_ url: URL) async throws -> ImportContents {
+        try Task.checkCancellation()
+        let task = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            if url.pathExtension.lowercased() == "zip" {
+                return ImportContents.images(try ImageImportPackage.read(read(url, extensions: ["zip"], maximumBytes: 200_000_000)))
+            }
+            let data = try read(url, extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000)
+            guard let text = String(data: data, encoding: .utf8) else { throw LibraryError.invalidUTF8 }
+            try Task.checkCancellation()
+            return ImportContents.text(text.hasPrefix("\u{feff}") ? String(text.dropFirst()) : text)
+        }
+        let contents = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+        try Task.checkCancellation()
+        return contents
+    }
     static func read(_ url: URL, extensions: Set<String>, maximumBytes: Int) throws -> Data {
         guard url.isFileURL, extensions.contains(url.pathExtension.lowercased()) else { throw StudyError.unsupportedContent }
         let access = url.startAccessingSecurityScopedResource()

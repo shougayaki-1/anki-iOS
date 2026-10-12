@@ -239,6 +239,7 @@ extension StudyRepository {
                     model.id = deckIDs[deck.id]!; model.parentID = deck.parentID.flatMap { deckIDs[$0] }; context.insert(model)
                 }
                 var cardCount = 0
+                var importedTags: [[String]: [UUID]] = [:]
                 for source in notes {
                     try Task.checkCancellation()
                     var content = source.content
@@ -247,7 +248,14 @@ extension StudyRepository {
                     content.answerAudioID = content.answerAudioID.flatMap { remapped[$0] }
                     let input = NoteInput(deckID: deckIDs[source.deckID]!, kind: source.kind, responseMode: source.responseMode)
                     let note = Note(input: input, content: try JSONEncoder().encode(content), now: now)
-                    note.tagIDs = try tagIDs(for: source.tags); context.insert(note)
+                    if source.tags.isEmpty { note.tagIDs = [] }
+                    else if let cached = importedTags[source.tags] { note.tagIDs = cached }
+                    else {
+                        let ids = try tagIDs(for: source.tags); note.tagIDs = ids
+                        // Retain only a bounded number of tag combinations in this transaction.
+                        if importedTags.count < 128 { importedTags[source.tags] = ids }
+                    }
+                    context.insert(note)
                     for variant in try CardGeneration.variants(kind: source.kind, content: content) {
                         context.insert(StudyCard(noteID: note.id, variantKey: variant, payload: fresh, now: now))
                         cardCount += 1
