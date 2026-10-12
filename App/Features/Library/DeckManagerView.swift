@@ -220,6 +220,9 @@ struct DeckEditorView: View {
                 } header: { Text("削除時の移動先") } footer: { Text("子孫デッキも削除します。ノートを別のデッキへ移すか、カードと一緒に削除するか選べます。回答履歴は保持します。") }
             }
         }
+        .disabled(store.snapshotWorking)
+        .interactiveDismissDisabled(store.snapshotWorking)
+        .navigationBarBackButtonHidden(store.snapshotWorking)
         .navigationTitle(deckID == nil ? "デッキ追加" : "デッキ編集")
         .toolbar {
             if deckID == nil {
@@ -227,7 +230,7 @@ struct DeckEditorView: View {
                     Button("キャンセル") { dismiss() }.accessibilityIdentifier("cancelDeckEditor")
                 }
             }
-            ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(store.snapshotWorking || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
         }
         .task {
             do {
@@ -260,9 +263,14 @@ struct DeckEditorView: View {
         } catch { failure = error.localizedDescription }
     }
     private func remove(move: UUID?) {
-        guard let id = deckID else { return }
-        do { try store.repository.deleteDeck(id: id, moveNotesTo: move, now: store.clock()); try store.reload(); dismiss() }
-        catch { failure = error.localizedDescription }
+        guard let id = deckID, !store.snapshotWorking else { return }
+        Task {
+            do {
+                try await store.createRestorePoint("デッキの削除・移動")
+                try store.repository.deleteDeck(id: id, moveNotesTo: move, now: store.clock())
+                try store.reload(); dismiss()
+            } catch { failure = error.localizedDescription }
+        }
     }
 }
 
@@ -377,6 +385,9 @@ private struct DeckContentsOperationView: View {
                 }
             }
         }
+        .disabled(store.snapshotWorking)
+        .interactiveDismissDisabled(store.snapshotWorking)
+        .navigationBarBackButtonHidden(store.snapshotWorking)
         .navigationTitle(operation == .move ? "デッキのカードを移動" : "デッキのカードだけ削除")
         .onChange(of: includeChildren) { _, _ in
             preview = nil
@@ -426,30 +437,33 @@ private struct DeckContentsOperationView: View {
 
     private func commit() {
         guard completed == nil, let preview, preview.canCommit else { return }
-        do {
-            let result = try store.repository.applyDeckContents(preview, now: store.clock())
-            self.preview = nil
-            completed = LibraryOperationCompletion(operation: operation == .delete ? "削除" : "移動",
-                notes: result.changedNotes, cards: result.changedCards,
-                targetName: operation == .delete ? preview.sourcePath : preview.destinationPath,
-                destinationID: operation == .move ? destination : nil)
-            // A completed transaction must not be reported as a failed deletion
-            // if only post-commit UI/notification refresh fails.
-            do { try store.reload() }
-            catch { completed?.warning = "変更は保存済みですが、画面更新に失敗しました。再実行は不要です。\n" + error.localizedDescription }
-            if operation == .delete {
-                // Mirror NoteEditorView's post-save media cleanup. Media removal is
-                // deliberately separate from the atomic Note/Card database deletion.
-                do { try store.repository.cleanupUnusedMedia() }
-                catch {
-                    let warning = "カードは削除済みですが、不要な画像の整理に失敗しました。\n" + error.localizedDescription
-                    completed?.warning = completed?.warning.map { $0 + "\n" + warning } ?? warning
+        Task {
+            do {
+                try await store.createRestorePoint("デッキ内カードの一括削除・移動")
+                let result = try store.repository.applyDeckContents(preview, now: store.clock())
+                self.preview = nil
+                completed = LibraryOperationCompletion(operation: operation == .delete ? "削除" : "移動",
+                    notes: result.changedNotes, cards: result.changedCards,
+                    targetName: operation == .delete ? preview.sourcePath : preview.destinationPath,
+                    destinationID: operation == .move ? destination : nil)
+                // A completed transaction must not be reported as a failed deletion
+                // if only post-commit UI/notification refresh fails.
+                do { try store.reload() }
+                catch { completed?.warning = "変更は保存済みですが、画面更新に失敗しました。再実行は不要です。\n" + error.localizedDescription }
+                if operation == .delete {
+                    // Mirror NoteEditorView's post-save media cleanup. Media removal is
+                    // deliberately separate from the atomic Note/Card database deletion.
+                    do { try store.repository.cleanupUnusedMedia() }
+                    catch {
+                        let warning = "カードは削除済みですが、不要な画像の整理に失敗しました。\n" + error.localizedDescription
+                        completed?.warning = completed?.warning.map { $0 + "\n" + warning } ?? warning
+                    }
                 }
+                if completed?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
+            } catch {
+                self.preview = nil
+                failure = error.localizedDescription + "\n対象が変更されていた場合は、プレビューを作り直してください。"
             }
-            if completed?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
-        } catch {
-            self.preview = nil
-            failure = error.localizedDescription + "\n対象が変更されていた場合は、プレビューを作り直してください。"
         }
     }
 }

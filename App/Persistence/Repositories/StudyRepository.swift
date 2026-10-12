@@ -2,7 +2,7 @@ import Foundation
 import SwiftData
 
 extension PersistenceController {
-    static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false) throws -> ModelContainer {
+    static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false, mediaStore: MediaStore = MediaStore()) throws -> ModelContainer {
         let schema = Schema(versionedSchema: StudySchemaV5.self)
         let config: ModelConfiguration
         if let storeURL {
@@ -15,7 +15,15 @@ extension PersistenceController {
             config = ModelConfiguration("Study", schema: schema,
                                         url: try StudyStorageLocation(canonicalStore: directory.appendingPathComponent("Study.store")).activeStore(), cloudKitDatabase: .none)
         }
-        return try ModelContainer(for: schema, migrationPlan: StudyMigrationPlan.self, configurations: [config])
+        let location = StudyStorageLocation(canonicalStore: storeURL ?? StudyStorageLocation.defaultStore)
+        let rescue = MigrationRescue(location: location)
+        let schemaID = "5.0.0" // Keep in sync with the schema selected above.
+        // All production opens share this preflight, including shortcuts.
+        // UI-test/custom stores use their own Media root from the caller.
+        if !inMemory { try rescue.preserveIfNeeded(schema: schemaID, mediaStore: mediaStore) }
+        let container = try ModelContainer(for: schema, migrationPlan: StudyMigrationPlan.self, configurations: [config])
+        if !inMemory { try? rescue.markOpened(schema: schemaID) }
+        return container
     }
 }
 

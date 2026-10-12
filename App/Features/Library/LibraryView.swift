@@ -385,6 +385,7 @@ private struct BulkManagementView: View {
     @State private var result: LibraryOperationCompletion?
     @State private var failure: String?
     @State private var confirmDelete = false
+    @State private var checkpointWorking = false
     private var action: BulkEditAction? {
         switch operation {
         case .move: return destination.map(BulkEditAction.move)
@@ -447,10 +448,12 @@ private struct BulkManagementView: View {
                     }
                 }
             }
+            .disabled(checkpointWorking)
+            .interactiveDismissDisabled(checkpointWorking)
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("一括操作")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close(result != nil) }.accessibilityIdentifier("closeBulkManagement") }
+                ToolbarItem(placement: .cancellationAction) { Button("閉じる") { close(result != nil) }.disabled(checkpointWorking).accessibilityIdentifier("closeBulkManagement") }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }.accessibilityIdentifier("dismissBulkKeyboard") }
             }
             .onChange(of: operation) { _, _ in preview = nil }
@@ -472,20 +475,26 @@ private struct BulkManagementView: View {
         catch { preview = nil; failure = error.localizedDescription }
     }
     private func commit(_ value: BulkEditPreview) {
-        guard result == nil else { return }
-        let targetName = operation == .move ? store.decks.first(where: { $0.id == destination })?.name : nil
-        var receipt: BulkEditResult?
-        let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
-        if let receipt {
-            didCommit()
-            result = LibraryOperationCompletion(operation: operation.title, notes: receipt.changedNotes,
-                cards: receipt.changedCards, targetName: targetName,
-                destinationID: operation == .move ? destination : nil,
-                warning: refreshed ? nil : "変更は保存済みですが、画面を更新できません。アプリを開き直してください。再実行は不要です。")
-            if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
-            preview = nil
-        } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
-        store.failure = nil
+        guard result == nil, !checkpointWorking else { return }
+        checkpointWorking = true
+        Task {
+            defer { checkpointWorking = false }
+            do { try await store.createRestorePoint("ライブラリの一括操作") }
+            catch { failure = error.localizedDescription; return }
+            let targetName = operation == .move ? store.decks.first(where: { $0.id == destination })?.name : nil
+            var receipt: BulkEditResult?
+            let refreshed = store.perform { receipt = try store.repository.applyBulkEdit(value, now: store.clock()) }
+            if let receipt {
+                didCommit()
+                result = LibraryOperationCompletion(operation: operation.title, notes: receipt.changedNotes,
+                    cards: receipt.changedCards, targetName: targetName,
+                    destinationID: operation == .move ? destination : nil,
+                    warning: refreshed ? nil : "変更は保存済みですが、画面を更新できません。アプリを開き直してください。再実行は不要です。")
+                if result?.isSuccess == true { store.haptics.play(.noteSaved, mode: store.settings.hapticsMode) }
+                preview = nil
+            } else { preview = nil; failure = store.failure ?? "変更は確定されていません。" }
+            store.failure = nil
+        }
     }
 }
 
