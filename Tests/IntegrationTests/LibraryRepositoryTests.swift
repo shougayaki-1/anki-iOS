@@ -11,6 +11,56 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.initialize(now: now); return repo
     }
 
+    func testTargetedCardBatchesMatchFullProjectionOnDisk() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let writer = StudyRepository(container: container)
+        try writer.initialize(now: now)
+        let parent = try writer.decks()[0].id
+        let child = try writer.createDeck(name: "Child", parentID: parent, now: now)
+        let payload = try JSONEncoder().encode(ReviewScheduler().newCard(now: now))
+        try writer.transaction {
+            for index in 0..<1000 {
+                let content = TextContent(question: "Q \(index) {{c1::one}} {{c2::two}} {{c3::three}}", answer: "", explanation: "")
+                let input = NoteInput(deckID: child, kind: .cloze, question: content.question, answer: "")
+                let note = Note(input: input, content: try JSONEncoder().encode(content), now: now)
+                writer.context.insert(note)
+                for variant in 1...3 {
+                    let card = StudyCard(noteID: note.id, variantKey: "cloze:\(variant)", payload: payload,
+                                         now: now.addingTimeInterval(Double(index * 3 + variant)))
+                    writer.context.insert(card)
+                }
+            }
+        }
+        // A fresh context exercises the SQLite predicate rather than only pending objects.
+        let repo = StudyRepository(container: container)
+        let all = try repo.noteItems()
+        XCTAssertEqual(all.count, 3000)
+        XCTAssertTrue(try repo.noteItems(cardIDs: []).isEmpty)
+        XCTAssertTrue(try repo.noteItems(cardIDs: [UUID()]).isEmpty)
+        for count in [10, 100, 1000] {
+            let ids = Set(all.prefix(count).map(\.cardID))
+            let selected = try repo.noteItems(cardIDs: ids.union([UUID()]))
+            XCTAssertEqual(selected.map(\.cardID), Array(all.prefix(count)).map(\.cardID))
+            for (actual, expected) in zip(selected, all) {
+                XCTAssertEqual(actual.noteID, expected.noteID)
+                XCTAssertEqual(actual.deckName, expected.deckName)
+                XCTAssertEqual(actual.content, expected.content)
+                XCTAssertEqual(actual.sourceContent, expected.sourceContent)
+                XCTAssertEqual(actual.variantKey, expected.variantKey)
+                XCTAssertEqual(actual.tagIDs, expected.tagIDs)
+                XCTAssertEqual(actual.summary.dueDate, expected.summary.dueDate)
+            }
+        }
+        let first = try XCTUnwrap(all.first)
+        XCTAssertEqual(try repo.noteItems(cardID: first.cardID, cardIDs: []).map(\.cardID), [first.cardID])
+        XCTAssertEqual(try repo.noteItems(cardIDs: Set(all.map(\.cardID))).map(\.cardID), all.map(\.cardID))
+        XCTAssertEqual(try repo.cards().count, 3000)
+        XCTAssertTrue(try repo.logs().isEmpty)
+    }
+
     func testLibraryInlineTreeCountsGroupingSearchAndSavedExpansion() throws {
         let root = UUID(), child = UUID(), grandchild = UUID(), empty = UUID(), other = UUID()
         let note = UUID(), directNote = UUID()
