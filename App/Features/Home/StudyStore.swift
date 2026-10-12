@@ -31,6 +31,13 @@ struct BackupRestoreOutcome: Equatable {
 final class StudyStore {
     var repository: StudyRepository
     let storageLocation: StudyStorageLocation
+    var snapshotPolicy = SnapshotPolicy()
+    var snapshots: [LocalSnapshot] = []
+    var snapshotFailure: String?
+    var snapshotFailures = 0
+    var snapshotWorking = false
+    @ObservationIgnored private var snapshotTask: Task<Void, Never>?
+    var localSnapshots: LocalSnapshots { LocalSnapshots(location: storageLocation) }
     var clock: () -> Date
     var scope = LearningScope()
     var tags: [TagItem] = []
@@ -79,6 +86,8 @@ final class StudyStore {
         self.clock = clock
         self.storageLocation = storageLocation
         self.notifications = notifications ?? NotificationService()
+        do { snapshotPolicy = try localSnapshots.policy(); snapshots = try localSnapshots.list() }
+        catch { snapshotPolicy.enabled = false; snapshotFailure = error.localizedDescription }
         try repository.initialize(now: clock())
         scope = try repository.homeScope()
         try reload()
@@ -198,12 +207,53 @@ final class StudyStore {
         statisticsScope = scope
         refreshStatistics()
     }
+    func refreshSnapshots() {
+        do { snapshots = try localSnapshots.list(); snapshotPolicy = try localSnapshots.policy() }
+        catch { snapshotFailure = error.localizedDescription }
+    }
+    func setSnapshotPolicy(_ value: SnapshotPolicy) {
+        do { try localSnapshots.savePolicy(value); snapshotPolicy = value }
+        catch { snapshotFailure = error.localizedDescription }
+    }
+    func automaticSnapshotIfDue() {
+        guard snapshotTask == nil, !snapshotWorking,
+              localSnapshots.isDue(now: clock(), policy: snapshotPolicy, entries: snapshots) else { return }
+        snapshotTask = Task { [weak self] in
+            guard let self else { return }
+            defer { snapshotTask = nil }
+            do { try await createSnapshot(kind: .automatic, reason: "起動・画面復帰") }
+            catch {
+                if !(error is CancellationError) { snapshotFailures += 1; snapshotFailure = error.localizedDescription }
+            }
+        }
+    }
+    /// Call before the mutation; a failed point aborts the operation, leaving the store untouched.
+    func createRestorePoint(_ reason: String) async throws {
+        if let task = snapshotTask { await task.value }
+        try Task.checkCancellation()
+        try await createSnapshot(kind: .beforeChange, reason: reason)
+    }
+    func createSnapshot(kind: SnapshotKind, reason: String) async throws {
+        guard !snapshotWorking else { throw SnapshotBusyError() }
+        snapshotWorking = true
+        defer { snapshotWorking = false }
+        let now = clock(), manager = localSnapshots
+        let bytes = try await BackupService.export(repository: repository, now: now,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0", pruneExpiredAnswers: false)
+        try Task.checkCancellation()
+        let job = Task.detached(priority: .utility) { try manager.save(bytes, kind: kind, reason: reason, now: now) }
+        _ = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+        refreshSnapshots()
+        snapshotFailures = 0; snapshotFailure = nil
+    }
+
     func sceneChanged(active: Bool) {
         do {
             if let draft = try repository.session(), (draft.activeSince != nil) != (active && showingReview && draft.cardID != nil) {
                 try repository.setSessionActive(active && showingReview, now: clock())
             }
             if active {
+                automaticSnapshotIfDue()
                 refreshHome(reconcileNotifications: true)
                 if selectedTab == 2 { refreshStatistics() }
                 if showingReview { refreshQueue() }
@@ -451,4 +501,8 @@ final class StudyStore {
         }
         reviewRefreshFailed = !succeeded
     }
+}
+
+private struct SnapshotBusyError: LocalizedError {
+    var errorDescription: String? { "バックアップを作成中です。完了後に再試行してください。変更は行っていません。" }
 }
