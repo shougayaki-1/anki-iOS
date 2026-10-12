@@ -823,4 +823,58 @@ extension LibraryRepositoryTests {
         XCTAssertEqual(try repo.notes().count, 2); XCTAssertEqual(try repo.cards().count, 2)
         XCTAssertEqual(try repo.notes().first { $0.id == hidden }?.contentPayload, Data("invalid".utf8))
     }
+    func testContextualTagsUseDeckBranchesSharedCountsANDAndKeepUnavailableSelection() {
+        let root = UUID(), english = UUID(), japanese = UUID(), unused = UUID()
+        let a = UUID(), b = UUID(), shared = UUID(), outside = UUID()
+        let decks = [DeckItem(id: root, name: "共通の親"),
+                     DeckItem(id: english, name: "共通の親 / 英語", shortName: "英語", parentID: root),
+                     DeckItem(id: japanese, name: "共通の親 / 国語", shortName: "国語", parentID: root)]
+        let tags = [TagItem(id: a, name: "人物・思想"), TagItem(id: b, name: "英文"),
+                    TagItem(id: shared, name: "最重要"), TagItem(id: outside, name: "国語専用"), TagItem(id: unused, name: "未使用")]
+        let index = TagFilterIndex(decks: decks, tags: tags, notes: [
+            TagFilterNote(deckID: english, tagIDs: [a, b, shared], cards: 3),
+            TagFilterNote(deckID: english, tagIDs: [a], cards: 1),
+            TagFilterNote(deckID: japanese, tagIDs: [outside, shared], cards: 2)])
+        let all = index.summary(scope: LearningScope())
+        XCTAssertEqual(all.cards, 6)
+        XCTAssertEqual(Set(all.groups.map(\.id)), [english.uuidString, japanese.uuidString, "shared"])
+        XCTAssertEqual(all.groups.flatMap(\.tags).filter { $0.id == shared }.count, 1)
+        XCTAssertEqual(all.groups.flatMap(\.tags).first { $0.id == shared }?.cards, 5)
+        XCTAssertFalse(all.groups.flatMap(\.tags).contains { $0.id == unused })
+        let parent = index.summary(scope: LearningScope(deckID: root, tagIDs: [a, b]))
+        XCTAssertEqual(parent.cards, 3)
+        XCTAssertEqual(parent.groups.flatMap(\.tags).first { $0.id == a }?.cards, 4)
+        let scope = LearningScope(deckID: english, tagIDs: [outside])
+        let selected = index.summary(scope: scope)
+        XCTAssertEqual(selected.cards, 0); XCTAssertEqual(selected.unavailable, [outside])
+        XCTAssertFalse(selected.groups.flatMap(\.tags).contains { $0.id == outside })
+        XCTAssertEqual(scope.tagIDs, [outside])
+        XCTAssertEqual(index.summary(scope: LearningScope(deckID: UUID())).cards, 0)
+        let scale = TagFilterIndex(decks: decks, tags: tags, notes: (0..<1000).map { _ in
+            TagFilterNote(deckID: english, tagIDs: [a], cards: 3)
+        })
+        XCTAssertEqual(scale.summary(scope: LearningScope(tagIDs: [a])).cards, 3000)
+    }
+
+    func testTagFilterReaderCountsGeneratedCardsWithoutReadingFSRSOrChangingSession() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        try repo.createNote(NoteInput(deckID: child, kind: .cloze, question: "{{c1::一}} {{c2::二}} {{c3::三}}", tagNames: ["日本語"]), now: now)
+        try repo.start(mode: .new, now: now)
+        let draft = try repo.session()?.cardID, payloads = try repo.cards().map(\.fsrsPayload)
+        let loaded = try await TagFilterReader(container: container).load()
+        let summary = loaded.summary(scope: LearningScope(deckID: root))
+        XCTAssertEqual(summary.cards, 3)
+        XCTAssertEqual(summary.groups.flatMap(\.tags).first?.cards, 3)
+        XCTAssertEqual(try repo.session()?.cardID, draft)
+        XCTAssertEqual(try repo.cards().map(\.fsrsPayload), payloads)
+        XCTAssertEqual(try repo.logs().count, 0)
+        try repo.transaction { for card in try repo.cards() { card.fsrsPayload = Data("invalid".utf8) } }
+        let withoutFSRS = try await TagFilterReader(container: container).load()
+        XCTAssertEqual(withoutFSRS.summary(scope: LearningScope()).cards, 3)
+    }
+
 }

@@ -680,3 +680,28 @@ actor LibraryReader {
         return index
     }
 }
+
+// This reader owns its ModelContext. Only identifier/count DTOs leave the actor;
+// note content, FSRS payloads and review logs are never needed for tag selection.
+actor TagFilterReader {
+    let container: ModelContainer
+    init(container: ModelContainer) { self.container = container }
+    func load() throws -> TagFilterIndex {
+        let context = ModelContext(container)
+        let deckRows = try context.fetch(FetchDescriptor<Deck>())
+        let paths = LibraryIndex.deckPaths(deckRows)
+        let decks = deckRows.map { DeckItem(id: $0.id, name: paths[$0.id] ?? $0.name, shortName: $0.name, parentID: $0.parentID) }
+        let tags = try context.fetch(FetchDescriptor<Tag>()).map { TagItem(id: $0.id, name: $0.name) }
+        var cardFetch = FetchDescriptor<StudyCard>()
+        cardFetch.propertiesToFetch = [\.noteID]
+        var counts: [UUID: Int] = [:]
+        for card in try context.fetch(cardFetch) {
+            try Task.checkCancellation()
+            counts[card.noteID, default: 0] += 1
+        }
+        var noteFetch = FetchDescriptor<Note>()
+        noteFetch.propertiesToFetch = [\.id, \.deckID, \.tagIDs]
+        let notes = try context.fetch(noteFetch).map { TagFilterNote(deckID: $0.deckID, tagIDs: Set($0.tagIDs), cards: counts[$0.id] ?? 0) }
+        return TagFilterIndex(decks: decks, tags: tags, notes: notes)
+    }
+}
