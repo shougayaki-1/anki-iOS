@@ -619,6 +619,8 @@ actor LibraryReader {
     private var cached: LibraryIndex?
     private var searchText: [UUID: String] = [:]
     private var loadedDecks = Set<UUID>()
+    private var scheduleRevision: Int?
+    private var scheduleCache: [UUID: LibrarySearchSchedule] = [:]
 
     init(container: ModelContainer) { self.container = container }
 
@@ -781,4 +783,112 @@ extension StudyRepository {
         return try ids.map { ImportDestination(id: $0, name: try deckPath($0)) }
             .sorted { $0.name < $1.name }
     }
+}
+
+
+extension StudyRepository {
+    func saveLibrarySearch(_ value: LibrarySearchPreferences) throws {
+        try transaction {
+            var saved = try options()
+            guard saved.librarySearch != value else { return }
+            saved.librarySearch = value
+            try writeOptionsInTransaction(saved)
+        }
+    }
+}
+
+extension LibraryReader {
+    // Revision-scoped snapshots are decoded only for schedule filters. No payload
+    // is decoded on each text keystroke; this cache is bounded by the current store.
+    func advancedSearch(_ conditions: LibrarySearchConditions, revision: Int, now: Date,
+                        calendar: Calendar = .current, dayStartHour: Int) throws -> LibraryResults {
+        let context = ModelContext(container)
+        var allowed: Set<UUID>?
+        if let deck = conditions.deckID {
+            let rows = try context.fetch(FetchDescriptor<Deck>())
+            var ids: Set<UUID> = rows.contains(where: { $0.id == deck }) ? [deck] : []
+            if conditions.descendants {
+                var pending = Array(ids)
+                while let parent = pending.popLast() {
+                    for child in rows where child.parentID == parent && ids.insert(child.id).inserted { pending.append(child.id) }
+                }
+            }
+            allowed = ids
+        }
+        let base = try search(conditions.text, revision: revision, deckIDs: allowed)
+        var matches = base.cardIDs
+        if !conditions.tags.isEmpty {
+            var fetch = FetchDescriptor<Note>()
+            fetch.propertiesToFetch = [\.id, \.tagIDs]
+            let selected = Set(conditions.tags)
+            let notes = Set(try context.fetch(fetch).filter {
+                conditions.anyTag ? !selected.isDisjoint(with: $0.tagIDs) : selected.isSubset(of: Set($0.tagIDs))
+            }.map(\.id))
+            matches = Set(base.cardsByDeck.values.joined().filter { notes.contains($0.noteID) }.map(\.id))
+        }
+        if conditions.againToday || conditions.reviewedDays > 0 {
+            let start = StudyDay(calendar: calendar, startHour: dayStartHour).interval(containing: now).start
+            let recent = calendar.date(byAdding: .day, value: -(max(1, conditions.reviewedDays) - 1), to: start)!
+            let earliest = conditions.againToday ? min(start, recent) : recent
+            var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.reviewedAt >= earliest && $0.reviewedAt <= now })
+            fetch.propertiesToFetch = [\.cardID, \.reviewedAt, \.grade]
+            let logs = try context.fetch(fetch)
+            if conditions.againToday {
+                matches.formIntersection(logs.filter { $0.reviewedAt >= start && $0.grade == ReviewGrade.again.rawValue }.map(\.cardID))
+            }
+            if conditions.reviewedDays > 0 { matches.formIntersection(logs.filter { $0.reviewedAt >= recent }.map(\.cardID)) }
+        }
+        if conditions.requiresSchedule || conditions.dueOnly || conditions.state == .suspended {
+            let preferences = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
+            let options = try preferences.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) }
+            let scheduler = try ReviewScheduler(parameters: options?.fsrsOptimization?.activeParameters)
+            let states = try scheduleRows(revision: revision)
+            matches = Set(matches.filter { id in
+                guard let row = states[id] else { return false }
+                if conditions.dueOnly && (row.suspended || row.due > now || row.summary == nil || row.summary?.state == "new") { return false }
+                if conditions.state == .suspended && !row.suspended { return false }
+                if conditions.requiresSchedule {
+                    let summary = row.summary
+                    let missing = summary == nil || summary?.lastReview == nil
+                    if conditions.missingFSRS && !missing { return false }
+                    if conditions.state != .all && conditions.state != .suspended && summary?.state != conditions.state.rawValue { return false }
+                    if conditions.minimumLapses > 0 && (summary == nil || summary!.lapses < conditions.minimumLapses) { return false }
+                    if conditions.minimumDifficulty > 0 && (missing || summary!.difficulty < conditions.minimumDifficulty) { return false }
+                    if conditions.maximumRecall < 1 {
+                        guard !missing, let snapshot = row.snapshot,
+                              let recall = try? scheduler.retrievability(snapshot, now: now), recall <= conditions.maximumRecall else { return false }
+                    }
+                }
+                return true
+            })
+        }
+        if let flag = conditions.flag {
+            let options = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
+            let marks = try options.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload).cardMarks ?? [] } ?? []
+            matches.formIntersection(marks.filter { $0.flag == flag }.map(\.cardID))
+        }
+        var result = try load(revision: revision).results(deckIDs: allowed, matching: matches)
+        if conditions.oldestFirst { for id in result.cardsByDeck.keys { result.cardsByDeck[id]?.reverse() } }
+        return result
+    }
+    private func scheduleRows(revision: Int) throws -> [UUID: LibrarySearchSchedule] {
+        if scheduleRevision == revision { return scheduleCache }
+        let scheduler = try ReviewScheduler()
+        var fetch = FetchDescriptor<StudyCard>()
+        fetch.propertiesToFetch = [\.id, \.fsrsPayload, \.dueDate, \.isSuspended]
+        var rows: [UUID: LibrarySearchSchedule] = [:]
+        for card in try ModelContext(container).fetch(fetch) {
+            try Task.checkCancellation()
+            let snapshot = try? JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
+            rows[card.id] = LibrarySearchSchedule(snapshot: snapshot, summary: snapshot.flatMap { try? scheduler.summary($0) }, due: card.dueDate, suspended: card.isSuspended)
+        }
+        scheduleCache = rows; scheduleRevision = revision
+        return rows
+    }
+}
+private struct LibrarySearchSchedule {
+    let snapshot: SchedulerSnapshot?
+    let summary: ScheduleSummary?
+    let due: Date
+    let suspended: Bool
 }

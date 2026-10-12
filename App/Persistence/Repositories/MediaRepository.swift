@@ -5,7 +5,9 @@ import SwiftData
 extension StudyRepository {
     func assets() throws -> [MediaAsset] { try context.fetch(FetchDescriptor<MediaAsset>()) }
     func assetURL(id: UUID) throws -> URL {
-        guard let asset = try assets().first(where: { $0.id == id }) else { throw StudyError.missingRecord }
+        var fetch = FetchDescriptor<MediaAsset>(predicate: #Predicate { $0.id == id })
+        fetch.fetchLimit = 1
+        guard let asset = try context.fetch(fetch).first else { throw StudyError.missingRecord }
         return try mediaStore.url(for: asset.relativePath)
     }
     func addImage(_ data: Data, crop: MaskRect? = nil, now: Date) throws -> UUID {

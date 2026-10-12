@@ -2,6 +2,20 @@ import SwiftUI
 import PencilKit
 
 struct ReviewView: View {
+    @State private var loadedReviewImage: UIImage?
+    @State private var loadedReviewImageKey: String?
+    @State private var reviewImageFailed = false
+    @State private var imageWidth: CGFloat = 400
+    @Environment(\.displayScale) private var imageScale
+    private var reviewImagePixels: Int {
+        guard let item = store.review?.card else { return 256 }
+        if !store.settings.reviewAppearance.showsImage(for: item.kind) { return 256 }
+        let height: CGFloat = item.kind != .imageOcclusion && store.settings.reviewAppearance.imageDisplay == .compact ? 180 : 560
+        return Int(ceil(max(imageWidth, height) * imageScale / 256)) * 256
+    }
+    private var reviewImageKey: String {
+        "\(store.mediaDisplayNamespace)|\(store.dataRevision)|\(store.review?.card?.cardID.uuidString ?? "")|\(store.review?.card?.sourceContent.imageID?.uuidString ?? "")|\(reviewImagePixels)"
+    }
     @Bindable var store: StudyStore
     @State private var whiteboardPresented = false
     @State private var whiteboardDrawing = PKDrawing()
@@ -42,6 +56,9 @@ struct ReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { reviewToolbar }
             .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
+                if store.typedDraftSaveFailed {
+                    Button("入力の保存を再試行") { store.flushTypedDraft() }
+                }
                 Button("閉じる", role: .cancel) { store.failure = nil }
             } message: { Text(store.failure ?? "") }
             .task(id: store.review?.card == nil ? store.review?.nextShortDue : nil) {
@@ -52,6 +69,29 @@ struct ReviewView: View {
                 store.refreshQueue()
             }
         }.interactiveDismissDisabled()
+            .background { GeometryReader { geometry in
+                Color.clear.onAppear { imageWidth = geometry.size.width }
+                    .onChange(of: geometry.size.width) { _, width in imageWidth = width }
+            } }
+            .task(id: reviewImageKey) {
+                let request = reviewImageKey
+                loadedReviewImage = nil; loadedReviewImageKey = nil; reviewImageFailed = false
+                guard let id = store.review?.card?.sourceContent.imageID else { return }
+                do {
+                    let url = try store.repository.assetURL(id: id)
+                    let result = try await DisplayImageLoader.shared.load(file: url, namespace: store.mediaDisplayNamespace, pixels: reviewImagePixels)
+                    guard !Task.isCancelled, request == reviewImageKey else { return }
+                    loadedReviewImage = UIImage(cgImage: result); loadedReviewImageKey = request
+                } catch is CancellationError { } catch {
+                    guard !Task.isCancelled, request == reviewImageKey else { return }
+                    reviewImageFailed = true
+                }
+            }
+            .onDisappear { loadedReviewImage = nil; loadedReviewImageKey = nil }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
+                Task { await DisplayImageLoader.shared.clearCache() }
+            }
+            .onDisappear { store.flushTypedDraft() }
     }
 
     @ViewBuilder private var whiteboardContent: some View {
@@ -529,15 +569,17 @@ struct ReviewView: View {
         if !item.content.explanation.isEmpty { Text(item.content.explanation).foregroundStyle(.secondary) }
     }
     @ViewBuilder private func reviewImage(_ review: ReviewPresentation, item: NoteItem) -> some View {
-        if let id = item.sourceContent.imageID,
+        if item.sourceContent.imageID != nil,
            store.settings.reviewAppearance.showsImage(for: item.kind) {
-            if let url = try? store.repository.assetURL(id: id), let image = UIImage(contentsOfFile: url.path) {
+            if let image = loadedReviewImage, loadedReviewImageKey == reviewImageKey {
                 StudyImageView(image: image, masks: item.kind == .imageOcclusion ? (item.sourceContent.masks ?? []) : [],
                                targetID: UUID(uuidString: String(item.variantKey.dropFirst("image:".count))),
                                hideAll: item.sourceContent.hideAllMasks ?? true, revealed: review.answerRevealed)
-                    .frame(maxHeight: item.kind != .imageOcclusion && store.settings.reviewAppearance.imageDisplay == .compact ? 180 : nil)
+                    .frame(maxHeight: item.kind != .imageOcclusion && store.settings.reviewAppearance.imageDisplay == .compact ? 180 : 560)
                     .accessibilityIdentifier("reviewImage")
-            } else { Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle") }
+            } else if reviewImageFailed {
+                Label("画像を読み込めません。ライブラリで画像を確認してください。", systemImage: "exclamationmark.triangle")
+            } else { ProgressView().frame(height: 180) }
         }
     }
     private func swipePad(_ review: ReviewPresentation, item: NoteItem) -> some View {
@@ -630,9 +672,8 @@ struct ReviewView: View {
     }
 
     private func imageAvailable(_ item: NoteItem) -> Bool {
-        guard let id = item.sourceContent.imageID else { return true }
-        guard let url = try? store.repository.assetURL(id: id) else { return false }
-        return UIImage(contentsOfFile: url.path) != nil
+        guard item.sourceContent.imageID != nil else { return true }
+        return loadedReviewImage != nil && loadedReviewImageKey == reviewImageKey
     }
 }
 
