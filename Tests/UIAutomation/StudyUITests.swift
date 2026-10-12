@@ -1186,6 +1186,9 @@ final class StudyUITests: XCTestCase {
         let input = app.descendants(matching: .any)["typedAnswer"]
         scrollTo(input, app: app)
         input.tap(); input.typeText("My draft")
+        // A background transition flushes buffered input. Immediate force-kill
+        // within the debounce window cannot guarantee an OS lifecycle callback.
+        XCUIDevice.shared.press(.home)
         app.terminate(); app.launch()
         XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
         app.buttons["resumeStudy"].tap()
