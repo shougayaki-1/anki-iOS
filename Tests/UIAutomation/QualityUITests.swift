@@ -476,3 +476,103 @@ extension QualityUITests {
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))
     }
 }
+extension QualityUITests {
+    func testPerformanceBaselineOperations() throws {
+        guard ProcessInfo.processInfo.environment["ANKI_PERFORMANCE_AUDIT"] == "1" else {
+            throw XCTSkip("Set ANKI_PERFORMANCE_AUDIT=1 in the UI runner environment for scale profiling")
+        }
+        for basic in [true, false] {
+            let app = XCUIApplication()
+            let dataset = basic ? "A" : "B"
+            for iteration in 0..<3 {
+                app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-performance",
+                                       basic ? "-study-test-scale-basic" : "-study-test-scale"]
+                app.launch()
+                let startButton = app.buttons[basic ? "start-new" : "start-review"]
+                XCTAssertTrue(startButton.waitForExistence(timeout: 60))
+                app.terminate() // Fixture generation is excluded; filesystem caches remain warm.
+                func operation(_ name: String, _ body: () -> Void) {
+                    let start = Date()
+                    body()
+                    print("UI_AUDIT dataset=\(dataset) iteration=\(iteration) operation=\(name) automation_wall_ms=\(Date().timeIntervalSince(start) * 1000)")
+                }
+                operation("process_launch_home") {
+                    app.launch()
+                    XCTAssertTrue(startButton.waitForExistence(timeout: 30))
+                }
+                operation("library_first") {
+                    app.tabBars.buttons["ライブラリ"].tap()
+                    XCTAssertTrue(app.staticTexts["libraryTotalCounts"].waitForExistence(timeout: 20))
+                }
+                let deck = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'libraryDeck-' AND label CONTAINS 'Scale deck 1、'")).firstMatch
+                XCTAssertTrue(deck.waitForExistence(timeout: 15))
+                operation("deck_expand") { deck.tap(); XCTAssertEqual(deck.value as? String, "展開中") }
+                operation("scroll_6_gestures") {
+                    for _ in 0..<3 { app.swipeUp() }
+                    for _ in 0..<3 { app.swipeDown() }
+                }
+                operation("deck_collapse") { deck.tap(); XCTAssertEqual(deck.value as? String, "折り畳み中") }
+                let search = app.searchFields.firstMatch
+                for _ in 0..<3 where !search.isHittable { app.swipeDown() }
+                operation("search") {
+                    search.tap(); search.typeText("Scale 29\n")
+                    XCTAssertTrue(app.staticTexts["libraryFilteredCounts"].waitForExistence(timeout: 20))
+                }
+                operation("search_clear") {
+                    search.tap(); search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8) + "\n")
+                }
+                operation("home_return") { app.tabBars.buttons["ホーム"].tap() }
+                operation("study_start") {
+                    startButton.tap()
+                    XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 15))
+                }
+                for grade in 1...4 {
+                    app.buttons["revealAnswer"].tap()
+                    operation("grade_\(grade)") {
+                        app.buttons["grade-\(grade)"].tap()
+                        XCTAssertTrue(app.buttons["undoReview"].waitForExistence(timeout: 15))
+                    }
+                    operation("undo_\(grade)") { app.buttons["undoReview"].tap() }
+                }
+                app.buttons["pauseStudy"].tap()
+                operation("statistics_first") {
+                    app.tabBars.buttons["記録"].tap()
+                    XCTAssertTrue(app.staticTexts["todayAnswerCount"].waitForExistence(timeout: 20))
+                }
+                operation("tab_home_statistics_revisit") {
+                    app.tabBars.buttons["ホーム"].tap(); app.tabBars.buttons["記録"].tap()
+                    XCTAssertTrue(app.staticTexts["todayAnswerCount"].waitForExistence(timeout: 20))
+                }
+                app.terminate()
+            }
+        }
+    }
+}
+extension QualityUITests {
+    func testPerformanceAllCardsScroll() throws {
+        guard ProcessInfo.processInfo.environment["ANKI_PERFORMANCE_AUDIT"] == "1" else {
+            throw XCTSkip("Set ANKI_PERFORMANCE_AUDIT=1 in the UI runner environment for scale profiling")
+        }
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-scale-basic", "-study-performance"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 60))
+        app.tabBars.buttons["ライブラリ"].tap()
+        let search = app.searchFields.firstMatch
+        for _ in 0..<4 where !search.isHittable { app.swipeDown() }
+        XCTAssertTrue(search.waitForExistence(timeout: 20))
+        search.tap(); search.typeText("Scale\n")
+        XCTAssertTrue(app.staticTexts["libraryFilteredCounts"].waitForExistence(timeout: 20))
+        print("SCROLL_AUDIT_READY cards=3000")
+        // Allows an external Instruments attachment after this single process is ready.
+        Thread.sleep(forTimeInterval: 15)
+        for iteration in 0..<3 {
+            print("SCROLL_AUDIT_BEGIN iteration=\(iteration)")
+            for _ in 0..<4 { app.swipeUp() }
+            for _ in 0..<4 { app.swipeDown() }
+            print("SCROLL_AUDIT_END iteration=\(iteration)")
+        }
+        Thread.sleep(forTimeInterval: 5)
+        app.terminate()
+    }
+}

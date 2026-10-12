@@ -28,3 +28,9 @@ fixtureは1ノート1カード、タグなし、1デッキ。コード上のカ�
 再実行は`xcodebuild test`で`-only-testing:AnkiIOSTests/LibraryRepositoryTests`と`-only-testing:AnkiIOSTests/ScaleRepositoryTests/testSelectedCardFetchScaling`を指定する。測定出力は`ID_FETCH`。
 
 実機のピーク/滞留メモリ、SQLite query plan、実機のフラグ一覧スモークは未検証。これらの受け入れ条件が残るためDraft PRとし、Issueを自動クローズしない。
+
+## 実機再確認（2026-10-12）
+
+B（未完了・Open）。3,000/10,000中10/100/1,000選択を各3回：新表示生成の中央値1.08/5.37/48.88ms、1.25/5.86/50.55ms。別実行のSQLでCard/Note取得行は選択件数だけ、実SELECT総数4/4/8、Card+Note SELECTは2/2/6、無条件全件取得0。ID/順序/兄弟/空/不正等の既存回帰成功。選択時ピークRAM・query plan・フラグ一覧の利用頻度/実機目視は残るためCloseしない。
+
+環境はiPhone 15 Pro / iOS 27.0.1 / Xcode 27 / Debug、専用Bundle ID・隔離ストア。実機データ・全標本・未確認条件・再現方法は[共通実機レポート](README.md)と[CSV](device-20261012.csv)を参照。先行Simulatorの値との改善率は算出しない。

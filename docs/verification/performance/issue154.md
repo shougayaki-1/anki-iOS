@@ -15,3 +15,9 @@ Debug Simulatorビルド成功。既存UI `testTypingDraftSurvivesProcessRestart
 再現: `xcodebuild test -only-testing:AnkiIOSTests/StudyRepositoryTests`。出力`TYPED_DRAFT`を参照。
 
 実機の日本語IME変換・文字選択・入力ハングは接続不可のため未検証。OS強制終了前のイベントは保証せず、debounce内の未保存入力は失われ得る。受け入れ条件をすべて満たしたとは扱わずDraft PRとする。
+
+## 実機再確認（2026-10-12）
+
+指定どおり参考計測のみ・Closeしない。mainではPR #163がマージ済み。100文字入力ループ中央値0.405ms、入力中save 0、停止後save 1（in-memory、3回、600ms待機/実保存/IME/描画を含まない）。実機の日本語IME/文字選択・欠落・古い下書き復活の目視は未確認。
+
+環境はiPhone 15 Pro / iOS 27.0.1 / Xcode 27 / Debug、専用Bundle ID・隔離ストア。実機データ・全標本・未確認条件・再現方法は[共通実機レポート](README.md)と[CSV](device-20261012.csv)を参照。先行Simulatorの値との改善率は算出しない。

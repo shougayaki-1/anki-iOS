@@ -34,3 +34,9 @@
 ## 未完了の受け入れ項目
 
 SCW-iPhone（iPhone 15 Pro）はdevicectl上でunavailable。実機3,000枚の前後比較、Instrumentsでのハング/fps・ピークRAM、主要SQL fetch数は未検証。Draft PRとしてIssueは自動クローズしない。純粋な処理時間を実機の画面性能と混同しない。
+
+## 実機再確認（2026-10-12）
+
+C（要修正・Open）。履歴付き新規開始中央値118.70ms、Good評価259.11ms、Undo135.89ms（API、各9標本）。全履歴fetch 0、取得履歴2行、キュー4回、FSRS decode 2。UIのA新規開始483〜513ms、4評価380〜383msのpotential hangが残り、queueCards/scopedQueueCardsの反復が支配的。Undo/保存失敗rollback回帰成功。キュー/スコープ材料の共有を検討し、体感/Release等の確認を残す。
+
+環境はiPhone 15 Pro / iOS 27.0.1 / Xcode 27 / Debug、専用Bundle ID・隔離ストア。実機データ・全標本・未確認条件・再現方法は[共通実機レポート](README.md)と[CSV](device-20261012.csv)を参照。先行Simulatorの値との改善率は算出しない。
