@@ -11,6 +11,8 @@ struct ReviewView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var speechPlayer = StudySpeechPlayer()
     @State private var lastSpeechEvent: SpeechPresentationKey?
+    @State private var editingCard: NoteItem?
+    @State private var confirmingEdit = false
     @State private var autoSpeechPaused = false
     @State private var swipeGate = ReviewSwipeGate()
     @State private var swipePadFrame = CGRect.zero
@@ -27,6 +29,45 @@ struct ReviewView: View {
 
     var body: some View {
         NavigationStack {
+            reviewContent
+            .sheet(isPresented: $whiteboardPresented) { whiteboardContent }
+            .sheet(item: $editingCard, onDismiss: { lastSpeechEvent = nil }) { item in
+                NoteEditorView(store: store, item: item, duringReview: true)
+            }
+            .confirmationDialog("編集画面では解答も表示されます", isPresented: $confirmingEdit, titleVisibility: .visible) {
+                Button("解答を確認して編集") { openEditor() }
+            } message: { Text("編集を開くと回答表示済みとして扱います。保存後は同じカードを再提示します。") }
+            .navigationTitle(store.review?.mode.title ?? "学習")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { reviewToolbar }
+            .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
+                Button("閉じる", role: .cancel) { store.failure = nil }
+            } message: { Text(store.failure ?? "") }
+            .task(id: store.review?.card == nil ? store.review?.nextShortDue : nil) {
+                guard store.review?.card == nil, let due = store.review?.nextShortDue else { return }
+                let delay = max(0, due.timeIntervalSince(store.clock()))
+                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                guard !Task.isCancelled else { return }
+                store.refreshQueue()
+            }
+        }.interactiveDismissDisabled()
+    }
+
+    @ViewBuilder private var whiteboardContent: some View {
+        if let review = store.review, let item = review.card {
+            ReviewWhiteboard(drawing: $whiteboardDrawing, answerRevealed: review.answerRevealed,
+                             canReveal: imageAvailable(item), onReveal: {
+                speechPlayer.stop()
+                store.draft(revealed: true)
+            }) {
+                questionContent(item)
+                reviewImage(review, item: item)
+                if review.answerRevealed { Divider(); answerContent(review, item: item) }
+            }
+        }
+    }
+
+    private var reviewContent: some View {
             GeometryReader { geometry in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 24) {
@@ -182,32 +223,37 @@ struct ReviewView: View {
                     UIAccessibility.post(notification: .announcement, argument: "今回の\(progress.limit)問を完了しました。")
                 }
             }
-            .navigationTitle(store.review?.mode.title ?? "学習")
-            .navigationBarTitleDisplayMode(.inline)
-            .sheet(isPresented: $whiteboardPresented) {
-                if let review = store.review, let item = review.card {
-                    ReviewWhiteboard(drawing: $whiteboardDrawing, answerRevealed: review.answerRevealed,
-                                     canReveal: imageAvailable(item), onReveal: {
-                        speechPlayer.stop()
-                        store.draft(revealed: true)
-                    }) {
-                        questionContent(item)
-                        reviewImage(review, item: item)
-                        if review.answerRevealed { Divider(); answerContent(review, item: item) }
-                    }
-                }
-            }
-            .toolbar {
+    }
+
+    private var speechEvent: SpeechPresentationKey? {
+        guard let item = store.review?.card else { return nil }
+        return SpeechPresentationKey(cardID: item.cardID, revealed: store.review?.answerRevealed == true)
+    }
+
+    @ToolbarContentBuilder private var reviewToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button {
+                guard editingCard == nil, !confirmingEdit else { return }
+                typingFocused = false
+                speechPlayer.stop()
+                swipeGate.cancel()
+                whiteboardPresented = true
+            } label: { Image(systemName: "pencil.tip.crop.circle") }
+            .disabled(store.review?.card == nil || editingCard != nil || confirmingEdit)
+            .accessibilityLabel("手書きを開く")
+            .accessibilityIdentifier("openWhiteboard")
+        }
+
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        typingFocused = false
-                        speechPlayer.stop()
-                        swipeGate.cancel()
-                        whiteboardPresented = true
-                    } label: { Image(systemName: "pencil.tip.crop.circle") }
-                    .disabled(store.review?.card == nil)
-                    .accessibilityLabel("手書きを開く")
-                    .accessibilityIdentifier("openWhiteboard")
+                    Menu {
+                        Button("カードを編集", systemImage: "pencil") {
+                            speechPlayer.stop(); swipeGate.invalidate(); typingFocused = false
+                            if store.review?.answerRevealed == true { openEditor() }
+                            else { confirmingEdit = true }
+                        }.disabled(store.review?.card == nil || whiteboardPresented || editingCard != nil)
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .accessibilityLabel("カードの操作")
+                    .accessibilityIdentifier("reviewCardActions")
                 }
                 ToolbarItem(placement: .topBarLeading) {
                     Button(store.review?.card == nil ? "閉じる" : "中断") {
@@ -236,18 +282,6 @@ struct ReviewView: View {
                     .accessibilityIdentifier("toggleAutoSpeech")
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { typingFocused = false } }
-            }
-            .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
-                Button("閉じる", role: .cancel) { store.failure = nil }
-            } message: { Text(store.failure ?? "") }
-            .task(id: store.review?.card == nil ? store.review?.nextShortDue : nil) {
-                guard store.review?.card == nil, let due = store.review?.nextShortDue else { return }
-                let delay = max(0, due.timeIntervalSince(store.clock()))
-                do { try await Task.sleep(for: .seconds(delay)) } catch { return }
-                guard !Task.isCancelled else { return }
-                store.refreshQueue()
-            }
-        }.interactiveDismissDisabled()
     }
 
     private func clearWhiteboard() {
@@ -255,13 +289,18 @@ struct ReviewView: View {
         whiteboardDrawing = PKDrawing()
     }
 
-    private var speechEvent: SpeechPresentationKey? {
-        guard let item = store.review?.card else { return nil }
-        return SpeechPresentationKey(cardID: item.cardID, revealed: store.review?.answerRevealed == true)
+    private func openEditor() {
+        guard editingCard == nil, !whiteboardPresented, let item = store.review?.card else { return }
+        clearWhiteboard()
+        // The editor exposes the answer even if the user later cancels.
+        editingCard = item
+        store.draft(revealed: true)
+        guard store.failure == nil else { editingCard = nil; return }
+        speechPlayer.stop()
     }
 
-    /// Invoked only for a visible card-side transition, never for ordinary SwiftUI redraws.
     private func speechEventChanged(_ event: SpeechPresentationKey?) {
+        guard editingCard == nil, !confirmingEdit else { speechPlayer.stop(); return }
         guard event != lastSpeechEvent else { return }
         speechPlayer.stop()
         guard let event else { lastSpeechEvent = nil; return }
