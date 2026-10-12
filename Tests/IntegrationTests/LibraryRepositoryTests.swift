@@ -614,6 +614,8 @@ extension LibraryRepositoryTests {
         let updated = try repo.importRows(repeated, deckID: deck, kind: .basic, tagNames: [], action: .update, source: "test", now: now)
         XCTAssertEqual(updated.imported, 2); XCTAssertEqual(updated.updatedNotes, 1); XCTAssertEqual(updated.maintainedCards, 2)
         XCTAssertEqual(updated.createdNotes, 0); XCTAssertEqual(updated.createdCards, 0)
+        XCTAssertEqual(updated.affectedCardIDs.count, 2)
+        XCTAssertEqual(updated.destinations.map(\.id), [deck])
         XCTAssertEqual(Dictionary(uniqueKeysWithValues: try repo.cards().map { ($0.id, $0.fsrsPayload) }), before)
     }
     func testImportCountsClozeGeneratedCardsAndMixedSkipExclusionError() throws {
@@ -621,6 +623,10 @@ extension LibraryRepositoryTests {
         let row = ImportRow(line: 1, question: "{{c1::one}} {{c2::two}} {{c1::again}}", answer: "")
         let created = try repo.importRows([row, row], deckID: deck, kind: .cloze, tagNames: [], action: .update, source: "test", now: now)
         XCTAssertEqual(created.imported, 2); XCTAssertEqual(created.createdNotes, 1); XCTAssertEqual(created.createdCards, 2)
+        XCTAssertEqual(created.outcome, .complete)
+        XCTAssertEqual(created.affectedCardIDs, Set(try repo.cards().map(\.id)))
+        XCTAssertEqual(created.destinations.map(\.id), [deck])
+        XCTAssertEqual(created.destinations.first?.name, try repo.deckPath(deck))
         XCTAssertEqual(created.updatedNotes, 0); XCTAssertEqual(created.maintainedCards, 0)
         var excluded = ImportRow(line: 3, question: "exclude", answer: "A"); excluded.included = false
         let existing = ImportRow(line: 2, question: row.question, answer: "")
@@ -629,6 +635,8 @@ extension LibraryRepositoryTests {
         XCTAssertEqual(result.imported, 0); XCTAssertEqual(result.skipped, 2)
         XCTAssertEqual(result.duplicateRows, 1); XCTAssertEqual(result.excludedRows, 1); XCTAssertEqual(result.errors.count, 1)
         XCTAssertEqual(result.createdCards + result.maintainedCards, 0)
+        XCTAssertEqual(result.outcome, .empty)
+        XCTAssertTrue(result.affectedCardIDs.isEmpty); XCTAssertTrue(result.destinations.isEmpty)
         XCTAssertEqual(try repo.notes().count, 1); XCTAssertEqual(try repo.cards().count, 2)
     }
 

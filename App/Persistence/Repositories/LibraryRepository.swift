@@ -259,7 +259,9 @@ extension StudyRepository {
                 imported += 1
             }
             context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))
-            return ImportResult(imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+            return ImportResult(affectedCardIDs: createdCardIDs.union(maintainedCardIDs),
+                                    destinations: try importDestinations(noteIDs: createdNoteIDs.union(updatedNoteIDs)),
+                                    imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
                                 updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
                                 duplicateRows: duplicates, excludedRows: excluded)
         }
@@ -703,5 +705,15 @@ actor TagFilterReader {
         noteFetch.propertiesToFetch = [\.id, \.deckID, \.tagIDs]
         let notes = try context.fetch(noteFetch).map { TagFilterNote(deckID: $0.deckID, tagIDs: Set($0.tagIDs), cards: counts[$0.id] ?? 0) }
         return TagFilterIndex(decks: decks, tags: tags, notes: notes)
+    }
+}
+
+
+extension StudyRepository {
+    // Metadata is captured inside the same transaction; a thrown save never yields a receipt.
+    func importDestinations(noteIDs: Set<UUID>) throws -> [ImportDestination] {
+        let ids = Set(try notes().filter { noteIDs.contains($0.id) }.map(\.deckID))
+        return try ids.map { ImportDestination(id: $0, name: try deckPath($0)) }
+            .sorted { $0.name < $1.name }
     }
 }
