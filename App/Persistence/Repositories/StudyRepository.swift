@@ -265,17 +265,33 @@ final class StudyRepository {
                 selectedNotes = try context.fetch(noteFetch)
             } else { return [] }
         } else if let cardIDs {
-            selectedCards = try cards().filter { cardIDs.contains($0.id) }
+            selectedCards = try fetchIDBatches(cardIDs) { ids in
+                FetchDescriptor<StudyCard>(predicate: #Predicate { ids.contains($0.id) })
+            }
             let noteIDs = Set(selectedCards.map(\.noteID))
-            selectedNotes = try notes().filter { noteIDs.contains($0.id) }
+            selectedNotes = try fetchIDBatches(noteIDs) { ids in
+                FetchDescriptor<Note>(predicate: #Predicate { ids.contains($0.id) })
+            }
         } else { selectedCards = try cards(); selectedNotes = try notes() }
         let noteMap = Dictionary(uniqueKeysWithValues: selectedNotes.map { ($0.id, $0) })
         let deckMap: [UUID: String]
         let tagMap: [UUID: String]
-        if cardID != nil, let note = selectedNotes.first {
-            deckMap = [note.deckID: try targetedDeckPath(note.deckID)]
-            let ids = note.tagIDs
-            let selectedTags = ids.isEmpty ? [] : try context.fetch(FetchDescriptor<Tag>(predicate: #Predicate { ids.contains($0.id) }))
+        if cardID != nil || cardIDs != nil {
+            var selectedDecks: [UUID: Deck] = [:]
+            var pending = Set(selectedNotes.map(\.deckID))
+            var visited: Set<UUID> = []
+            while !pending.isEmpty {
+                visited.formUnion(pending)
+                let rows = try fetchIDBatches(pending) { ids in
+                    FetchDescriptor<Deck>(predicate: #Predicate { ids.contains($0.id) })
+                }
+                for row in rows { selectedDecks[row.id] = row }
+                pending = Set(rows.compactMap(\.parentID)).subtracting(visited)
+            }
+            deckMap = LibraryIndex.deckPaths(Array(selectedDecks.values))
+            let selectedTags = try fetchIDBatches(Set(selectedNotes.flatMap(\.tagIDs))) { ids in
+                FetchDescriptor<Tag>(predicate: #Predicate { ids.contains($0.id) })
+            }
             tagMap = Dictionary(uniqueKeysWithValues: selectedTags.map { ($0.id, $0.name) })
         } else {
             deckMap = LibraryIndex.deckPaths(try decks())
@@ -291,6 +307,19 @@ final class StudyRepository {
                             sourceContent: content, variantKey: card.variantKey,
                             responseMode: ResponseMode(rawValue: note.defaultResponseMode) ?? .mental, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, flag: marks[card.id]?.flag, hiddenUntil: marks[card.id]?.hiddenUntil, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
         }
+    }
+
+    // Keep captured IN lists below SQLite's conservative bind-parameter limit.
+    // Managed objects stay on this repository's context and main actor.
+    private func fetchIDBatches<T: PersistentModel>(_ ids: Set<UUID>,
+        descriptor: ([UUID]) -> FetchDescriptor<T>) throws -> [T] {
+        let values = Array(ids)
+        var result: [T] = []
+        for start in stride(from: 0, to: values.count, by: 400) {
+            let batch = Array(values[start..<min(start + 400, values.count)])
+            result.append(contentsOf: try context.fetch(descriptor(batch)))
+        }
+        return result
     }
 
     func siblingCardCount(noteID: UUID) throws -> Int {

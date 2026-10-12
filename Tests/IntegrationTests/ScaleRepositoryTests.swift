@@ -4,6 +4,46 @@ import SwiftData
 
 @MainActor
 final class ScaleRepositoryTests: XCTestCase {
+    func testSelectedCardFetchScaling() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let writer = StudyRepository(container: container)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try writer.initialize(now: now)
+        let deck = try writer.decks()[0].id
+        let payload = try JSONEncoder().encode(ReviewScheduler().newCard(now: now))
+        var cardIDs: [UUID] = []
+        for total in [3000, 10000] {
+            try writer.transaction {
+                for index in cardIDs.count..<total {
+                    let input = NoteInput(deckID: deck, question: "Q \(index)", answer: "A")
+                    let content = try JSONEncoder().encode(TextContent(question: input.question, answer: "A", explanation: ""))
+                    let note = Note(input: input, content: content, now: now)
+                    let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now)
+                    writer.context.insert(note); writer.context.insert(card); cardIDs.append(card.id)
+                }
+            }
+            for count in [10, 100, 1000] {
+                let ids = Set(cardIDs.prefix(count))
+                let old = StudyRepository(container: container)
+                let start = Date()
+                let oldCards = try old.cards().filter { ids.contains($0.id) }
+                let noteIDs = Set(oldCards.map(\.noteID))
+                let oldNotes = try old.notes().filter { noteIDs.contains($0.id) }
+                let oldTime = Date().timeIntervalSince(start)
+                let targeted = StudyRepository(container: container)
+                let selectedStart = Date()
+                let items = try targeted.noteItems(cardIDs: ids)
+                let selectedTime = Date().timeIntervalSince(selectedStart)
+                XCTAssertEqual(Set(items.map(\.cardID)), Set(oldCards.map(\.id)))
+                XCTAssertEqual(Set(items.map(\.noteID)), Set(oldNotes.map(\.id)))
+                print("ID_FETCH total=\(total) selected=\(count) legacy_fetch_only_ms=\(oldTime * 1000) targeted_projection_ms=\(selectedTime * 1000)")
+            }
+        }
+    }
+
     func testThousandNotesThreeThousandCardsTenThousandLogsAndBackup() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
