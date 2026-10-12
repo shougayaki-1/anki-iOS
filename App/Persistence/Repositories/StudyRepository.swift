@@ -24,6 +24,8 @@ final class StudyRepository {
     let context: ModelContext
     var calendar: Calendar
     var mediaStore: MediaStore
+    private var queueStates: [UUID: (payload: Data, state: String)] = [:]
+    private(set) var queueStateDecodeCount = 0
     var save: (ModelContext) throws -> Void
 
     init(container: ModelContainer, calendar: Calendar = .current, mediaStore: MediaStore = MediaStore(),
@@ -57,6 +59,16 @@ final class StudyRepository {
 
     func decks() throws -> [Deck] {
         try context.fetch(FetchDescriptor<Deck>(sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]))
+    }
+    func card(_ id: UUID) throws -> StudyCard? {
+        var fetch = FetchDescriptor<StudyCard>(predicate: #Predicate { $0.id == id })
+        fetch.fetchLimit = 1
+        return try context.fetch(fetch).first
+    }
+    func note(_ id: UUID) throws -> Note? {
+        var fetch = FetchDescriptor<Note>(predicate: #Predicate { $0.id == id })
+        fetch.fetchLimit = 1
+        return try context.fetch(fetch).first
     }
     func notes() throws -> [Note] { try context.fetch(FetchDescriptor<Note>()) }
     func cards() throws -> [StudyCard] { try context.fetch(FetchDescriptor<StudyCard>()) }
@@ -232,8 +244,17 @@ final class StudyRepository {
             } else { return [] }
         } else { selectedCards = try cards(); selectedNotes = try notes() }
         let noteMap = Dictionary(uniqueKeysWithValues: selectedNotes.map { ($0.id, $0) })
-        let deckMap = LibraryIndex.deckPaths(try decks())
-        let tagMap = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
+        let deckMap: [UUID: String]
+        let tagMap: [UUID: String]
+        if cardID != nil, let note = selectedNotes.first {
+            deckMap = [note.deckID: try targetedDeckPath(note.deckID)]
+            let ids = note.tagIDs
+            let selectedTags = ids.isEmpty ? [] : try context.fetch(FetchDescriptor<Tag>(predicate: #Predicate { ids.contains($0.id) }))
+            tagMap = Dictionary(uniqueKeysWithValues: selectedTags.map { ($0.id, $0.name) })
+        } else {
+            deckMap = LibraryIndex.deckPaths(try decks())
+            tagMap = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
+        }
         return try selectedCards.sorted { $0.createdAt > $1.createdAt }.map { card in
             guard let note = noteMap[card.noteID], let kind = NoteKind(rawValue: note.type) else { throw StudyError.missingRecord }
             let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
@@ -259,13 +280,33 @@ final class StudyRepository {
     func queueCards() throws -> [QueueCard] {
         let scheduler = try ReviewScheduler()
         let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
-        let limits = try Dictionary(uniqueKeysWithValues: decks().map { ($0.id, try deckLimits($0.id)) })
-        return try cards().map { card in
-            let state = try scheduler.summary(snapshot(card)).state
+        let ancestors = try deckAncestorMap()
+        let overrides = try options().deckLearning ?? []
+        let limits = ancestors.mapValues { ids in
+            Dictionary(uniqueKeysWithValues: overrides.compactMap { value -> (UUID, Int)? in
+                guard ids.contains(value.deckID), let limit = value.newLimit else { return nil }
+                return (value.deckID, limit)
+            })
+        }
+        let rows = try cards()
+        // Compare persisted payloads rather than timestamps: Undo and rollback can
+        // restore old timestamps. Keep only the current store's cards in the cache.
+        var states: [UUID: (payload: Data, state: String)] = [:]
+        let result = try rows.map { card in
+            let state: String
+            if let cached = queueStates[card.id], cached.payload == card.fsrsPayload { state = cached.state }
+            else {
+                state = try scheduler.summary(snapshot(card)).state
+                queueStateDecodeCount += 1
+            }
+            states[card.id] = (card.fsrsPayload, state)
             return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
                              suspended: card.isSuspended, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
         }
+        queueStates = states
+        return result
     }
+
     func queueLogs() throws -> [QueueLog] {
         let map = Dictionary(uniqueKeysWithValues: try cards().map { ($0.id, $0.noteID) })
         let quotas = try quotaMap()
@@ -422,11 +463,11 @@ final class StudyRepository {
     func grade(_ grade: ReviewGrade, now: Date) throws {
         try transaction {
             guard let draft = try session(), let cardID = draft.cardID, draft.answerRevealed,
-                  let card = try cards().first(where: { $0.id == cardID && !$0.isSuspended }) else {
+                  let card = try card(cardID), !card.isSuspended else {
                 throw StudyError.noSession
             }
             let progressBefore = try sessionProgress()
-            guard let note = try notes().first(where: { $0.id == card.noteID }) else { throw StudyError.missingRecord }
+            guard let note = try note(card.noteID) else { throw StudyError.missingRecord }
             let scheduler = try ReviewScheduler(desiredRetention: deckRetention(note.deckID), parameters: optimizationState().activeParameters)
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
@@ -476,11 +517,17 @@ final class StudyRepository {
         }
     }
 
+    private func latestReviewLog() throws -> StudyReviewLog? {
+        var fetch = FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence, order: .reverse)])
+        fetch.fetchLimit = 1
+        return try context.fetch(fetch).first
+    }
+
     func undo(now: Date) throws {
         try transaction {
             guard let draft = try session(), let logID = draft.undoLogID,
-                  let latest = try logs().last, latest.id == logID,
-                  let card = try cards().first(where: { $0.id == latest.cardID }),
+                  let latest = try latestReviewLog(), latest.id == logID,
+                  let card = try card(latest.cardID),
                   card.fsrsPayload == latest.fsrsAfter else { throw StudyError.cannotUndo }
             let before = try JSONDecoder().decode(SchedulerSnapshot.self, from: latest.fsrsBefore)
             card.fsrsPayload = latest.fsrsBefore
@@ -500,11 +547,11 @@ final class StudyRepository {
         }
     }
 
-    func presentation(now: Date) throws -> ReviewPresentation? {
+    func presentation(now: Date, cards: [QueueCard]? = nil) throws -> ReviewPresentation? {
         guard let draft = try session() else { return nil }
         let mode = StudyMode(rawValue: draft.mode) ?? .review
         let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
-        let short = try responseEligibleCards(scopedQueueCards(scope()), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
+        let short = try responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
             !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()

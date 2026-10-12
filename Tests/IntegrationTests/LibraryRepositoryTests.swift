@@ -11,6 +11,46 @@ final class LibraryRepositoryTests: XCTestCase {
         try repo.initialize(now: now); return repo
     }
 
+    func testLibraryInlineTreeCountsGroupingSearchAndSavedExpansion() throws {
+        let root = UUID(), child = UUID(), grandchild = UUID(), empty = UUID(), other = UUID()
+        let note = UUID(), directNote = UUID()
+        let decks = [
+            DeckItem(id: root, name: "英語", shortName: "英語"),
+            DeckItem(id: child, name: "英語 / Final Draft", shortName: "Final Draft", parentID: root),
+            DeckItem(id: grandchild, name: "英語 / Final Draft / Lesson4", shortName: "Lesson4", parentID: child),
+            DeckItem(id: empty, name: "空", shortName: "空"),
+            DeckItem(id: other, name: "国語", shortName: "国語")
+        ]
+        func card(_ note: UUID, deck: UUID) -> LibraryCard {
+            LibraryCard(id: UUID(), noteID: note, deckID: deck, variantKey: "basic:front", isSuspended: false, createdAt: now)
+        }
+        let direct = card(directNote, deck: root)
+        let generated = (0..<3).map { _ in card(note, deck: grandchild) }
+        var index = LibraryIndex()
+        index.cardsByDeck = [root: [direct], grandchild: generated]
+        index.siblingCounts = [directNote: 1, note: 3]; index.cardCount = 4
+        let tree = LibraryTreeProjection(decks: decks, index: index, results: index.results(), search: "")
+        XCTAssertEqual(Set(tree.rows(expanded: []).compactMap { $0.deck?.id }), [root, empty, other])
+        XCTAssertEqual(tree.subtreeCards[root], 4)
+        XCTAssertFalse(try XCTUnwrap(tree.rows(expanded: []).first { $0.deck?.id == empty }).expandable)
+        let expanded: Set<UUID> = [root, child, grandchild]
+        let saved = LibraryTreeProjection.saveExpanded(expanded)
+        XCTAssertEqual(LibraryTreeProjection.expandedIDs(saved), expanded)
+        let open = tree.rows(expanded: expanded)
+        XCTAssertEqual(open.compactMap { $0.note?.id }, [directNote, note])
+        XCTAssertEqual(open.first { $0.note?.id == note }?.cardCount, 3)
+        XCTAssertEqual(open.first { $0.deck?.id == grandchild }?.depth, 2)
+        XCTAssertFalse(tree.rows(expanded: [child, grandchild]).contains { $0.note != nil })
+        XCTAssertEqual(tree.rows(expanded: LibraryTreeProjection.expandedIDs(saved)).compactMap { $0.note?.id }, [directNote, note])
+        let matches = index.results(matching: [generated[0].id])
+        let search = LibraryTreeProjection(decks: decks, index: index, results: matches, search: "Question")
+        XCTAssertEqual(search.rows(expanded: []).compactMap { $0.deck?.id }, [root, child, grandchild])
+        XCTAssertEqual(search.rows(expanded: []).compactMap { $0.note?.id }, [note])
+        XCTAssertEqual(LibraryTreeProjection.expandedIDs(saved), expanded)
+        let nameSearch = LibraryTreeProjection(decks: decks, index: index, results: LibraryResults(), search: "Lesson4")
+        XCTAssertEqual(nameSearch.rows(expanded: []).compactMap { $0.deck?.id }, [root, child, grandchild])
+    }
+
     func testHintOnlyEditOfLegacyContentPreservesActiveSession() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         var input = NoteInput(deckID: deck, question: "Legacy Q", answer: "Legacy A")
@@ -783,4 +823,58 @@ extension LibraryRepositoryTests {
         XCTAssertEqual(try repo.notes().count, 2); XCTAssertEqual(try repo.cards().count, 2)
         XCTAssertEqual(try repo.notes().first { $0.id == hidden }?.contentPayload, Data("invalid".utf8))
     }
+    func testContextualTagsUseDeckBranchesSharedCountsANDAndKeepUnavailableSelection() {
+        let root = UUID(), english = UUID(), japanese = UUID(), unused = UUID()
+        let a = UUID(), b = UUID(), shared = UUID(), outside = UUID()
+        let decks = [DeckItem(id: root, name: "共通の親"),
+                     DeckItem(id: english, name: "共通の親 / 英語", shortName: "英語", parentID: root),
+                     DeckItem(id: japanese, name: "共通の親 / 国語", shortName: "国語", parentID: root)]
+        let tags = [TagItem(id: a, name: "人物・思想"), TagItem(id: b, name: "英文"),
+                    TagItem(id: shared, name: "最重要"), TagItem(id: outside, name: "国語専用"), TagItem(id: unused, name: "未使用")]
+        let index = TagFilterIndex(decks: decks, tags: tags, notes: [
+            TagFilterNote(deckID: english, tagIDs: [a, b, shared], cards: 3),
+            TagFilterNote(deckID: english, tagIDs: [a], cards: 1),
+            TagFilterNote(deckID: japanese, tagIDs: [outside, shared], cards: 2)])
+        let all = index.summary(scope: LearningScope())
+        XCTAssertEqual(all.cards, 6)
+        XCTAssertEqual(Set(all.groups.map(\.id)), [english.uuidString, japanese.uuidString, "shared"])
+        XCTAssertEqual(all.groups.flatMap(\.tags).filter { $0.id == shared }.count, 1)
+        XCTAssertEqual(all.groups.flatMap(\.tags).first { $0.id == shared }?.cards, 5)
+        XCTAssertFalse(all.groups.flatMap(\.tags).contains { $0.id == unused })
+        let parent = index.summary(scope: LearningScope(deckID: root, tagIDs: [a, b]))
+        XCTAssertEqual(parent.cards, 3)
+        XCTAssertEqual(parent.groups.flatMap(\.tags).first { $0.id == a }?.cards, 4)
+        let scope = LearningScope(deckID: english, tagIDs: [outside])
+        let selected = index.summary(scope: scope)
+        XCTAssertEqual(selected.cards, 0); XCTAssertEqual(selected.unavailable, [outside])
+        XCTAssertFalse(selected.groups.flatMap(\.tags).contains { $0.id == outside })
+        XCTAssertEqual(scope.tagIDs, [outside])
+        XCTAssertEqual(index.summary(scope: LearningScope(deckID: UUID())).cards, 0)
+        let scale = TagFilterIndex(decks: decks, tags: tags, notes: (0..<1000).map { _ in
+            TagFilterNote(deckID: english, tagIDs: [a], cards: 3)
+        })
+        XCTAssertEqual(scale.summary(scope: LearningScope(tagIDs: [a])).cards, 3000)
+    }
+
+    func testTagFilterReaderCountsGeneratedCardsWithoutReadingFSRSOrChangingSession() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        try repo.createNote(NoteInput(deckID: child, kind: .cloze, question: "{{c1::一}} {{c2::二}} {{c3::三}}", tagNames: ["日本語"]), now: now)
+        try repo.start(mode: .new, now: now)
+        let draft = try repo.session()?.cardID, payloads = try repo.cards().map(\.fsrsPayload)
+        let loaded = try await TagFilterReader(container: container).load()
+        let summary = loaded.summary(scope: LearningScope(deckID: root))
+        XCTAssertEqual(summary.cards, 3)
+        XCTAssertEqual(summary.groups.flatMap(\.tags).first?.cards, 3)
+        XCTAssertEqual(try repo.session()?.cardID, draft)
+        XCTAssertEqual(try repo.cards().map(\.fsrsPayload), payloads)
+        XCTAssertEqual(try repo.logs().count, 0)
+        try repo.transaction { for card in try repo.cards() { card.fsrsPayload = Data("invalid".utf8) } }
+        let withoutFSRS = try await TagFilterReader(container: container).load()
+        XCTAssertEqual(withoutFSRS.summary(scope: LearningScope()).cards, 3)
+    }
+
 }

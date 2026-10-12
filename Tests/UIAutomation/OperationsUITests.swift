@@ -58,6 +58,43 @@ final class OperationsUITests: XCTestCase {
         let attachment = XCTAttachment(screenshot: app.screenshot()); attachment.name = name
         attachment.lifetime = .keepAlways; add(attachment)
     }
+    func testLibraryTreeInlineExpansionSearchAndRestart() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-library-tree"]
+        app.launch()
+        XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 15))
+        tab(app, "ライブラリ").tap()
+        func folder(_ name: String) -> XCUIElement {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'libraryDeck-' AND label CONTAINS %@", name)).firstMatch
+        }
+        let root = folder("Tree English"), child = folder("Tree Draft"), leaf = folder("Tree Lesson")
+        XCTAssertTrue(root.waitForExistence(timeout: 10)); XCTAssertFalse(child.exists)
+        root.tap(); XCTAssertTrue(child.waitForExistence(timeout: 5))
+        child.tap(); XCTAssertTrue(leaf.waitForExistence(timeout: 5))
+        leaf.tap(); XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Tree parent question"].exists)
+        root.tap(); XCTAssertFalse(leaf.exists)
+        root.tap(); XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 5))
+        app.terminate(); app.launch(); XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 15))
+        tab(app, "ライブラリ").tap()
+        XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 10))
+        root.tap()
+        let field = app.searchFields.firstMatch
+        field.tap(); field.typeText("Tree leaf")
+        XCTAssertTrue(app.staticTexts["Tree leaf question"].waitForExistence(timeout: 10))
+        field.typeText("\n")
+        app.swipeUp()
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Issue112-inline-tree-search"; screenshot.lifetime = .keepAlways
+        add(screenshot)
+        app.swipeDown()
+        field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: "Tree leaf".count))
+        XCTAssertTrue(root.waitForExistence(timeout: 5))
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: child)
+        waitForExpectations(timeout: 10)
+    }
+
     func testNotificationPermissionActualReservationsAndCancellation() {
         addUIInterruptionMonitor(withDescription: "Local notification permission") { alert in
             if alert.buttons["許可"].exists { alert.buttons["許可"].tap(); return true }

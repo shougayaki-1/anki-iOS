@@ -430,10 +430,10 @@ extension BackupRepositoryTests {
         let bytes = try UITestFixtures.ankiFixture()
         let preview = try AnkiImport.decode(bytes)
         XCTAssertEqual(preview.sourceNotes, 5); XCTAssertEqual(preview.sourceCards, 7)
-        XCTAssertEqual(preview.deck.package.notes.count, 3); XCTAssertEqual(preview.deck.cardCount, 5)
-        XCTAssertEqual(preview.skipped.count, 2); XCTAssertEqual(preview.scheduledCards, 7); XCTAssertEqual(preview.reviewLogs, 1)
+        XCTAssertEqual(preview.deck.package.notes.count, 4); XCTAssertEqual(preview.deck.cardCount, 6)
+        XCTAssertEqual(preview.skipped.count, 1); XCTAssertEqual(preview.scheduledCards, 7); XCTAssertEqual(preview.reviewLogs, 1)
         XCTAssertTrue(preview.skipped.contains { $0.reason.contains("スクリプト") })
-        XCTAssertTrue(preview.skipped.contains { $0.reason.contains("2フィールド") })
+        XCTAssertTrue(preview.warnings.contains { $0.reason.contains("フィールド") })
         let basic = try XCTUnwrap(preview.deck.package.notes.first { $0.content.question.contains("Anki question") })
         XCTAssertEqual(basic.content.question, "Anki question")
         XCTAssertEqual(basic.content.answer, "Anki answer")
@@ -449,15 +449,15 @@ extension BackupRepositoryTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let repo = try fixture(root)
         let before = try BackupData.capture(repo)
-        XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 3)
-        XCTAssertEqual(try repo.cards().count, 5); XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 4)
+        XCTAssertEqual(try repo.cards().count, 6); XCTAssertTrue(try repo.logs().isEmpty)
         XCTAssertEqual(try repo.settings().desiredRetention, before.preferences[0].desiredRetention)
         XCTAssertTrue(try repo.noteItems().allSatisfy { $0.summary.repetitions == 0 })
-        XCTAssertEqual(try repo.previewDeckImport(preview.deck).duplicates.count, 3)
+        XCTAssertEqual(try repo.previewDeckImport(preview.deck).duplicates.count, 4)
         _ = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
         var legacy2 = try StoredZIP.read(bytes)
         legacy2["collection.anki21"] = legacy2["collection.anki2"]; legacy2["meta"] = Data([8, 2])
-        XCTAssertEqual(try AnkiImport.decode(StoredZIP.write(legacy2)).deck.cardCount, 5)
+        XCTAssertEqual(try AnkiImport.decode(StoredZIP.write(legacy2)).deck.cardCount, 6)
     }
     func testAnkiRejectsModernDamagedUnsafeSchemaAndPathsWithoutChangingStore() throws {
         let bytes = try UITestFixtures.ankiFixture(), files = try StoredZIP.read(bytes)
@@ -497,6 +497,134 @@ extension BackupRepositoryTests {
     }
 }
 
+
+extension BackupRepositoryTests {
+    private func exportedAnki(_ name: String) throws -> Data {
+        let url = try XCTUnwrap(Bundle(for: BackupRepositoryTests.self).url(forResource: name, withExtension: "apkg", subdirectory: "Anki"))
+        return try Data(contentsOf: url)
+    }
+    func testActualAnkiLatestAndLegacyExportsAndAtomicFreshImport() async throws {
+        for name in ["latest-media", "legacy2-media"] {
+            let preview = try AnkiImport.decode(exportedAnki(name))
+            XCTAssertEqual(preview.sourceNotes, 3); XCTAssertEqual(preview.sourceCards, 5)
+            XCTAssertEqual(preview.deck.package.notes.count, 3); XCTAssertEqual(preview.deck.cardCount, 5)
+            XCTAssertTrue(preview.skipped.isEmpty, preview.skipped.map(\.reason).joined(separator: ";")); XCTAssertTrue(preview.warnings.isEmpty)
+            XCTAssertEqual(preview.deck.package.media.count, 2)
+            XCTAssertTrue(preview.deck.package.decks.contains { $0.name == "日本語" })
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let repo = try fixture(root); try populate(repo)
+            let before = try BackupData.capture(repo)
+            func mediaFiles() throws -> Set<String> {
+                let entries = (FileManager.default.enumerator(at: repo.mediaStore.root, includingPropertiesForKeys: [.isRegularFileKey])?.allObjects as? [URL]) ?? []
+                return try Set(entries.filter { try $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true }.map(\.path))
+            }
+            let mediaPaths = try mediaFiles()
+            _ = try repo.previewDeckImport(preview.deck)
+            XCTAssertEqual(try BackupData.capture(repo), before)
+            repo.save = { _ in throw Failure.save }
+            XCTAssertThrowsError(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now))
+            XCTAssertEqual(try BackupData.capture(repo), before)
+            XCTAssertEqual(try mediaFiles(), mediaPaths)
+            repo.save = { try $0.save() }
+            XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 3)
+            let after = try BackupData.capture(repo)
+            XCTAssertEqual(Set(before.cards.map(\.id)).subtracting(after.cards.map(\.id)), [])
+            XCTAssertEqual(after.logs, before.logs)
+            XCTAssertEqual(after.cards.filter { Set(before.cards.map(\.id)).contains($0.id) }, before.cards)
+            XCTAssertEqual(try repo.previewDeckImport(preview.deck).duplicates.count, 3)
+            XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 0)
+            let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "test"))
+            let restored = try fixture(root.appendingPathComponent("restored"))
+            let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("restored/Study.store"))
+            _ = try BackupService.restore(backup, location: location, mediaStore: restored.mediaStore, now: now)
+            let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: restored.mediaStore)
+            XCTAssertEqual(Set(try reopened.cards().map(\.id)), Set(after.cards.map(\.id)))
+            XCTAssertEqual(try reopened.logs().count, before.logs.count)
+            for item in preview.deck.package.media {
+                let restoredAsset = try XCTUnwrap(try reopened.assets().first { $0.sha256 == item.sha256 })
+                XCTAssertEqual(try Data(contentsOf: reopened.assetURL(id: restoredAsset.id)), preview.deck.bytes[item.id])
+            }
+        }
+    }
+    func testActualAnkiVocabulary1900AndMissingMediaWarnings() throws {
+        let started = Date()
+        let preview = try AnkiImport.decode(exportedAnki("latest-vocabulary-1900"))
+        print("Anki 1900-note preview seconds:", Date().timeIntervalSince(started))
+        XCTAssertEqual(preview.sourceNotes, 1900); XCTAssertEqual(preview.sourceCards, 1900)
+        XCTAssertEqual(preview.deck.package.notes.count, 1900); XCTAssertEqual(preview.deck.cardCount, 1900)
+        XCTAssertTrue(preview.skipped.isEmpty); XCTAssertEqual(preview.warnings.count, 3800)
+        XCTAssertTrue(preview.deck.package.media.isEmpty)
+        XCTAssertEqual(preview.deck.package.decks.filter { $0.name.hasPrefix("Lesson") }.count, 19)
+        let note = try XCTUnwrap(preview.deck.package.notes.first)
+        XCTAssertTrue(note.content.question.contains("fictional"))
+        XCTAssertTrue(note.content.answer.contains("架空"))
+        XCTAssertNil(note.content.questionAudioID); XCTAssertNil(note.content.answerAudioID)
+        let missing = try AnkiImport.decode(exportedAnki("latest-no-media"))
+        XCTAssertEqual(missing.deck.package.notes.count, 2); XCTAssertEqual(missing.deck.cardCount, 4)
+        XCTAssertEqual(missing.skipped.count, 1)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root); try populate(repo)
+        let before = try BackupData.capture(repo)
+        _ = try repo.previewDeckImport(preview.deck)
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now))
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        repo.save = { try $0.save() }
+        XCTAssertEqual(try repo.importDeckPackage(preview.deck, skipDuplicates: true, now: now), 1900)
+        XCTAssertEqual(try repo.previewDeckImport(preview.deck).duplicates.count, 1900)
+        XCTAssertEqual(try BackupData.capture(repo).cards.filter { Set(before.cards.map(\.id)).contains($0.id) }, before.cards)
+    }
+    func testLatestAnkiMetaChecksumTruncationAndNoDummyFallback() throws {
+        let bytes = try exportedAnki("latest-media")
+        let files = try AnkiPackageZIP.read(bytes, budget: AnkiReadBudget())
+        var altered = files; altered["meta"] = Data([8, 99])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(altered)))
+        altered = files; altered["meta"] = nil
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(altered)))
+        altered = files; altered["meta"] = Data([8, 1])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(altered)))
+        altered = files; altered["collection.anki21b"] = Data(files["collection.anki21b"]!.dropLast())
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(altered)))
+        altered = files; altered["0"] = files["1"]
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(altered)))
+        altered = files; altered["orphan"] = Data([1])
+        XCTAssertThrowsError(try AnkiImport.decode(StoredZIP.write(altered)))
+        XCTAssertThrowsError(try AnkiProto(Data([0x0a, 0xff])))
+        XCTAssertThrowsError(try AnkiZstd.decode(Data([0x28, 0xb5, 0x2f, 0xfd]), limit: 100, budget: AnkiReadBudget()))
+    }
+}
+
+
+extension BackupRepositoryTests {
+    func testAnkiDescriptorExtraFieldsAndStreamingExpansionLimit() throws {
+        let bytes = try exportedAnki("latest-descriptor-extra")
+        XCTAssertEqual(try AnkiImport.decode(bytes).deck.cardCount, 5)
+        // The backup/studydeck reader intentionally continues rejecting this ZIP profile.
+        XCTAssertThrowsError(try StoredZIP.read(bytes, allowDeflate: true))
+        let url = try XCTUnwrap(Bundle(for: BackupRepositoryTests.self).url(forResource: "expansion-limit", withExtension: "zst", subdirectory: "Anki"))
+        XCTAssertThrowsError(try AnkiZstd.decode(Data(contentsOf: url), limit: 50_000_000, budget: AnkiReadBudget())) { error in
+            guard case BackupError.tooLarge = error else { return XCTFail("Unexpected error: \(error)") }
+        }
+        var files = try AnkiPackageZIP.read(bytes, budget: AnkiReadBudget())
+        files["Media"] = files["media"]
+        XCTAssertThrowsError(try AnkiPackageZIP.read(StoredZIP.write(files), budget: AnkiReadBudget()))
+    }
+    func testCancelledAnkiPreviewDoesNotChangeStore() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root); try populate(repo)
+        let before = try BackupData.capture(repo), bytes = try exportedAnki("latest-vocabulary-1900")
+        let task = Task.detached {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try AnkiImport.decode(bytes)
+        }
+        do { _ = try await task.value; XCTFail("Cancelled preview completed") } catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(try BackupData.capture(repo), before)
+    }
+}
 
 extension BackupRepositoryTests {
     func testRestoreOutcomeCountsCommittedStoreAndPreservesIDsAndHistory() async throws {

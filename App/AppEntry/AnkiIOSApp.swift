@@ -118,6 +118,10 @@ struct AppRootView: View {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
                     try store.reload()
                 }
+                if studyURL != nil, args.contains("-study-test-library-tree"), let store {
+                    try UITestFixtures.populateLibraryTree(store.repository, now: store.clock())
+                    try store.reload()
+                }
                 if studyURL != nil, args.contains("-study-test-ordering"), let store {
                     try UITestFixtures.populateOrdering(store.repository, now: store.clock())
                     try store.reload()
@@ -131,6 +135,10 @@ struct AppRootView: View {
                 }
                 if studyURL != nil, args.contains("-study-test-scale"), let store {
                     try UITestFixtures.populateScale(store.repository, now: store.clock())
+                    try store.reload()
+                }
+                if studyURL != nil, args.contains("-study-test-tag-filters"), let store {
+                    try UITestFixtures.populateTagFilters(store.repository, now: store.clock())
                     try store.reload()
                 }
                 if studyURL != nil, args.contains("-study-test-home-filters"), let store {

@@ -169,3 +169,63 @@ extension SpeechReadoutTests {
         XCTAssertFalse(player.playing); XCTAssertNotNil(player.notice)
     }
 }
+
+
+extension SpeechReadoutTests {
+    func testEnglishVoiceFallbackNeverSelectsAnotherLanguage() {
+        XCTAssertEqual(SpeechVoiceSelection.index(languages: ["ja-JP", "en-GB", "en-US"], accent: .american), 2)
+        XCTAssertEqual(SpeechVoiceSelection.index(languages: ["en-US", "en-GB"], accent: .british), 1)
+        XCTAssertEqual(SpeechVoiceSelection.index(languages: ["ja-JP", "en-AU"], accent: .british), 1)
+        XCTAssertNil(SpeechVoiceSelection.index(languages: ["ja-JP", "fr-FR"], accent: .american))
+        XCTAssertNil(SpeechVoiceSelection.index(languages: [], accent: .british))
+    }
+    func testUnavailableReadoutHasReasonWithoutSpeakingHiddenContent() {
+        for (text, reason) in [("", SpeechReadoutFailure.emptyText), ("{{c1::secret}}", .hiddenContent), ("catとは何ですか", .mixedLanguage), ("12345", .noEnglish)] {
+            let result = SpeechReadout.assessment(kind: .basic, displayed: TextContent(question: text, answer: "Unrevealed secret", explanation: ""), side: .question)
+            XCTAssertNil(result.text); XCTAssertEqual(result.failure, reason)
+        }
+    }
+    @MainActor func testEmptyRequestsAndStoppedQueuesRemainIdle() async throws {
+        let player = StudySpeechPlayer()
+        player.play(text: " ", settings: SpeechPreferences())
+        XCTAssertEqual(player.phase, .idle); XCTAssertNotNil(player.notice)
+        for _ in 0..<3 { player.play(text: "A fictional English sentence for queue cancellation.", settings: SpeechPreferences()) }
+        player.stop()
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(player.phase, .idle); XCTAssertFalse(player.playing); XCTAssertNil(player.notice)
+        player.unavailableReadout(.mixedLanguage)
+        XCTAssertEqual(player.phase, .idle); XCTAssertTrue(player.notice?.contains("混在") == true)
+    }
+    @MainActor func testPhysicalEnglishVoicesBeginAndStopWithoutChangingData() async throws {
+        #if targetEnvironment(simulator)
+        throw XCTSkip("Physical-device AVSpeechSynthesizer smoke test")
+        #else
+        let player = StudySpeechPlayer()
+        defer { player.stop() }
+        for accent in SpeechAccent.allCases {
+            var settings = SpeechPreferences(); settings.accent = accent
+            player.play(text: String(repeating: "This fictional sentence checks speech playback. ", count: 5), settings: settings)
+            let deadline = Date().addingTimeInterval(8)
+            while player.phase == .requested, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+            XCTAssertEqual(player.phase, .speaking, player.notice ?? "Speech did not start")
+            player.stop()
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(player.phase, .idle)
+        }
+        #endif
+    }
+}
+
+
+extension SpeechReadoutTests {
+    @MainActor func testSpeechRequestStartsOrProvidesRecoveryInsteadOfStayingPending() async throws {
+        let player = StudySpeechPlayer()
+        defer { player.stop() }
+        player.play(text: String(repeating: "This is fictional speech for a start check. ", count: 5), settings: SpeechPreferences())
+        let deadline = Date().addingTimeInterval(8)
+        while player.phase == .requested, Date() < deadline { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertNotEqual(player.phase, .requested)
+        if player.phase == .idle { XCTAssertNotNil(player.notice) }
+        else { XCTAssertEqual(player.phase, .speaking) }
+    }
+}

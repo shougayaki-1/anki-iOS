@@ -11,11 +11,12 @@ final class SpeechUITests: XCTestCase {
         add.tap()
 
         let question = app.descendants(matching: .any)["questionInput"]
+        for _ in 0..<10 { if question.exists && question.isHittable { break }; app.swipeUp() }
         XCTAssertTrue(question.waitForExistence(timeout: 5))
         question.tap()
         question.typeText("Where are you going?")
         let answer = app.descendants(matching: .any)["answerInput"]
-        if !answer.isHittable { app.swipeUp() }
+        for _ in 0..<5 { if answer.exists && answer.isHittable { break }; app.swipeUp() }
         answer.tap()
         answer.typeText("I am going home.")
         app.buttons["saveNote"].tap()
@@ -29,6 +30,7 @@ final class SpeechUITests: XCTestCase {
         XCTAssertTrue(playQuestion.waitForExistence(timeout: 10))
         XCTAssertFalse(app.buttons["speakAnswer"].exists)
         XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["speechOutputHelp"].exists)
         playQuestion.tap()
         if app.buttons["stopSpeech"].exists { app.buttons["stopSpeech"].tap() }
 
@@ -182,7 +184,7 @@ extension SpeechUITests {
         exchangeScroll(app.buttons["confirmDeckImport"], app: app); app.buttons["confirmDeckImport"].tap()
         app.buttons["commitDeckImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("3ノート"))
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("4ノート"))
         app.terminate(); app.launch()
         XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
