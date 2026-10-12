@@ -179,7 +179,9 @@ extension StudyRepository {
                     imported += 1
                 }
                 context.insert(ImportBatch(source: "画像ZIP", now: now, success: imported, skipped: skipped, errors: errors))
-                return ImportResult(imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+                return ImportResult(affectedCardIDs: createdCardIDs.union(maintainedCardIDs),
+                                    destinations: try importDestinations(noteIDs: createdNoteIDs.union(updatedNoteIDs)),
+                                    imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
                                     updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
                                     duplicateRows: duplicates, excludedRows: package.rows.filter { !$0.included }.count)
             }

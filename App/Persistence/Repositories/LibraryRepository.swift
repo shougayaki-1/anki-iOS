@@ -258,7 +258,9 @@ extension StudyRepository {
                 imported += 1
             }
             context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))
-            return ImportResult(imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+            return ImportResult(affectedCardIDs: createdCardIDs.union(maintainedCardIDs),
+                                    destinations: try importDestinations(noteIDs: createdNoteIDs.union(updatedNoteIDs)),
+                                    imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
                                 updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
                                 duplicateRows: duplicates, excludedRows: excluded)
         }
@@ -752,5 +754,15 @@ extension StudyRepository {
         let ids = Set(try cards().map(\.id))
         saved.cardMarks = saved.cardMarks?.filter { ids.contains($0.cardID) }
         try writeOptionsInTransaction(saved)
+    }
+}
+
+
+extension StudyRepository {
+    // Metadata is captured inside the same transaction; a thrown save never yields a receipt.
+    func importDestinations(noteIDs: Set<UUID>) throws -> [ImportDestination] {
+        let ids = Set(try notes().filter { noteIDs.contains($0.id) }.map(\.deckID))
+        return try ids.map { ImportDestination(id: $0, name: try deckPath($0)) }
+            .sorted { $0.name < $1.name }
     }
 }

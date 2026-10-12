@@ -32,7 +32,9 @@ struct DeckExchangeView: View {
     @State private var working = false
     @State private var operation: Task<Void, Never>?
     @State private var failure: String?
-    @State private var result: String?
+    @State private var completion: DeckExchangeCompletion?
+    @State private var showingCompletion = false
+    @Environment(\.dismiss) private var dismiss
     @State private var page = 0
     @State private var shareURL: URL?
 
@@ -66,7 +68,6 @@ struct DeckExchangeView: View {
                     Button("処理を取り消す") { operation?.cancel() }.accessibilityIdentifier("cancelDeckOperation")
                 }
             }
-            if let result { Text(result).accessibilityIdentifier("deckExchangeResult") }
             if let ankiPreview {
                 Section("Ankiの移行結果") {
                     LabeledContent("元ノート", value: "\(ankiPreview.sourceNotes)")
@@ -113,7 +114,7 @@ struct DeckExchangeView: View {
                         Toggle("重複をスキップ", isOn: $skipDuplicates).accessibilityIdentifier("skipDeckDuplicates")
                         Text("本文・形式・画像/音声の内容が同じノートを重複として扱います。タグや回答方法の違いは重複判定に含みません。既存ノートの上書きは行いません。")
                             .font(.footnote)
-                        Button("確認して取り込む") { confirmation = true }.disabled(working || selected.package.notes.isEmpty)
+                        Button("確認して取り込む") { confirmation = true }.disabled(working)
                             .accessibilityIdentifier("confirmDeckImport")
                     } else if exportBytes != nil {
                         Button("Filesに書き出す") { exporting = true }.accessibilityIdentifier("exportDeckFile")
@@ -140,7 +141,17 @@ struct DeckExchangeView: View {
         .navigationTitle("デッキファイル")
         .onAppear { if rootID == nil { rootID = store.decks.first?.id } }
         .onChange(of: rootID) { _, _ in clearPreview() }
-        .onDisappear { operation?.cancel(); removeShareFile() }
+        .onDisappear { operation?.cancel(); if !showingCompletion { removeShareFile() } }
+        .sheet(isPresented: $showingCompletion, onDismiss: { completion = nil }) {
+            if let completion {
+                NavigationStack {
+                    DeckExchangeCompletionView(store: store, completion: completion,
+                        retry: { showingCompletion = false; self.completion = nil },
+                        continueImport: { showingCompletion = false; clearPreview() },
+                        close: { showingCompletion = false; clearPreview(); dismiss() })
+                }
+            }
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.studyDeck, .ankiPackage, .zip]) { outcome in
             switch outcome {
             case .failure(let error): if (error as NSError).code != NSUserCancelledError { failure = error.localizedDescription }
@@ -159,17 +170,29 @@ struct DeckExchangeView: View {
         }
         .fileExporter(isPresented: $exporting, document: exportBytes.map(DeckFileDocument.init), contentType: .studyDeck, defaultFilename: "StudyDeck-\(selected?.package.rootID.uuidString.prefix(8) ?? "Export")") { outcome in
             switch outcome {
-            case .success: result = "デッキファイルを書き出しました。"
+            case .success(let url):
+                let name = selected?.package.decks.first(where: { $0.id == selected?.package.rootID })?.name ?? "デッキ"
+                completion = .exported(name: name, url: shareURL ?? url); showingCompletion = true
+                store.haptics.play(.importCompleted, mode: store.settings.hapticsMode)
             case .failure(let error): if (error as NSError).code != NSUserCancelledError { failure = error.localizedDescription }
             }
         }
         .confirmationDialog("新規カードとして取り込みますか？", isPresented: $confirmation, titleVisibility: .visible) {
             Button("取り込む") {
-                guard let selected else { return }
+                guard !working, completion == nil, let selected else { return }
                 run {
                     try Task.checkCancellation()
-                    let count = try store.repository.importDeckPackage(selected, skipDuplicates: skipDuplicates, now: store.clock())
-                    try store.reload(); clearPreview(); result = "\(count)ノートを取り込みました。"
+                    var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock())
+                    receipt.skipped = ankiPreview?.skipped ?? []
+                    receipt.warnings = ankiPreview?.warnings ?? []
+                    var warning: String?
+                    if receipt.createdNotes > 0 {
+                        do { try store.reload() }
+                        catch { warning = "保存は完了しましたが、表示を更新できません。再取り込みせず、アプリを開き直してください。\n" + error.localizedDescription }
+                        clearPreview()
+                    }
+                    completion = .imported(receipt, reloadWarning: warning); showingCompletion = true
+                    if receipt.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
                 }
             }.accessibilityIdentifier("commitDeckImport")
         } message: { Text("\(preview?.destinationName ?? "")へ追加します。既存のカード・回答履歴は保持されます。重複判定は確定時に再確認します。\(ankiPreview == nil ? "" : " Ankiの履歴は移行せず、未対応ノートを除外し、装飾はプレーンテキストになります。")") }
@@ -178,7 +201,8 @@ struct DeckExchangeView: View {
         } message: { Text(failure ?? "") }
     }
     private func run(_ action: @escaping @MainActor () async throws -> Void) {
-        operation?.cancel(); working = true; result = nil
+        guard !working else { return }
+        working = true; completion = nil
         operation = Task { @MainActor in
             defer { working = false }
             do { try await action() } catch is CancellationError {} catch { failure = error.localizedDescription }
@@ -203,11 +227,117 @@ struct DeckExchangeView: View {
         if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }
         shareURL = nil
     }
-    private func clearPreview() { ankiPreview = nil; skippedPage = 0; warningPage = 0; selected = nil; exportBytes = nil; preview = nil; result = nil; page = 0; removeShareFile() }
+    private func clearPreview() { ankiPreview = nil; skippedPage = 0; warningPage = 0; selected = nil; exportBytes = nil; preview = nil; completion = nil; page = 0; removeShareFile() }
     private func deckPath(_ id: UUID, in package: DeckPackage) -> String {
         var cursor: UUID? = id, names: [String] = []
         let byID = Dictionary(uniqueKeysWithValues: package.decks.map { ($0.id, $0) })
         while let id = cursor, let deck = byID[id] { names.append(deck.name); cursor = deck.parentID }
         return names.reversed().joined(separator: " / ")
+    }
+}
+
+enum DeckExchangeCompletion {
+    case imported(DeckImportReceipt, reloadWarning: String?)
+    case exported(name: String, url: URL)
+
+    var title: String {
+        switch self {
+        case .imported(let receipt, _): return receipt.title
+        case .exported: return "デッキファイルを書き出しました"
+        }
+    }
+    var isSuccess: Bool {
+        switch self {
+        case .imported(let receipt, _): return receipt.outcome == .complete
+        case .exported: return true
+        }
+    }
+    var canRetry: Bool {
+        if case .imported(let receipt, _) = self { return receipt.outcome == .empty }
+        return false
+    }
+}
+
+private struct DeckExchangeCompletionView: View {
+    @Bindable var store: StudyStore
+    let completion: DeckExchangeCompletion
+    let retry: () -> Void
+    let continueImport: () -> Void
+    let close: () -> Void
+    @State private var announced = false
+    @State private var skippedPage = 0
+    @State private var warningPage = 0
+
+    var body: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                ImportCompletionHeader(title: completion.title, complete: completion.isSuccess)
+                switch completion {
+                case .imported(let receipt, let warning):
+                    Text(receipt.summary).accessibilityIdentifier("deckExchangeResult")
+                    if let name = receipt.destinationName { Text("保存先：" + name) }
+                    if receipt.outcome == .empty {
+                        Text("保存したノートはありません。重複・未対応の理由を確認してください。プレビューを保持しているので再試行できます。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    } else {
+                        Text("すべて新規学習として追加しました。既存カードの学習履歴・復習状態は保持されています。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if let warning { Text(warning).foregroundStyle(.orange).accessibilityIdentifier("deckImportCommittedWarning") }
+                    if !receipt.skipped.isEmpty {
+                        reasons("未対応ノートの理由", items: receipt.skipped, page: $skippedPage)
+                    }
+                    if !receipt.warnings.isEmpty {
+                        reasons("本文・メディア変更の理由", items: receipt.warnings, page: $warningPage)
+                    }
+                    if let deckID = receipt.rootDeckID, warning == nil {
+                        NavigationLink {
+                            ShortcutDeckContentsView(store: store, deckID: deckID)
+                        } label: { Text("取り込んだデッキを見る").frame(maxWidth: .infinity) }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .accessibilityIdentifier("viewImportedDeck")
+                    }
+                    if completion.canRetry {
+                        Button("プレビューに戻って再試行", action: retry).buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("retryDeckImport")
+                    }
+                    Button("続けて取り込む", action: continueImport).buttonStyle(.bordered)
+                        .accessibilityIdentifier("continueDeckImport")
+                case .exported(let name, let url):
+                    Text(name).accessibilityIdentifier("deckExchangeResult")
+                    Text("Filesへの保存が完了しました。相手への共有はまだ行っていません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    ShareLink(item: url) { Label("共有する", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity) }
+                        .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("shareExportedDeck")
+                    Button("デッキファイルに戻る", action: continueImport).buttonStyle(.bordered)
+                }
+                Button("閉じる", action: close).accessibilityIdentifier("closeDeckCompletion")
+            }
+            .multilineTextAlignment(.center).padding(24).frame(maxWidth: .infinity)
+        }
+        .onAppear {
+            guard !announced else { return }
+            announced = true
+            let summary: String
+            switch completion {
+            case .imported(let receipt, _): summary = receipt.summary
+            case .exported(let name, _): summary = name + "。共有はまだ行っていません。"
+            }
+            UIAccessibility.post(notification: .announcement, argument: completion.title + "。" + summary)
+        }
+    }
+    private func reasons(_ title: String, items: [AnkiSkippedNote], page: Binding<Int>) -> some View {
+        DisclosureGroup("\(title)（\(items.count)件）") {
+            ForEach(Array(items.dropFirst(page.wrappedValue * 100).prefix(100))) { item in
+                Text("ノート\(item.id)：\(item.reason)").font(.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            if items.count > 100 {
+                HStack {
+                    Button("前へ") { page.wrappedValue -= 1 }.disabled(page.wrappedValue == 0)
+                    Button("次へ") { page.wrappedValue += 1 }.disabled((page.wrappedValue + 1) * 100 >= items.count)
+                }
+            }
+        }
     }
 }

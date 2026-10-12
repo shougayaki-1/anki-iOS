@@ -183,7 +183,19 @@ struct ImportRow: Identifiable, Equatable {
     }
 }
 
+struct ImportDestination: Identifiable {
+    let id: UUID
+    let name: String
+}
+
 struct ImportResult {
+    enum Outcome { case complete, partial, empty }
+    var outcome: Outcome {
+        guard imported > 0 else { return .empty }
+        return skipped > 0 || !errors.isEmpty ? .partial : .complete
+    }
+    var affectedCardIDs: Set<UUID> = []
+    var destinations: [ImportDestination] = []
     // Kept for existing callers: successfully processed rows, not unique notes/cards.
     let imported: Int
     let skipped: Int

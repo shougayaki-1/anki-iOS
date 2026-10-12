@@ -125,6 +125,15 @@ extension SpeechUITests {
             let folder = app.cells.containing(.staticText, identifier: "暗記ノート").firstMatch
             if folder.exists { folder.tap() }
         }
+        // Reused simulator Documents can contain many earlier fixture files.
+        // Search the unique fixture instead of depending on the first visible page.
+        if !file.exists, app.searchFields["検索"].exists {
+            let search = app.searchFields["検索"]
+            search.tap()
+            let value = search.value as? String ?? ""
+            let existing = value == search.placeholderValue ? "" : value
+            search.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: existing.count) + name)
+        }
         XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription); file.tap()
     }
     func testDeckFilePreviewCancellationImportExportAndOfflineStudy() {
@@ -145,6 +154,19 @@ extension SpeechUITests {
         app.buttons["commitDeckImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("1ノート"))
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("新規カード 2枚"))
+        app.buttons["viewImportedDeck"].tap()
+        XCTAssertTrue(app.staticTexts["shortcutDeckPath"].waitForExistence(timeout: 10))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["continueDeckImport"].tap()
+        exchangeSelect("Deck-\(id)", app: app)
+        exchangeScroll(app.buttons["confirmDeckImport"], app: app); app.buttons["confirmDeckImport"].tap()
+        app.buttons["commitDeckImport"].firstMatch.tap()
+        XCTAssertTrue(app.buttons["retryDeckImport"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("追加 0ノート"))
+        app.buttons["retryDeckImport"].tap()
+        XCTAssertTrue(app.buttons["confirmDeckImport"].waitForExistence(timeout: 10))
+        exchangeScroll(app.buttons["cancelDeckPreview"], app: app); app.buttons["cancelDeckPreview"].tap()
         for _ in 0..<5 { if app.buttons["exchangeDeckPicker"].isHittable { break }; app.swipeDown() }
         app.buttons["exchangeDeckPicker"].tap(); app.buttons["共有サンプル"].tap()
         app.buttons["previewDeckExport"].tap()
@@ -153,6 +175,9 @@ extension SpeechUITests {
         XCTAssertTrue(app.buttons["保存"].waitForExistence(timeout: 10))
         app.buttons["保存"].tap()
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["shareExportedDeck"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["Filesへの保存が完了しました。相手への共有はまだ行っていません。"].exists)
+        app.buttons["closeDeckCompletion"].tap()
         app.terminate(); app.launch()
         XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
@@ -185,6 +210,9 @@ extension SpeechUITests {
         app.buttons["commitDeckImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("4ノート"))
+        XCTAssertEqual(app.staticTexts["importCompletionTitle"].label, "一部のノートを取り込みました")
+        app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "未対応ノートの理由")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "スクリプト")).firstMatch.exists)
         app.terminate(); app.launch()
         XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
