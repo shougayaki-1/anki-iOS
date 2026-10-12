@@ -31,6 +31,13 @@ struct BackupRestoreOutcome: Equatable {
 final class StudyStore {
     var repository: StudyRepository
     let storageLocation: StudyStorageLocation
+    var snapshotPolicy = SnapshotPolicy()
+    var snapshots: [LocalSnapshot] = []
+    var snapshotFailure: String?
+    var snapshotFailures = 0
+    var snapshotWorking = false
+    @ObservationIgnored private var snapshotTask: Task<Void, Never>?
+    var localSnapshots: LocalSnapshots { LocalSnapshots(location: storageLocation) }
     var clock: () -> Date
     var scope = LearningScope()
     var tags: [TagItem] = []
@@ -49,6 +56,15 @@ final class StudyStore {
     var sessionAnswerLimit = 20
     var sessionResponseMode = SessionResponseMode.cardDefault
     var review: ReviewPresentation?
+    var typedDraftSaveFailed = false
+    @ObservationIgnored private var typedDraftJob: Task<Void, Never>?
+    @ObservationIgnored private var typedDraftGeneration = 0
+    @ObservationIgnored private var pendingTypedDraft: PendingTypedDraft?
+    private struct PendingTypedDraft {
+        let sessionID: PersistentIdentifier
+        let cardID: UUID
+        let text: String
+    }
     var failure: String?
     var noteSaveNotice: NoteSaveNotice?
     var reviewRefreshFailed = false
@@ -63,6 +79,7 @@ final class StudyStore {
     @ObservationIgnored private var statisticsReader: StatisticsReader
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration = 0
+    @ObservationIgnored private var statisticsRevision = 0
     var notificationPermission = NotificationPermission.unknown
     var widgetFailure: String?
     @ObservationIgnored private let widgetSnapshots: WidgetSnapshotPublisher?
@@ -80,6 +97,8 @@ final class StudyStore {
         self.clock = clock
         self.storageLocation = storageLocation
         self.notifications = notifications ?? NotificationService()
+        do { snapshotPolicy = try localSnapshots.policy(); snapshots = try localSnapshots.list() }
+        catch { snapshotPolicy.enabled = false; snapshotFailure = error.localizedDescription }
         try repository.initialize(now: clock())
         scope = try repository.homeScope()
         try reload()
@@ -87,7 +106,10 @@ final class StudyStore {
 
     func reload() throws { try refreshStudy(metadata: true) }
 
-    private func refreshStudy(metadata: Bool = false, changed: Bool = true) throws {
+    private func refreshStudy(metadata: Bool = false, changed: Bool = true, forceWidget: Bool = false) throws {
+        // Invalidate even if post-save display reads fail. A successful mutation
+        // must never reuse the material from before that mutation.
+        if changed { statisticsRevision += 1 }
         do {
             repository.calendar = .current
             let now = clock()
@@ -110,6 +132,7 @@ final class StudyStore {
                 self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
                 self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
             } else { review = try repository.presentation(now: now, cards: cards) }
+            applyPendingTypedDraft()
             if changed {
                 statisticsTask?.cancel()
                 statisticsGeneration += 1
@@ -125,7 +148,7 @@ final class StudyStore {
             }
             reviewRefreshFailed = false
             applyHomeSnapshot(snapshot)
-            publishWidget(snapshot, force: changed, cards: cards, logs: logs)
+            publishWidget(snapshot, force: forceWidget, cards: cards, logs: logs)
             if changed { scheduleNotifications(cards: cards) }
         } catch { homeFailure = error.localizedDescription; throw error }
     }
@@ -166,7 +189,7 @@ final class StudyStore {
     }
     @discardableResult
     func refreshWidget() -> Bool {
-        do { try reload(); return true }
+        do { try refreshStudy(metadata: true, changed: false, forceWidget: true); return true }
         catch { failure = error.localizedDescription; return false }
     }
     func refreshStatistics() {
@@ -180,10 +203,11 @@ final class StudyStore {
         let calendar = repository.calendar
         let startHour = settings.dayStartHour
         let scope = statisticsScope
+        let revision = statisticsRevision
         statisticsTask = Task { [weak self] in
             do {
                 let report = try await reader.load(now: now, calendar: calendar,
-                                                   startHour: startHour, scope: scope)
+                                                   startHour: startHour, scope: scope, revision: revision)
                 guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
                 self?.statistics = report
                 self?.statisticsLoading = false
@@ -199,12 +223,58 @@ final class StudyStore {
         statisticsScope = scope
         refreshStatistics()
     }
+    func refreshSnapshots() {
+        do { snapshots = try localSnapshots.list(); snapshotPolicy = try localSnapshots.policy() }
+        catch { snapshotFailure = error.localizedDescription }
+    }
+    func setSnapshotPolicy(_ value: SnapshotPolicy) {
+        do { try localSnapshots.savePolicy(value); snapshotPolicy = value }
+        catch { snapshotFailure = error.localizedDescription }
+    }
+    func automaticSnapshotIfDue() {
+        guard snapshotTask == nil, !snapshotWorking,
+              localSnapshots.isDue(now: clock(), policy: snapshotPolicy, entries: snapshots) else { return }
+        snapshotTask = Task { [weak self] in
+            guard let self else { return }
+            defer { snapshotTask = nil }
+            do { try await createSnapshot(kind: .automatic, reason: "起動・画面復帰") }
+            catch {
+                if !(error is CancellationError) { snapshotFailures += 1; snapshotFailure = error.localizedDescription }
+            }
+        }
+    }
+    /// Call before the mutation; a failed point aborts the operation, leaving the store untouched.
+    func createRestorePoint(_ reason: String) async throws {
+        if let task = snapshotTask { await task.value }
+        try Task.checkCancellation()
+        try await createSnapshot(kind: .beforeChange, reason: reason)
+    }
+    func createSnapshot(kind: SnapshotKind, reason: String) async throws {
+        guard !snapshotWorking else { throw SnapshotBusyError() }
+        snapshotWorking = true
+        defer { snapshotWorking = false }
+        let now = clock(), manager = localSnapshots
+        let bytes = try await BackupService.export(repository: repository, now: now,
+            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0", pruneExpiredAnswers: false)
+        try Task.checkCancellation()
+        let job = Task.detached(priority: .utility) { try manager.save(bytes, kind: kind, reason: reason, now: now) }
+        _ = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+        refreshSnapshots()
+        snapshotFailures = 0; snapshotFailure = nil
+    }
+
     func sceneChanged(active: Bool) {
+        if !active {
+            let reader = statisticsReader
+            Task { await reader.clearCache() }
+        }
+        if !active, !flushTypedDraft() { return }
         do {
             if let draft = try repository.session(), (draft.activeSince != nil) != (active && showingReview && draft.cardID != nil) {
                 try repository.setSessionActive(active && showingReview, now: clock())
             }
             if active {
+                automaticSnapshotIfDue()
                 refreshHome(reconcileNotifications: true)
                 if selectedTab == 2 { refreshStatistics() }
                 if showingReview { refreshQueue() }
@@ -230,6 +300,7 @@ final class StudyStore {
 
     @discardableResult
     func perform(metadata: Bool = true, changed: Bool = true, _ work: () throws -> Void) -> Bool {
+        guard flushTypedDraft() else { return false }
         do { try work() }
         catch { failure = error.localizedDescription; return false }
         do { try refreshStudy(metadata: metadata, changed: changed); return true }
@@ -281,6 +352,7 @@ final class StudyStore {
         return .unavailable
     }
     func completeSession(destination: Int = 0) {
+        guard flushTypedDraft() else { return }
         do { try repository.completeSession(now: clock()) }
         catch { failure = error.localizedDescription; return }
         review = nil; showingReview = false; selectedTab = destination
@@ -342,6 +414,7 @@ final class StudyStore {
         if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
     }
     func grade(_ grade: ReviewGrade) {
+        guard flushTypedDraft() else { return }
         let previouslyComplete = review?.sessionProgress?.isComplete == true
         do { try repository.grade(grade, now: clock()) }
         catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
@@ -351,6 +424,7 @@ final class StudyStore {
         haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
     }
     func undo() {
+        guard flushTypedDraft() else { return }
         do { try repository.undo(now: clock()) }
         catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
         do { try refreshStudy() }
@@ -358,6 +432,11 @@ final class StudyStore {
         haptics.play(.undo, mode: settings.hapticsMode)
     }
     func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil) {
+        if let text, mode == nil, revealed == nil {
+            bufferTypedDraft(text)
+            return
+        }
+        guard flushTypedDraft() else { return }
         do {
             let wasRevealed = review?.answerRevealed == true
             try repository.updateDraft(mode: mode, text: text, revealed: revealed, now: clock())
@@ -372,7 +451,57 @@ final class StudyStore {
             if revealed == true && !wasRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
     }
+    private func bufferTypedDraft(_ text: String) {
+        guard let cardID = review?.card?.cardID else { return }
+        do {
+            let sessionID: PersistentIdentifier
+            if let pending = pendingTypedDraft, pending.cardID == cardID { sessionID = pending.sessionID }
+            else {
+                guard let session = try repository.session(), session.cardID == cardID else { throw StudyError.noSession }
+                sessionID = session.persistentModelID
+            }
+            pendingTypedDraft = PendingTypedDraft(sessionID: sessionID, cardID: cardID, text: text)
+            applyPendingTypedDraft()
+            typedDraftJob?.cancel()
+            typedDraftGeneration += 1
+            let generation = typedDraftGeneration
+            typedDraftJob = Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(600)) } catch { return }
+                guard !Task.isCancelled, let self, self.typedDraftGeneration == generation else { return }
+                self.flushTypedDraft()
+            }
+        } catch { failure = error.localizedDescription }
+    }
+    private func applyPendingTypedDraft() {
+        guard let pending = pendingTypedDraft, let old = review, old.card?.cardID == pending.cardID else { return }
+        review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: old.responseMode,
+                                   typedDraft: pending.text, answerRevealed: old.answerRevealed,
+                                   canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering,
+                                   orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState,
+                                   sessionProgress: old.sessionProgress)
+    }
+    @discardableResult
+    func flushTypedDraft() -> Bool {
+        typedDraftJob?.cancel(); typedDraftJob = nil
+        typedDraftGeneration += 1
+        guard let pending = pendingTypedDraft else { return true }
+        do {
+            guard let session = try repository.session(), session.persistentModelID == pending.sessionID,
+                  session.cardID == pending.cardID else { throw StudyError.noSession }
+            try repository.updateDraft(text: pending.text, now: clock())
+            pendingTypedDraft = nil
+            if typedDraftSaveFailed { failure = nil }
+            typedDraftSaveFailed = false
+            return true
+        } catch {
+            typedDraftSaveFailed = true
+            applyPendingTypedDraft()
+            failure = "入力した回答を保存できませんでした。入力は画面に保持しています。再試行してください。\n" + error.localizedDescription
+            return false
+        }
+    }
     func ordering(_ action: OrderingAction) {
+        guard flushTypedDraft() else { return }
         do {
             let before = review?.answerRevealed == true
             let previousAttempts = review?.ordering?.attempts ?? 0
@@ -393,6 +522,7 @@ final class StudyStore {
     }
     @discardableResult
     func restoreBackup(_ backup: ValidatedBackup) throws -> BackupRestoreOutcome {
+        guard flushTypedDraft() else { throw StudyError.noSession }
         notificationJob?.cancel()
         do {
             let container = try BackupService.restore(backup, location: storageLocation, mediaStore: repository.mediaStore, now: clock())
@@ -454,4 +584,8 @@ final class StudyStore {
         }
         reviewRefreshFailed = !succeeded
     }
+}
+
+private struct SnapshotBusyError: LocalizedError {
+    var errorDescription: String? { "バックアップを作成中です。完了後に再試行してください。変更は行っていません。" }
 }

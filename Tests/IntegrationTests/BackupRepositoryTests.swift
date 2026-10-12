@@ -1,6 +1,8 @@
 import XCTest
 import UIKit
 import SwiftData
+import CoreData
+import Darwin
 @testable import AnkiIOS
 
 @MainActor
@@ -663,5 +665,156 @@ extension BackupRepositoryTests {
         store.selectedTab = 0
         store.refreshHome()
         XCTAssertTrue(store.hasCards)
+    }
+}
+
+extension BackupRepositoryTests {
+    func testSnapshotGenerationsRetentionFailureCancellationAndCorruptionIsolation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root.appendingPathComponent("store")); try populate(repo)
+        let before = try BackupData.capture(repo).canonical()
+        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "test", pruneExpiredAnswers: false)
+        let manager = LocalSnapshots(root: root.appendingPathComponent("snapshots"))
+        let first = try manager.save(bytes, kind: .automatic, reason: "test", now: now, maximumCount: 2)
+        let second = try manager.save(bytes, kind: .beforeChange, reason: "test", now: now.addingTimeInterval(1), maximumCount: 2)
+        XCTAssertThrowsError(try manager.save(bytes, kind: .automatic, reason: "write fails", now: now.addingTimeInterval(2), maximumCount: 2, write: { _, _ in throw Failure.save }))
+        XCTAssertThrowsError(try manager.save(bytes, kind: .automatic, reason: "no space", now: now, maximumBytes: bytes.count - 1))
+        XCTAssertThrowsError(try manager.save(bytes, kind: .automatic, reason: "short write", now: now, write: { data, url in try Data(data.prefix(10)).write(to: url) }))
+        let cancelled = Task.detached { () throws -> LocalSnapshot in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try manager.save(bytes, kind: .automatic, reason: "cancelled", now: Date())
+        }
+        do { _ = try await cancelled.value; XCTFail("Cancelled generation published") } catch is CancellationError {} catch { XCTFail("\(error)") }
+        XCTAssertEqual(Set(try manager.list().map(\.id)), [first.id, second.id])
+        let third = try manager.save(bytes, kind: .manual, reason: "test", now: now.addingTimeInterval(2), maximumCount: 2)
+        XCTAssertEqual(Set(try manager.list().map(\.id)), [second.id, third.id])
+        XCTAssertEqual(try manager.read(third).data.canonical(), before)
+        try Data("broken info".utf8).write(to: manager.root.appendingPathComponent(second.id.uuidString).appendingPathComponent("info.json"))
+        XCTAssertEqual(try manager.list().map(\.id), [third.id])
+        XCTAssertEqual(manager.unreadableCount(entries: try manager.list()), 1)
+        XCTAssertEqual(try manager.read(third).data.canonical(), before)
+        try Data("broken archive".utf8).write(to: manager.archiveURL(third.id))
+        XCTAssertThrowsError(try manager.read(third))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        let stale = manager.root.appendingPathComponent(".pending-\(UUID().uuidString)")
+        let recent = manager.root.appendingPathComponent(".pending-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: recent, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.modificationDate: now.addingTimeInterval(-172_800)], ofItemAtPath: stale.path)
+        try FileManager.default.setAttributes([.modificationDate: now], ofItemAtPath: recent.path)
+        manager.cleanAbandonedStaging(now: now)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stale.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: recent.path))
+        XCTAssertGreaterThan(manager.diskBytes, 0)
+        // Abandoned staging is never offered as a generation.
+        try FileManager.default.createDirectory(at: manager.root.appendingPathComponent(".pending-abandoned"), withIntermediateDirectories: true)
+        XCTAssertEqual(try manager.list().map(\.id), [third.id])
+    }
+    func testSnapshotAutomaticPolicyAndByteRetention() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root.appendingPathComponent("store"))
+        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "test", pruneExpiredAnswers: false)
+        let manager = LocalSnapshots(root: root.appendingPathComponent("snapshots"))
+        var policy = try manager.policy()
+        XCTAssertTrue(manager.isDue(now: now, policy: policy, entries: []))
+        let first = try manager.save(bytes, kind: .automatic, reason: "automatic", now: now)
+        XCTAssertFalse(manager.isDue(now: now.addingTimeInterval(86_399), policy: policy, entries: [first]))
+        XCTAssertTrue(manager.isDue(now: now.addingTimeInterval(86_400), policy: policy, entries: [first]))
+        policy.enabled = false; policy.intervalHours = 6; try manager.savePolicy(policy)
+        XCTAssertEqual(try manager.policy(), policy)
+        XCTAssertFalse(manager.isDue(now: now.addingTimeInterval(86_400), policy: policy, entries: [first]))
+        let next = try manager.save(bytes, kind: .manual, reason: "limit", now: now.addingTimeInterval(1), maximumBytes: bytes.count)
+        XCTAssertEqual(try manager.list().map(\.id), [next.id])
+    }
+    func testLocalSnapshotFullRestoreWithMediaHistoryAndFSRS() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root.appendingPathComponent("source")); try populate(repo)
+        let manager = LocalSnapshots(root: root.appendingPathComponent("snapshots"))
+        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "test", pruneExpiredAnswers: false)
+        let entry = try manager.save(bytes, kind: .beforeChange, reason: "完全復元", now: now)
+        let backup = try manager.read(entry)
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("dest/Study.store"))
+        let media = MediaStore(root: root.appendingPathComponent("dest/Media"))
+        _ = try BackupService.restore(backup, location: location, mediaStore: media, now: now)
+        let restored = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore, mediaStore: media), mediaStore: media)
+        XCTAssertEqual(try BackupData.capture(restored).canonical().cards, backup.data.canonical().cards)
+        XCTAssertEqual(try BackupData.capture(restored).canonical().logs, backup.data.canonical().logs)
+        for asset in try restored.assets() { XCTAssertEqual(try Data(contentsOf: restored.assetURL(id: asset.id)), backup.media[asset.id]) }
+        XCTAssertEqual(try manager.read(entry).data.canonical(), backup.data.canonical())
+    }
+    func testMigrationRescueIncludesWALAndSkipsCurrentSchemaWithoutReadingOversizeMedia() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root.appendingPathComponent("source")); try populate(repo)
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("source/Study.store"))
+        let rescue = MigrationRescue(location: location)
+        try FileManager.default.removeItem(at: rescue.marker)
+        let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(ofType: NSSQLiteStoreType, at: location.canonicalStore, options: [NSReadOnlyPersistentStoreOption: true])
+        XCTAssertEqual(metadata[NSStoreModelVersionIdentifiersKey] as? [String], ["5.0.0"])
+        let large = repo.mediaStore.root.appendingPathComponent("unreferenced-large.bin")
+        FileManager.default.createFile(atPath: large.path, contents: nil)
+        let file = try FileHandle(forWritingTo: large); try file.truncate(atOffset: UInt64(StoredZIP.maximumBytes + 1)); try file.close()
+        try rescue.preserveIfNeeded(schema: "5.0.0", mediaStore: repo.mediaStore)
+        XCTAssertTrue(rescue.archives.isEmpty)
+        try FileManager.default.removeItem(at: large)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: location.canonicalStore.path + "-wal"))
+        try rescue.preserveIfNeeded(schema: "6.0.0", mediaStore: repo.mediaStore)
+        let archive = try XCTUnwrap(rescue.archives.first)
+        let files = try StoredZIP.read(Data(contentsOf: archive))
+        let copyRoot = root.appendingPathComponent("copy")
+        try FileManager.default.createDirectory(at: copyRoot, withIntermediateDirectories: true)
+        let copyURL = copyRoot.appendingPathComponent("Study.store")
+        try XCTUnwrap(files["Study.store"]).write(to: copyURL)
+        let copied = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: copyURL), mediaStore: repo.mediaStore)
+        XCTAssertEqual(try BackupData.capture(copied).canonical(), try BackupData.capture(repo).canonical())
+        let original = try Data(contentsOf: archive)
+        try rescue.preserveIfNeeded(schema: "6.0.0", mediaStore: repo.mediaStore)
+        XCTAssertEqual(try Data(contentsOf: archive), original)
+        XCTAssertTrue(files.keys.contains { $0.hasPrefix("Media/") })
+    }
+    func testSnapshot3000CardsWithMediaMeasuresMainCaptureAndFullArchive() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root.appendingPathComponent("source")); try populate(repo)
+        let remaining = 3_000 - (try repo.cards().count)
+        let rows = try ImportParser.pasted((0..<remaining).map { "scale-\($0)\tanswer-\($0)" }.joined(separator: "\n"))
+        _ = try repo.importRows(rows, deckID: repo.decks()[0].id, kind: .basic, tagNames: [], action: .skip, source: "scale", now: now)
+        XCTAssertEqual(try repo.cards().count, 3_000)
+        let start = Date(); let data = try BackupData.capture(repo)
+        let captureSeconds = Date().timeIntervalSince(start)
+        let started = Date()
+        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "test", pruneExpiredAnswers: false)
+        let manager = LocalSnapshots(root: root.appendingPathComponent("snapshots"))
+        let job = Task.detached { try manager.save(bytes, kind: .automatic, reason: "scale", now: Date()) }
+        let entry = try await job.value
+        XCTAssertEqual(entry.cards, 3_000)
+        XCTAssertEqual(try manager.read(entry).data.canonical(), data.canonical())
+        var usage = rusage(); getrusage(RUSAGE_SELF, &usage)
+        print("SNAPSHOT_SCALE cards=3000 media=\(data.media.count) captureMainSeconds=\(captureSeconds) totalSeconds=\(Date().timeIntervalSince(started)) archiveBytes=\(bytes.count) processPeakBytes=\(usage.ru_maxrss)")
+    }
+}
+
+extension BackupRepositoryTests {
+    func testFailedRestorePointAbortsMutationAndPreservesOriginalStore() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store"))
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now }, mediaStore: media, storageLocation: location)
+        try populate(store.repository)
+        let before = try BackupData.capture(store.repository).canonical()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(to: store.localSnapshots.root)
+        var mutated = false
+        do {
+            try await store.createRestorePoint("完全復元の直前")
+            mutated = true
+        } catch {}
+        XCTAssertFalse(mutated)
+        XCTAssertFalse(store.snapshotWorking)
+        XCTAssertEqual(try BackupData.capture(store.repository).canonical(), before)
     }
 }

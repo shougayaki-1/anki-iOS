@@ -6,27 +6,83 @@ import SwiftData
 // aggregation. No model objects cross the actor boundary.
 actor StatisticsReader {
     private let container: ModelContainer
+    private struct DeckLink { let id: UUID; let parentID: UUID? }
+    private struct PreparedCard {
+        let deckID: UUID?
+        let tagIDs: [UUID]
+        let isSuspended: Bool
+        let dueDate: Date
+        let state: ReviewScheduler.PredictionState
+    }
+    private struct Material {
+        let logs: [StatisticLog]
+        let cards: [PreparedCard]
+        let decks: [DeckLink]
+        let parameters: [Double]?
+        let cost: Int
+    }
+    private var cached: (revision: Int, material: Material)?
+    private struct HistoryEntry {
+        let calendar: Calendar
+        let startHour: Int
+        let day: Date
+        let scope: LearningScope
+        let evaluatedAt: Date
+        let nextFutureLog: Date?
+        let report: StudyStatistics
+    }
+    private var histories: [HistoryEntry] = []
+    private var expiry: Task<Void, Never>?
+    private var cacheGeneration = 0
+    private let maximumCacheCost: Int
+    private let cacheLifetime: Duration
+    #if DEBUG
+    private(set) var materialReads = 0
+    private(set) var fsrsDecodes = 0
+    private(set) var historyAggregations = 0
+    var cachedHistoryCount: Int { histories.count }
+    var cachedCost: Int { (cached?.material.cost ?? 0) + histories.count * 65536 }
+    #endif
 
-    init(container: ModelContainer) { self.container = container }
+    init(container: ModelContainer, maximumCacheCost: Int = 16 * 1024 * 1024, cacheLifetime: Duration = .seconds(60)) {
+        self.container = container
+        self.maximumCacheCost = maximumCacheCost
+        self.cacheLifetime = cacheLifetime
+    }
 
-    func load(now: Date, calendar: Calendar, startHour: Int, scope: LearningScope) throws -> StudyStatistics {
+    func clearCache() {
+        cached = nil; histories = []; expiry?.cancel(); expiry = nil
+        cacheGeneration += 1
+    }
+
+    // Unversioned callers deliberately bypass caching: they cannot prove that
+    // edits or restore have not happened since their previous read.
+    func load(now: Date, calendar: Calendar, startHour: Int, scope: LearningScope,
+              revision: Int? = nil) throws -> StudyStatistics {
         try Task.checkCancellation()
-        let context = ModelContext(container)
-        let notes = try context.fetch(FetchDescriptor<Note>())
-        let cards = try context.fetch(FetchDescriptor<StudyCard>())
-        let decks = try context.fetch(FetchDescriptor<Deck>())
-        let logRows = try context.fetch(FetchDescriptor<StudyReviewLog>())
-
-        let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
-        let noteIDByCardID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.noteID) })
-
+        let material: Material
+        if let revision, let saved = cached, saved.revision == revision { material = saved.material }
+        else {
+            clearCache()
+            material = try readMaterial()
+            try Task.checkCancellation()
+            if let revision, material.cost <= maximumCacheCost {
+                cached = (revision, material)
+                let generation = cacheGeneration
+                let lifetime = cacheLifetime
+                expiry = Task { [weak self] in
+                    do { try await Task.sleep(for: lifetime) } catch { return }
+                    await self?.expire(generation: generation)
+                }
+            }
+        }
         // This is only a filter expansion. It does not change the deck model
         // or the folder-tree UI owned by issue #40.
         let deckIDs: Set<UUID>? = scope.deckID.map { root in
             var selected: Set<UUID> = [root]
             var frontier: Set<UUID> = [root]
             while !frontier.isEmpty {
-                let children = Set(decks.compactMap { deck -> UUID? in
+                let children = Set(material.decks.compactMap { deck -> UUID? in
                     guard let parentID = deck.parentID, frontier.contains(parentID),
                           !selected.contains(deck.id) else { return nil }
                     return deck.id
@@ -36,6 +92,65 @@ actor StatisticsReader {
             }
             return selected
         }
+
+        let scheduler = try ReviewScheduler(parameters: material.parameters)
+        let states = try material.cards.map { card -> StatisticCardState in
+            try Task.checkCancellation()
+            return StatisticCardState(deckID: card.deckID, tagIDs: card.tagIDs,
+                                      isSuspended: card.isSuspended, isNew: card.state.isNew,
+                                      dueDate: card.dueDate,
+                                      retrievability: card.state.isNew || card.isSuspended
+                                        ? nil : scheduler.retrievability(card.state, now: now))
+        }
+        let day = StudyDay(calendar: calendar, startHour: startHour).interval(containing: now).start
+        var normalized = scope
+        normalized.tagIDs = Array(Set(scope.tagIDs)).sorted { $0.uuidString < $1.uuidString }
+        let history: StudyStatistics
+        if let index = histories.firstIndex(where: {
+            $0.calendar == calendar && $0.startHour == startHour && $0.day == day && $0.scope == normalized
+                && now >= $0.evaluatedAt && ($0.nextFutureLog.map { now < $0 } ?? true)
+        }) {
+            let entry = histories.remove(at: index)
+            histories.append(entry)
+            history = entry.report
+        } else {
+            history = StudyStatistics.calculate(logs: material.logs, retrievabilities: [], now: now,
+                                                calendar: calendar, startHour: startHour,
+                                                selectedDeckIDs: deckIDs, selectedTagIDs: Set(scope.tagIDs))
+            #if DEBUG
+            historyAggregations += 1
+            #endif
+            if cached != nil, material.cost + 65536 <= maximumCacheCost {
+                // Four compact historical reports at most. Time-dependent card
+                // metrics never enter this cache; future logs bound its validity.
+                while histories.count >= 4 || material.cost + (histories.count + 1) * 65536 > maximumCacheCost {
+                    histories.removeFirst()
+                }
+                histories.append(HistoryEntry(calendar: calendar, startHour: startHour, day: day, scope: normalized,
+                                               evaluatedAt: now, nextFutureLog: material.logs.filter { $0.date > now }.map(\.date).min(),
+                                               report: history))
+            }
+        }
+        let report = history.updatingCurrentCards(states, now: now, selectedDeckIDs: deckIDs,
+                                                  selectedTagIDs: Set(scope.tagIDs))
+        try Task.checkCancellation()
+        return report
+    }
+
+    private func expire(generation: Int) {
+        if cacheGeneration == generation { clearCache() }
+    }
+
+    private func readMaterial() throws -> Material {
+        try Task.checkCancellation()
+        let context = ModelContext(container)
+        let notes = try context.fetch(FetchDescriptor<Note>())
+        let cards = try context.fetch(FetchDescriptor<StudyCard>())
+        let decks = try context.fetch(FetchDescriptor<Deck>())
+        let logRows = try context.fetch(FetchDescriptor<StudyReviewLog>())
+
+        let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
+        let noteIDByCardID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.noteID) })
 
         let logs = try logRows.compactMap { row -> StatisticLog? in
             try Task.checkCancellation()
@@ -52,22 +167,24 @@ actor StatisticsReader {
         let extra = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
         let optimization = try extra.flatMap { try JSONDecoder().decode(StudyOptions.self, from: $0.payload).fsrsOptimization }
         let scheduler = try ReviewScheduler(parameters: optimization?.activeParameters)
-        let retentionStates: [StatisticCardState] = try cards.map { card in
+        var cost = logs.reduce(0) { $0 + 256 + $1.tagIDs.count * 16 }
+        let prepared: [PreparedCard] = try cards.map { card in
             try Task.checkCancellation()
             let note = notesByID[card.noteID]
             let snapshot = try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
-            let summary = try scheduler.summary(snapshot)
-            let prediction = summary.state == "new" || card.isSuspended
-                ? nil : try scheduler.retrievability(snapshot, now: now)
-            return StatisticCardState(deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
-                                      isSuspended: card.isSuspended, isNew: summary.state == "new",
-                                      dueDate: card.dueDate, retrievability: prediction)
+            let state = try scheduler.predictionState(snapshot)
+            cost += 512 + card.fsrsPayload.count + (note?.tagIDs.count ?? 0) * 16
+            return PreparedCard(deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
+                                isSuspended: card.isSuspended, dueDate: card.dueDate, state: state)
         }
-
-        return StudyStatistics.calculate(logs: logs, retrievabilities: [], now: now,
-                                         calendar: calendar, startHour: startHour,
-                                         cards: retentionStates, selectedDeckIDs: deckIDs,
-                                         selectedTagIDs: Set(scope.tagIDs))
+        #if DEBUG
+        materialReads += 1
+        fsrsDecodes += cards.count
+        #endif
+        cost += decks.count * 64
+        return Material(logs: logs, cards: prepared,
+                        decks: decks.map { DeckLink(id: $0.id, parentID: $0.parentID) },
+                        parameters: optimization?.activeParameters, cost: cost)
     }
 }
 

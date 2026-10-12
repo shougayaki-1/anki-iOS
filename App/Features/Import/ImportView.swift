@@ -171,9 +171,11 @@ struct ImportView: View {
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: text) { _, _ in refreshColumnCount() }
             .onChange(of: format) { _, _ in refreshColumnCount() }
+            .disabled(saving)
+            .interactiveDismissDisabled(saving)
             .navigationTitle("一括登録")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeImport") } }
+                ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving).accessibilityIdentifier("closeImport") } }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focused = false } }
             }
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText, .zip]) { result in
@@ -271,16 +273,20 @@ struct ImportView: View {
         guard !saving, result == nil else { return }
         saving = true
         reloadWarning = nil
-        defer { saving = false }
-        do {
-            let saved = try store.repository.importRows(rows, deckID: deckID, kind: kind,
-                                                    tagNames: tagText.components(separatedBy: ","), action: action,
-                                                    resetHistory: resetHistory, source: source, now: store.clock())
-            result = saved
-            do { try store.reload() }
-            catch { reloadWarning = "保存は完了しましたが、表示を更新できません。再取り込みせず、閉じてアプリを開き直してください。\n" + error.localizedDescription }
-            if saved.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
-        } catch { failure = "保存されていません。入力を確認して再試行してください。\n" + error.localizedDescription }
+        let rows = rows, deckID = deckID, kind = kind, tagText = tagText, action = action, resetHistory = resetHistory, source = source
+        Task {
+            defer { saving = false }
+            do {
+                try await store.createRestorePoint("テキスト・CSVの取り込み")
+                let saved = try store.repository.importRows(rows, deckID: deckID, kind: kind,
+                                                        tagNames: tagText.components(separatedBy: ","), action: action,
+                                                        resetHistory: resetHistory, source: source, now: store.clock())
+                result = saved
+                do { try store.reload() }
+                catch { reloadWarning = "保存は完了しましたが、表示を更新できません。再取り込みせず、閉じてアプリを開き直してください。\n" + error.localizedDescription }
+                if saved.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
+            } catch { failure = "保存されていません。入力を確認して再試行してください。\n" + error.localizedDescription }
+        }
     }
 }
 
@@ -355,8 +361,10 @@ struct ImageZIPImportView: View {
             .onAppear { refreshDuplicates() }
             .onChange(of: deckID) { refreshDuplicates() }
             .onChange(of: package.rows.map { $0.question + "\u{1f}" + $0.answer }) { refreshDuplicates() }
+            .disabled(saving)
+            .interactiveDismissDisabled(saving)
             .navigationTitle("画像ZIPの取り込み")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeImageImport") } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving).accessibilityIdentifier("closeImageImport") } } }
             .confirmationDialog("選択した行を保存しますか？", isPresented: $confirming, titleVisibility: .visible) {
                 Button("確定して保存", action: commit)
             }
@@ -369,14 +377,18 @@ struct ImageZIPImportView: View {
         guard !saving, result == nil else { return }
         saving = true
         reloadWarning = nil
-        defer { saving = false }
-        do {
-            let saved = try store.repository.importImagePackage(package, deckID: deckID, action: action, now: store.clock())
-            result = saved
-            do { try store.reload() }
-            catch { reloadWarning = "保存は完了しましたが、表示を更新できません。再取り込みせず、閉じてアプリを開き直してください。\n" + error.localizedDescription }
-            if saved.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
-        } catch { failure = "保存されていません。入力を確認して再試行してください。\n" + error.localizedDescription }
+        let package = package, deckID = deckID, action = action
+        Task {
+            defer { saving = false }
+            do {
+                try await store.createRestorePoint("画像ZIPの取り込み")
+                let saved = try store.repository.importImagePackage(package, deckID: deckID, action: action, now: store.clock())
+                result = saved
+                do { try store.reload() }
+                catch { reloadWarning = "保存は完了しましたが、表示を更新できません。再取り込みせず、閉じてアプリを開き直してください。\n" + error.localizedDescription }
+                if saved.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
+            } catch { failure = "保存されていません。入力を確認して再試行してください。\n" + error.localizedDescription }
+        }
     }
     private func refreshDuplicates() {
         duplicates = (try? store.repository.imageImportDuplicates(package, deckID: deckID)) ?? []

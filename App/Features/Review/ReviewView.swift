@@ -56,6 +56,9 @@ struct ReviewView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { reviewToolbar }
             .alert("処理を完了できませんでした", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) {
+                if store.typedDraftSaveFailed {
+                    Button("入力の保存を再試行") { store.flushTypedDraft() }
+                }
                 Button("閉じる", role: .cancel) { store.failure = nil }
             } message: { Text(store.failure ?? "") }
             .task(id: store.review?.card == nil ? store.review?.nextShortDue : nil) {
@@ -88,6 +91,7 @@ struct ReviewView: View {
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
                 Task { await DisplayImageLoader.shared.clearCache() }
             }
+            .onDisappear { store.flushTypedDraft() }
     }
 
     @ViewBuilder private var whiteboardContent: some View {

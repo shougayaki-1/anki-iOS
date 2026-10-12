@@ -11,8 +11,9 @@ struct BackupService {
             return try BackupArchive.decode(Data(contentsOf: url, options: .mappedIfSafe))
         }.value
     }
-    static func export(repository: StudyRepository, now: Date, appVersion: String) async throws -> Data {
-        try repository.pruneTypedAnswers(now: now)
+    static func export(repository: StudyRepository, now: Date, appVersion: String, pruneExpiredAnswers: Bool = true) async throws -> Data {
+        if pruneExpiredAnswers { try repository.pruneTypedAnswers(now: now) }
+        try Task.checkCancellation()
         let snapshot = try BackupData.capture(repository)
         let urls = try repository.assets().map { ($0.id, try repository.mediaStore.url(for: $0.relativePath)) }
         return try await Task.detached(priority: .utility) {
@@ -50,7 +51,7 @@ struct BackupService {
                 snapshot.media[index].relativePath = path
             }
             for index in snapshot.sessions.indices { snapshot.sessions[index].activeSince = nil }
-            let container = try PersistenceController.makeStudyContainer(storeURL: storeURL)
+            let container = try PersistenceController.makeStudyContainer(storeURL: storeURL, mediaStore: mediaStore)
             let context = ModelContext(container); context.autosaveEnabled = false
             try snapshot.insert(into: context)
             try save(context)
