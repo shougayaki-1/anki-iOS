@@ -195,6 +195,7 @@ final class StudyRepository {
             for key in variants where !existing.contains(where: { $0.variantKey == key }) {
                 context.insert(StudyCard(noteID: id, variantKey: key, payload: payload, now: now))
             }
+            try pruneCardMarks()
             // Historical logs remain even when a variant is removed.
             try removeEditorDraftInTransaction(key: key)
             if changesSession, let draft = try session(), let cardID = draft.cardID,
@@ -219,6 +220,7 @@ final class StudyRepository {
                 }
             }
             for card in removed { context.delete(card) }
+            try pruneCardMarks()
             if let note = try notes().first(where: { $0.id == id }) { context.delete(note) }
             try removeEditorDraftInTransaction(key: "edit:\(id.uuidString)")
             // ReviewLog is intentionally retained even after content deletion.
@@ -230,7 +232,7 @@ final class StudyRepository {
             guard let card = try cards().first(where: { $0.id == cardID }) else { throw StudyError.missingRecord }
             card.isSuspended = value; card.updatedAt = now
             if let draft = try session(), draft.cardID == cardID, value {
-                draft.cardID = nil; try clearOrderingDraft(); draft.typedDraft = ""; draft.answerRevealed = false
+                try selectNext(draft: draft, now: now)
             }
         }
     }
@@ -239,8 +241,10 @@ final class StudyRepository {
         try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
     }
 
-    func noteItems(cardID: UUID? = nil) throws -> [NoteItem] {
+    func noteItems(cardID: UUID? = nil, cardIDs: Set<UUID>? = nil) throws -> [NoteItem] {
+        if cardID == nil, cardIDs?.isEmpty == true { return [] }
         let scheduler = try ReviewScheduler()
+        let marks = Dictionary(uniqueKeysWithValues: (try options().cardMarks ?? []).map { ($0.cardID, $0) })
         let selectedCards: [StudyCard]
         let selectedNotes: [Note]
         if let cardID {
@@ -252,6 +256,10 @@ final class StudyRepository {
                 noteFetch.fetchLimit = 1
                 selectedNotes = try context.fetch(noteFetch)
             } else { return [] }
+        } else if let cardIDs {
+            selectedCards = try cards().filter { cardIDs.contains($0.id) }
+            let noteIDs = Set(selectedCards.map(\.noteID))
+            selectedNotes = try notes().filter { noteIDs.contains($0.id) }
         } else { selectedCards = try cards(); selectedNotes = try notes() }
         let noteMap = Dictionary(uniqueKeysWithValues: selectedNotes.map { ($0.id, $0) })
         let deckMap: [UUID: String]
@@ -273,7 +281,7 @@ final class StudyRepository {
                             deckName: deckMap[note.deckID] ?? "", kind: kind,
                             content: try CardGeneration.displayed(kind: kind, content: content, variant: card.variantKey),
                             sourceContent: content, variantKey: card.variantKey,
-                            responseMode: ResponseMode(rawValue: note.defaultResponseMode) ?? .mental, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
+                            responseMode: ResponseMode(rawValue: note.defaultResponseMode) ?? .mental, summary: try scheduler.summary(snapshot(card)), isSuspended: card.isSuspended, flag: marks[card.id]?.flag, hiddenUntil: marks[card.id]?.hiddenUntil, tagNames: note.tagIDs.compactMap { tagMap[$0] }, tagIDs: note.tagIDs)
         }
     }
 
@@ -298,6 +306,7 @@ final class StudyRepository {
                 return (value.deckID, limit)
             })
         }
+        let marks = Dictionary(uniqueKeysWithValues: (try options().cardMarks ?? []).map { ($0.cardID, $0) })
         let rows = try cards()
         // Compare persisted payloads rather than timestamps: Undo and rollback can
         // restore old timestamps. Keep only the current store's cards in the cache.
@@ -311,7 +320,7 @@ final class StudyRepository {
             }
             states[card.id] = (card.fsrsPayload, state)
             return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
-                             suspended: card.isSuspended, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
+                             suspended: card.isSuspended, hiddenUntil: marks[card.id]?.hiddenUntil, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
         }
         queueStates = states
         return result
@@ -410,7 +419,10 @@ final class StudyRepository {
     func resume(now: Date) throws {
         try transaction {
             guard let draft = try session() else { throw StudyError.noSession }
-            if draft.cardID == nil { try selectNext(draft: draft, now: now) }
+            let held = try draft.cardID.flatMap { try cardMark($0)?.hiddenUntil }.map { now < $0 } ?? false
+            if draft.cardID == nil || held {
+                try selectNext(draft: draft, now: now)
+            }
             else { draft.activeSince = now }
             try prepareOrderingDraft(draft)
         }
@@ -473,7 +485,8 @@ final class StudyRepository {
     func grade(_ grade: ReviewGrade, now: Date) throws {
         try transaction {
             guard let draft = try session(), let cardID = draft.cardID, draft.answerRevealed,
-                  let card = try card(cardID), !card.isSuspended else {
+                  let card = try card(cardID), !card.isSuspended,
+                  !(try cardMark(cardID)?.hiddenUntil.map { now < $0 } ?? false) else {
                 throw StudyError.noSession
             }
             let progressBefore = try sessionProgress()
@@ -554,6 +567,11 @@ final class StudyRepository {
             saved.deckNewUsage?.removeAll { $0.sequence == latest.sequence }
             try writeOptionsInTransaction(saved)
             context.delete(latest)
+            // Undo restores the evaluation, while independent holds remain in force.
+            let held = try cardMark(card.id)?.hiddenUntil.map { now < $0 } ?? false
+            if card.isSuspended || held {
+                try selectNext(draft: draft, now: now)
+            }
         }
     }
 
@@ -562,7 +580,7 @@ final class StudyRepository {
         let mode = StudyMode(rawValue: draft.mode) ?? .review
         let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
         let short = try responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
-            !$0.suspended && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
+            !$0.suspended && !$0.isHidden(at: now) && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))
         }.map(\.due).min()
         let requested = ResponseMode(rawValue: draft.answerMode) ?? .mental
@@ -631,6 +649,13 @@ final class StudyRepository {
             !builder.queue(cards: candidates, logs: logs, settings: options, mode: mode,
                            touched: touched, reviewStreak: draft.reviewStreak, now: now).isEmpty
         }
+        let withoutManualHolds = cards.map { card -> QueueCard in
+            var card = card; card.hiddenUntil = nil; return card
+        }
+        if available(withoutManualHolds, with: settings) {
+            return ReviewEmptyState(reason: .held, title: "今日は表示しないカードがあります",
+                                    message: "次の学習日に出題対象へ戻ります。ライブラリのカード詳細で今日の出題対象に戻せます。", suggestsScopeChange: true, canRetry: true)
+        }
         // Prove suppression is blocking this mode's queue. Due alone is not proof.
         var unburied = settings; unburied.siblingBuryEnabled = false
         if settings.siblingBuryEnabled && available(cards, with: unburied) {
@@ -638,7 +663,7 @@ final class StudyRepository {
                                     message: "同じノートのカードは次の学習日に出題できます。学習日の切替は\(settings.dayStartHour)時です。", suggestsScopeChange: true, canRetry: true)
         }
         let unsuspended = cards.map {
-            QueueCard(id: $0.id, state: $0.state, due: $0.due, createdAt: $0.createdAt, suspended: false, noteID: $0.noteID)
+            QueueCard(id: $0.id, state: $0.state, due: $0.due, createdAt: $0.createdAt, suspended: false, hiddenUntil: $0.hiddenUntil, noteID: $0.noteID)
         }
         if (!relevant.isEmpty && relevant.allSatisfy(\.suspended)) || available(unsuspended, with: settings) {
             return ReviewEmptyState(reason: .suspended, title: "対象のカードは停止中です",

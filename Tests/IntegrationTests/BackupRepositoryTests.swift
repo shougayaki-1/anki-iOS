@@ -53,6 +53,9 @@ final class BackupRepositoryTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let marked = try XCTUnwrap(source.cards().first { $0.id != (try? source.session()?.cardID) })
+        try source.setFlags(cardIDs: [marked.id], flag: .blue)
+        try source.hideToday(cardID: marked.id, now: now)
         let bytes = try await BackupService.export(repository: source, now: now, appVersion: "test")
         let backup = try BackupArchive.decode(bytes)
         let destinationRoot = root.appendingPathComponent("destination")

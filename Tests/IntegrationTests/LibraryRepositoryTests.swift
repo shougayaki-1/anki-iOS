@@ -911,6 +911,91 @@ extension LibraryRepositoryTests {
 }
 
 extension LibraryRepositoryTests {
+    func testCardMarksPreserveSchedulerAndLogsAndNextStudyDay() throws {
+        let repo = try fixture()
+        let note = try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Marked", answer: "A"), now: now)
+        let card = try XCTUnwrap(repo.cards().first)
+        let before = BackupStudyCard(card)
+        try repo.start(mode: .new, now: now)
+        try repo.setFlags(cardIDs: [card.id], flag: .blue)
+        try repo.hideToday(cardID: card.id, now: now)
+        XCTAssertEqual(try repo.noteItems(cardID: card.id).first?.flag, .blue)
+        XCTAssertEqual(try repo.cards().map(BackupStudyCard.init), [before])
+        XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertNil(try repo.session()?.cardID)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 0)
+        let end = try XCTUnwrap(repo.cardMark(card.id)?.hiddenUntil)
+        XCTAssertEqual(try repo.homeSnapshot(now: end).counts.newRemaining, 1)
+        try repo.setSuspended(cardID: card.id, value: true, now: now)
+        XCTAssertEqual(try repo.homeSnapshot(now: end).counts.newRemaining, 0)
+        try repo.setSuspended(cardID: card.id, value: false, now: now)
+        try repo.showToday(cardID: card.id)
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 1)
+        try repo.setFlags(cardIDs: [card.id], flag: nil)
+        XCTAssertNil(try repo.cardMark(card.id))
+        try repo.setFlags(cardIDs: [card.id], flag: .red)
+        try repo.deleteNote(id: note)
+        XCTAssertTrue(try repo.options().cardMarks?.isEmpty == true)
+    }
+    func testCardMarksRollbackAndUndoRetainIndependentHold() throws {
+        let repo = try fixture()
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Held", answer: "A"), now: now)
+        let card = try XCTUnwrap(repo.cards().first)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        let before = BackupStudyCard(card)
+        try repo.grade(.good, now: now)
+        try repo.setFlags(cardIDs: [card.id], flag: .yellow)
+        try repo.hideToday(cardID: card.id, now: now)
+        try repo.undo(now: now)
+        XCTAssertEqual(BackupStudyCard(card), before)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertNil(try repo.session()?.cardID)
+        XCTAssertEqual(try repo.cardMark(card.id)?.flag, .yellow)
+        let saved = try repo.options()
+        let failing = StudyRepository(container: repo.context.container, save: { _ in throw Failure.save })
+        XCTAssertThrowsError(try failing.setFlags(cardIDs: [card.id], flag: .red))
+        XCTAssertEqual(try failing.options(), saved)
+        XCTAssertThrowsError(try failing.hideToday(cardID: card.id, now: now.addingTimeInterval(86400)))
+        XCTAssertEqual(try failing.options(), saved)
+    }
+    func testCardMarksLegacyOptionsAndInvalidMetadata() throws {
+        let legacy = try JSONDecoder().decode(StudyOptions.self, from: JSONEncoder().encode(StudyOptions()))
+        XCTAssertNil(legacy.cardMarks)
+        let repo = try fixture()
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        let id = try XCTUnwrap(repo.cards().first?.id)
+        var saved = try repo.options()
+        saved.cardMarks = [CardMark(cardID: id, flag: .red), CardMark(cardID: id, flag: .blue)]
+        try repo.updateOptions(saved)
+        XCTAssertThrowsError(try repo.options())
+        XCTAssertThrowsError(try repo.queueCards())
+    }
+}
+
+extension LibraryRepositoryTests {
+    func testManualHoldForecastMovesAvailabilityWithoutChangingDue() throws {
+        let repo = try fixture()
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Forecast", answer: "A"), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.again, now: now)
+        let card = try XCTUnwrap(repo.cards().first)
+        let due = card.dueDate, payload = card.fsrsPayload
+        try repo.hideToday(cardID: card.id, now: now)
+        let data = try BackupData.capture(repo)
+        let forecast = try ReviewForecast.calculate(data: data, deckID: nil, days: 7, now: now, calendar: repo.calendar)
+        XCTAssertEqual(forecast.days[0].scheduled, 0)
+        XCTAssertEqual(forecast.days[0].reviews, 0)
+        XCTAssertEqual(forecast.days[1].scheduled, 1)
+        XCTAssertGreaterThan(forecast.days[1].reviews, 0)
+        XCTAssertEqual(card.dueDate, due)
+        XCTAssertEqual(card.fsrsPayload, payload)
+        XCTAssertEqual(try repo.logs().count, 1)
+    }
+}
+
+extension LibraryRepositoryTests {
     func testTextReplacementFieldsSiblingCardsAndHistoryPreserved() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         var input = NoteInput(deckID: deck, question: "Alpha alpha", answer: "ALPHA", explanation: "alpha", hint: "alpha")

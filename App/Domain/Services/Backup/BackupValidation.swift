@@ -136,6 +136,10 @@ struct BackupValidation {
         for row in data.options {
             let options = try JSONDecoder().decode(StudyOptions.self, from: row.payload)
             guard row.key == "options", (1...2).contains(options.schemaVersion) else { throw BackupError.invalidData }
+            if let marks = options.cardMarks {
+                try unique(marks.map(\.cardID))
+                guard marks.allSatisfy({ cardIDs.contains($0.cardID) && ($0.hiddenUntil?.timeIntervalSince1970.isFinite ?? true) }) else { throw BackupError.invalidData }
+            }
             if let policy = options.typedAnswerPolicy, !TypedAnswerPolicy.supportedDays.contains(policy.retentionDays) { throw BackupError.invalidData }
             if let overrides = options.deckLearning {
                 guard Set(overrides.map(\.deckID)).count == overrides.count,

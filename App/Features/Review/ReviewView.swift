@@ -256,12 +256,33 @@ struct ReviewView: View {
 
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        if let card = store.review?.card {
+                            Menu("フラグ", systemImage: "flag") {
+                                ForEach(CardFlag.allCases) { flag in
+                                    Button(flag.title) { store.perform { try store.repository.setFlags(cardIDs: [card.cardID], flag: flag) } }
+                                }
+                                Button("フラグを解除") { store.perform { try store.repository.setFlags(cardIDs: [card.cardID], flag: nil) } }
+                                    .disabled(card.flag == nil)
+                            }
+                            Button("今日は表示しない", systemImage: "clock") {
+                                speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
+                                store.perform { try store.repository.hideToday(cardID: card.cardID, now: store.clock()) }
+                            }
+                            Button("無期限で停止", systemImage: "pause.circle") {
+                                speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
+                                store.perform { try store.repository.setSuspended(cardID: card.cardID, value: true, now: store.clock()) }
+                            }
+                            if let flag = card.flag { Label("フラグ: " + flag.title, systemImage: "flag.fill") }
+                        }
                         Button("カードを編集", systemImage: "pencil") {
                             speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
                             if store.review?.answerRevealed == true { openEditor() }
                             else { confirmingEdit = true }
                         }.disabled(store.review?.card == nil || whiteboardPresented || editingCard != nil)
-                    } label: { Image(systemName: "ellipsis.circle") }
+                    } label: {
+                        if let flag = store.review?.card?.flag { CardFlagLabel(flag: flag) }
+                        else { Image(systemName: "ellipsis.circle") }
+                    }
                     .accessibilityLabel("カードの操作")
                     .accessibilityIdentifier("reviewCardActions")
                 }

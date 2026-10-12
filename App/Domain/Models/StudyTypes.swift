@@ -152,6 +152,8 @@ struct NoteItem: Identifiable {
     let responseMode: ResponseMode
     let summary: ScheduleSummary
     let isSuspended: Bool
+    var flag: CardFlag? = nil
+    var hiddenUntil: Date? = nil
     var tagNames: [String] = []
     var tagIDs: [UUID] = []
 }
@@ -201,7 +203,7 @@ struct SessionAnswerProgress: Equatable {
 }
 
 struct ReviewEmptyState: Equatable {
-    enum Reason: Equatable { case complete, waiting, reviewWaiting, modeExcluded, newLimit, noTargets, suspended, siblings, retry }
+    enum Reason: Equatable { case complete, waiting, reviewWaiting, modeExcluded, newLimit, noTargets, suspended, siblings, held, retry }
     let reason: Reason
     let title: String
     let message: String

@@ -22,6 +22,7 @@ struct LibraryView: View {
     @AppStorage("libraryExpandedDeckIDs") private var savedExpansion = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tree: LibraryTreeProjection?
+    @State private var cardMarks: [UUID: CardMark] = [:]
     @State private var index: LibraryIndex?
     @State private var results = LibraryResults()
     @State private var loading = true
@@ -81,6 +82,9 @@ struct LibraryView: View {
     var body: some View {
         NavigationStack {
             List(selection: $selection) {
+                Section {
+                    NavigationLink { FlaggedCardsView(store: store) } label: { Label("フラグ付きカード", systemImage: "flag") }
+                }
                 Section("登録数") {
                     Text("登録全体: \(index?.noteCount ?? 0)ノート / \(index?.cardCount ?? 0)枚")
                         .accessibilityIdentifier("libraryTotalCounts")
@@ -142,7 +146,7 @@ struct LibraryView: View {
                             } label: {
                                 HStack {
                                     Image(systemName: note.cardIDs.isSubset(of: selection) ? "checkmark.circle.fill" : (selection.isDisjoint(with: note.cardIDs) ? "circle" : "minus.circle.fill"))
-                                    LibraryCardRow(card: note.card, index: index)
+                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag)
                                 }.foregroundStyle(.primary)
                             }
                             .buttonStyle(.plain)
@@ -150,7 +154,7 @@ struct LibraryView: View {
                             .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         } else {
                             NavigationLink { NoteDetailView(store: store, cardID: note.card.id) } label: {
-                                LibraryCardRow(card: note.card, index: index)
+                                LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag)
                             }.padding(.leading, CGFloat(min(row.depth, 5)) * 12)
                         }
                     }
@@ -175,6 +179,7 @@ struct LibraryView: View {
                     let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: requested)
                     try Task.checkCancellation()
                     guard revision == store.dataRevision else { return }
+                    cardMarks = Dictionary(uniqueKeysWithValues: (try store.repository.options().cardMarks ?? []).map { ($0.cardID, $0) })
                     index = loaded; results = found; tree = projection; libraryFailure = nil
                     let valid = expanded.intersection(Set(store.decks.map(\.id)))
                     if valid != expanded { savedExpansion = LibraryTreeProjection.saveExpanded(valid) }
@@ -264,9 +269,11 @@ struct LibraryView: View {
 struct LibraryCardRow: View {
     let card: LibraryCard
     let index: LibraryIndex?
+    var flag: CardFlag? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let flag { CardFlagLabel(flag: flag) }
             Text((try? index?.displayed(card).question) ?? "カードを表示できません").lineLimit(2)
             if let count = index?.siblingCounts[card.noteID], count > 1 {
                 Text("同じノートから\(count)枚").font(.caption).foregroundStyle(.secondary)
@@ -320,7 +327,8 @@ struct NoteDetailView: View {
                             LabeledContent("次回復習", value: item.summary.dueDate.formatted())
                                 .accessibilityIdentifier("noteDue")
                         }
-                        Toggle("学習を一時停止", isOn: Binding(get: { item.isSuspended }, set: { value in
+                        CardMarkControls(store: store, item: item)
+                        Toggle("無期限で停止", isOn: Binding(get: { item.isSuspended }, set: { value in
                             store.perform { try store.repository.setSuspended(cardID: cardID, value: value, now: store.clock()) }
                         }))
                     }
@@ -651,5 +659,91 @@ struct LibraryOperationCompletionSection: View {
                     argument: result.title + "。" + result.summary + "。" + (result.warning ?? ""))
             }
         }
+    }
+}
+
+struct CardFlagLabel: View {
+    let flag: CardFlag
+    var body: some View {
+        Label("フラグ: " + flag.title, systemImage: "flag.fill")
+            .foregroundStyle(flag == .red ? Color.red : (flag == .blue ? Color.blue : Color.orange))
+    }
+}
+struct CardMarkControls: View {
+    @Bindable var store: StudyStore
+    let item: NoteItem
+    var body: some View {
+        Picker("フラグ", selection: Binding<CardFlag?>(get: { item.flag }, set: { flag in
+            store.perform { try store.repository.setFlags(cardIDs: [item.cardID], flag: flag) }
+        })) {
+            Text("なし").tag(Optional<CardFlag>.none)
+            ForEach(CardFlag.allCases) { Text($0.title).tag(Optional($0)) }
+        }
+        if let flag = item.flag { CardFlagLabel(flag: flag) }
+        if let until = item.hiddenUntil, store.clock() < until {
+            Text("今日の出題対象外（" + until.formatted() + "まで）")
+            Button("今日の出題対象に戻す") { store.perform { try store.repository.showToday(cardID: item.cardID) } }
+        } else {
+            Button("今日は表示しない") { store.perform { try store.repository.hideToday(cardID: item.cardID, now: store.clock()) } }
+        }
+        Text("フラグと当日非表示は評価を保存せず、復習予定を変更しません。")
+            .font(.footnote).foregroundStyle(.secondary)
+    }
+}
+struct FlaggedCardsView: View {
+    @Bindable var store: StudyStore
+    @State private var items: [NoteItem] = []
+    @State private var search = ""
+    @State private var flag: CardFlag?
+    @State private var selection: Set<UUID> = []
+    @State private var failure: String?
+    private var visible: [NoteItem] {
+        items.filter { item in
+            (flag == nil || item.flag == flag) && (search.isEmpty ||
+                [item.content.question, item.content.answer, item.deckName].joined(separator: " ").localizedCaseInsensitiveContains(search))
+        }
+    }
+    var body: some View {
+        List(selection: $selection) {
+            Section {
+                Picker("フラグ", selection: $flag) {
+                    Text("すべて").tag(Optional<CardFlag>.none)
+                    ForEach(CardFlag.allCases) { Text($0.title).tag(Optional($0)) }
+                }
+                Text("フラグは色の目印です。色の用途は自由に決められます。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if let failure { Text(failure).foregroundStyle(.red) }
+            if visible.isEmpty { Text("該当するフラグ付きカードはありません") }
+            ForEach(visible) { item in
+                NavigationLink { NoteDetailView(store: store, cardID: item.cardID) } label: {
+                    VStack(alignment: .leading) {
+                        Text(item.content.question).lineLimit(2)
+                        if let flag = item.flag { CardFlagLabel(flag: flag) }
+                        Text(item.deckName).font(.caption).foregroundStyle(.secondary)
+                    }
+                }.tag(item.cardID)
+            }
+        }
+        .navigationTitle("フラグ付きカード")
+        .searchable(text: $search, prompt: "問題・解答・デッキを検索")
+        .toolbar { EditButton() }
+        .safeAreaInset(edge: .bottom) {
+            if !selection.isEmpty {
+                Button("選択した\(selection.count)枚のフラグを解除") {
+                    if store.perform({ try store.repository.setFlags(cardIDs: selection, flag: nil) }) { selection.removeAll() }
+                }.buttonStyle(.bordered).padding().background(.regularMaterial)
+            }
+        }
+        .task(id: store.dataRevision) {
+            do {
+                let ids = (try store.repository.options().cardMarks ?? []).filter { $0.flag != nil }.map(\.cardID)
+                items = try store.repository.noteItems(cardIDs: Set(ids))
+                selection.formIntersection(Set(visible.map(\.cardID)))
+                failure = nil
+            } catch { failure = error.localizedDescription }
+        }
+        .onChange(of: search) { _, _ in selection.removeAll() }
+        .onChange(of: flag) { _, _ in selection.removeAll() }
     }
 }

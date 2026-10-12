@@ -163,6 +163,7 @@ extension StudyRepository {
         var seen = Set<UUID>()
         let selected = candidates.filter { item in
             let card = item.card
+            guard card.hiddenUntil.map({ now >= $0 }) ?? true else { return false }
             guard settings.siblingBuryEnabled, !["learning", "relearning"].contains(card.summary.state) else { return true }
             guard !seen.contains(card.noteID), !today.contains(where: {
                 $0.cardID != card.cardID && cardNotes[$0.cardID] == card.noteID
