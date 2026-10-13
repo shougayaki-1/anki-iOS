@@ -1982,3 +1982,137 @@ extension StudyRepositoryTests {
         XCTAssertTrue(DeckStudyEligibility.pausedIDs([(a, b, false), (b, a, false), (c, UUID(), false)]).isEmpty)
     }
 }
+
+extension StudyRepositoryTests {
+    func testRiskPolicyPersistsAcrossGradeUndoAndRepositoryRestart() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        for index in 0..<4 {
+            try repo.createNote(NoteInput(deckID: deck, question: "Q\(index)", answer: "A"), now: now)
+        }
+        let scheduler = try ReviewScheduler()
+        let state = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now).after
+        let payload = try JSONEncoder().encode(state)
+        let date = try scheduler.summary(state).dueDate.addingTimeInterval(86400)
+        try repo.transaction {
+            for card in try repo.cards() { card.fsrsPayload = payload; card.dueDate = try scheduler.summary(state).dueDate }
+        }
+        let before = try repo.cards().map { ($0.id, $0.fsrsPayload, $0.dueDate) }
+        try repo.start(mode: .review, answerLimit: 0, policy: .forgettingRisk, now: date)
+        let order = try XCTUnwrap(repo.options().activeSessionProgress?.reviewOrder)
+        XCTAssertEqual(order, before.map { $0.0 }.sorted { $0.uuidString < $1.uuidString })
+        let id = try XCTUnwrap(repo.session()?.cardID)
+        try revealAndGrade(repo, grade: .again, date: date)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrder, order)
+        try repo.undo(now: date)
+        XCTAssertEqual(try repo.session()?.cardID, id)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        for value in before {
+            let card = try XCTUnwrap(repo.card(value.0))
+            XCTAssertEqual(card.fsrsPayload, value.1); XCTAssertEqual(card.dueDate, value.2)
+        }
+        try repo.setSessionActive(false, now: date)
+        let restored = StudyRepository(container: repo.context.container)
+        try restored.initialize(now: date)
+        try restored.resume(now: date)
+        XCTAssertEqual(try restored.session()?.cardID, id)
+        XCTAssertEqual(try restored.options().activeSessionProgress?.reviewOrderPolicy, .forgettingRisk)
+        XCTAssertEqual(try restored.options().activeSessionProgress?.reviewOrder, order)
+        let legacy = try JSONDecoder().decode(StudySessionProgressSnapshot.self,
+            from: Data(#"{"startSequence":0,"answerLimit":20}"#.utf8))
+        XCTAssertNil(legacy.reviewOrderPolicy); XCTAssertNil(legacy.reviewOrder)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testRiskPolicyThreeThousandCardsTenThousandHistoryComparison() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let scheduler = try ReviewScheduler()
+        let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
+        let payload = try JSONEncoder().encode(transition.after)
+        let due = try scheduler.summary(transition.after).dueDate
+        try repo.transaction {
+            for index in 0..<3000 {
+                let input = NoteInput(deckID: deck, question: "Q\(index)", answer: "A")
+                let note = Note(input: input, content: try StudyRepository.encodeContent(input), now: now)
+                repo.context.insert(note)
+                let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now)
+                card.dueDate = due; repo.context.insert(card)
+                if index == 0 {
+                    for sequence in 1...10000 {
+                        repo.context.insert(StudyReviewLog(card: card, transition: transition, before: payload, after: payload,
+                            mode: .mental, durationMs: 0, wasNew: false, sequence: sequence))
+                    }
+                }
+            }
+        }
+        _ = try repo.queueCards()
+        let date = due.addingTimeInterval(86400)
+        for policy in [ReviewOrderPolicy.traditional, .forgettingRisk] {
+            _ = try repo.queueCards() // Same warm-cache baseline after the preceding Undo.
+            let decodes = repo.queueStateDecodeCount, history = repo.fullHistoryFetchCount
+            let begin = Date()
+            try repo.withStudyQueueReuse { try repo.start(mode: .review, policy: policy, now: date) }
+            let start = Date().timeIntervalSince(begin)
+            let id = try XCTUnwrap(repo.session()?.cardID)
+            let gradeBegin = Date()
+            try repo.withStudyQueueReuse { try revealAndGrade(repo, grade: .good, date: date) }
+            let grade = Date().timeIntervalSince(gradeBegin)
+            let undoBegin = Date()
+            try repo.withStudyQueueReuse { try repo.undo(now: date) }
+            let undo = Date().timeIntervalSince(undoBegin)
+            XCTAssertEqual(try repo.session()?.cardID, id)
+            XCTAssertEqual(repo.fullHistoryFetchCount, history)
+            XCTAssertEqual(repo.queueStateDecodeCount - decodes, 1)
+            XCTAssertEqual(try repo.sessionProgress()?.answered, 0)
+            print("Issue186 \(policy.rawValue) 3000/10000 start=\(start)s grade=\(grade)s undo=\(undo)s decodes=\(repo.queueStateDecodeCount - decodes) fullHistory=\(repo.fullHistoryFetchCount - history)")
+        }
+    }
+
+    func testRiskPolicyUsesFSRSProbabilityAndCorruptPayloadFallback() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        for index in 0..<3 { try repo.createNote(NoteInput(deckID: deck, question: "Q\(index)", answer: "A"), now: now) }
+        let scheduler = try ReviewScheduler(), fresh = try scheduler.newCard(now: now)
+        let first = try scheduler.review(fresh, grade: .good, now: now).after
+        let weak = try scheduler.review(first, grade: .good, now: scheduler.summary(first).dueDate).after
+        let strong = try scheduler.review(fresh, grade: .easy, now: now).after
+        let date = now.addingTimeInterval(86400 * 30)
+        let cards = try repo.cards().sorted { $0.id.uuidString < $1.id.uuidString }
+        try repo.transaction {
+            cards[0].fsrsPayload = try JSONEncoder().encode(strong); cards[0].dueDate = now
+            cards[1].fsrsPayload = try JSONEncoder().encode(weak); cards[1].dueDate = now.addingTimeInterval(1)
+            cards[2].fsrsPayload = Data("broken".utf8); cards[2].dueDate = now.addingTimeInterval(2)
+        }
+        XCTAssertLessThan(try scheduler.retrievability(weak, now: date), try scheduler.retrievability(strong, now: date))
+        try repo.start(mode: .review, policy: .traditional, now: date)
+        XCTAssertEqual(try repo.session()?.cardID, cards[0].id)
+        try repo.start(mode: .review, policy: .forgettingRisk, now: date)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrder, [cards[1].id, cards[0].id, cards[2].id])
+        XCTAssertEqual(repo.reviewRankingFailureCount, 1)
+        XCTAssertTrue(try repo.logs().isEmpty)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testRiskPolicyDeckTagAndResponseScopeExcludeBeforeRanking() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        let outside = try repo.createDeck(name: "Other", now: now)
+        let target = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", tagNames: ["target"]), now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "No tag", answer: "A"), now: now)
+        try repo.createNote(NoteInput(deckID: outside, question: "Other", answer: "A", tagNames: ["target"]), now: now)
+        let scheduler = try ReviewScheduler()
+        let state = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now).after
+        let due = try scheduler.summary(state).dueDate
+        try repo.transaction {
+            for card in try repo.cards() { card.fsrsPayload = try JSONEncoder().encode(state); card.dueDate = due }
+        }
+        let tag = try XCTUnwrap(repo.tags().first?.id)
+        let scope = LearningScope(deckID: parent, tagIDs: [tag])
+        try repo.start(mode: .review, scope: scope, policy: .forgettingRisk, now: due)
+        let id = try XCTUnwrap(repo.session()?.cardID)
+        XCTAssertEqual(try repo.card(id)?.noteID, target)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrder, [id])
+        XCTAssertThrowsError(try repo.start(mode: .review, scope: scope, responseMode: .ordering, policy: .forgettingRisk, now: due))
+        XCTAssertEqual(try repo.session()?.cardID, id)
+    }
+}

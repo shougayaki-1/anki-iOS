@@ -41,6 +41,10 @@ struct QueueLog: Sendable, Equatable {
     var quotaDeckIDs: [UUID] = []
 }
 
+enum ReviewOrderPolicy: String, Codable {
+    case traditional, forgettingRisk
+}
+
 struct ReviewQueueBuilder {
     var calendar: Calendar = .current
     // Tie-breaking can be injected to keep tests deterministic.
@@ -104,25 +108,69 @@ struct ReviewQueueBuilder {
     }
 
     func queue(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, mode: StudyMode,
-               touched: Set<UUID>, reviewStreak: Int, now: Date) -> [UUID] {
+               touched: Set<UUID>, reviewStreak: Int, now: Date,
+               policy: ReviewOrderPolicy = .traditional, reviewOrder: [UUID]? = nil,
+               retrievability: (UUID) -> Double? = { _ in nil }) -> [UUID] {
         let probe = PerformanceProbe.begin("Queue.build")
         defer { PerformanceProbe.end(probe) }
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let today = logs.filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
         let eligible = cards.filter { card in
-            if card.suspended || card.isHidden(at: now) { return false }
+            if card.studyPaused || card.suspended || card.isHidden(at: now) { return false }
             if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
             guard let noteID = card.noteID else { return true }
             return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
         }
-        let randomized = shuffled(eligible)
-        let rank = Dictionary(uniqueKeysWithValues: randomized.enumerated().map { ($0.element.id, $0.offset) })
-        let due = eligible.filter { $0.state != "new" && $0.due <= now }.sorted {
-            if $0.due != $1.due { return $0.due < $1.due }
-            return rank[$0.id, default: 0] < rank[$1.id, default: 0]
+        let dueCandidates = eligible.filter { $0.state != "new" && $0.due <= now }
+        let due: [QueueCard]
+        let short: [QueueCard]
+        if policy == .traditional {
+            let randomized = shuffled(eligible)
+            let rank = Dictionary(uniqueKeysWithValues: randomized.enumerated().map { ($0.element.id, $0.offset) })
+            due = dueCandidates.sorted {
+                if $0.due != $1.due { return $0.due < $1.due }
+                return rank[$0.id, default: 0] < rank[$1.id, default: 0]
+            }
+            short = due.filter { $0.state == "learning" || $0.state == "relearning" }
+        } else {
+            // Frozen reviews need only their saved rank; do not sort the whole
+            // backlog by due first on every answer. Short steps remain dynamic.
+            due = dueCandidates
+            short = due.filter { $0.state == "learning" || $0.state == "relearning" }.sorted {
+                if $0.due != $1.due { return $0.due < $1.due }
+                return $0.id.uuidString < $1.id.uuidString
+            }
         }
-        let short = due.filter { $0.state == "learning" || $0.state == "relearning" }
-        let reviews = due.filter { $0.state == "review" }
+        var reviews = due.filter { $0.state == "review" }
+        if policy == .forgettingRisk {
+            if let reviewOrder {
+                let ranks = Dictionary(reviewOrder.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: min)
+                reviews.sort {
+                    let lhs = ranks[$0.id, default: .max], rhs = ranks[$1.id, default: .max]
+                    if lhs != rhs { return lhs < rhs }
+                    if $0.due != $1.due { return $0.due < $1.due }
+                    return $0.id.uuidString < $1.id.uuidString
+                }
+            } else {
+                // Calculate only eligible due reviews, once per candidate. Invalid
+                // predictions retain their deterministic due-order slots, avoiding
+                // a non-transitive comparator mixing probability and due dates.
+                reviews.sort {
+                    if $0.due != $1.due { return $0.due < $1.due }
+                    return $0.id.uuidString < $1.id.uuidString
+                }
+                let predicted = reviews.enumerated().compactMap { index, card -> (Int, QueueCard, Double)? in
+                    guard let value = retrievability(card.id), value.isFinite, (0...1).contains(value) else { return nil }
+                    return (index, card, value)
+                }
+                let ordered = predicted.sorted {
+                    if $0.2 != $1.2 { return $0.2 < $1.2 }
+                    if $0.1.due != $1.1.due { return $0.1.due < $1.1.due }
+                    return $0.1.id.uuidString < $1.1.id.uuidString
+                }
+                for (slot, entry) in zip(predicted, ordered) { reviews[slot.0] = entry.1 }
+            }
+        }
         // The global cap and deck caps are independent. Select the bounded prefix
         // once, rather than sorting once for counts and again for the same queue.
         let remaining = max(0, settings.dailyNewLimit - Set(today.filter(\.wasNew).map(\.cardID)).count)

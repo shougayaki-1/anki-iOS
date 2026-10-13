@@ -455,11 +455,11 @@ final class StudyStore {
     func applyScope(_ value: LearningScope) -> Bool {
         perform(metadata: false, changed: false) { try repository.applyHomeScope(value) }
     }
-    func start(_ mode: StudyMode) {
+    func start(_ mode: StudyMode, policy: ReviewOrderPolicy = .traditional) {
         repository.withStudyQueueReuse {
             let interval = PerformanceProbe.begin("Store.start")
             defer { PerformanceProbe.end(interval) }
-            if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
+            if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, policy: policy, now: clock()) }) { showingReview = true }
         }
     }
     func resume() {

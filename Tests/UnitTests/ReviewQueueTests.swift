@@ -269,3 +269,56 @@ extension ReviewQueueTests {
         XCTAssertTrue(planned.allSatisfy { $0.date >= end })
     }
 }
+
+extension ReviewQueueTests {
+    func testForgettingRiskEligibilityFallbackAndFrozenOrder() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let older = card("review", due: now.addingTimeInterval(-100))
+        let risky = card("review", due: now.addingTimeInterval(-10))
+        let invalid = card("review", due: now.addingTimeInterval(-50))
+        let short = card("relearning", due: now)
+        let future = card("review", due: now.addingTimeInterval(1))
+        var held = card("review", due: now); held.hiddenUntil = now.addingTimeInterval(10)
+        var paused = card("review", due: now); paused.studyPaused = true
+        var sibling = card("review", due: now); sibling.noteID = UUID()
+        let suspended = card("review", due: now, suspended: true)
+        let cards = [older, risky, invalid, short, future, held, paused, sibling, suspended]
+        let logs = [QueueLog(cardID: UUID(), reviewedAt: now, wasNew: false, noteID: sibling.noteID)]
+        let builder = ReviewQueueBuilder(shuffled: { $0 })
+        var calculated: [UUID] = []
+        func queue(_ policy: ReviewOrderPolicy, order: [UUID]? = nil) -> [UUID] {
+            builder.queue(cards: cards, logs: logs, settings: StudySettings(), mode: .review,
+                          touched: [], reviewStreak: 0, now: now, policy: policy, reviewOrder: order) { id in
+                calculated.append(id)
+                return id == older.id ? 0.9 : id == risky.id ? 0.1 : .nan
+            }
+        }
+        XCTAssertEqual(queue(.traditional), [short.id, older.id, invalid.id, risky.id])
+        XCTAssertTrue(calculated.isEmpty)
+        let ranked = queue(.forgettingRisk)
+        XCTAssertEqual(ranked, [short.id, risky.id, invalid.id, older.id])
+        XCTAssertEqual(Set(calculated), Set([older.id, invalid.id, risky.id]))
+        calculated = []
+        XCTAssertEqual(queue(.forgettingRisk, order: ranked), ranked)
+        XCTAssertTrue(calculated.isEmpty)
+    }
+
+    func testForgettingRiskTiesMixedNewAndEmpty() {
+        let now = Date()
+        let reviews = (1...6).map { index in
+            QueueCard(id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", index))!,
+                      state: "review", due: now, createdAt: now, suspended: false)
+        }
+        let fresh = card("new", due: now)
+        let builder = ReviewQueueBuilder(shuffled: { $0.reversed() })
+        func queue(_ cards: [QueueCard], _ mode: StudyMode) -> [UUID] {
+            builder.queue(cards: cards, logs: [], settings: StudySettings(), mode: mode,
+                          touched: [], reviewStreak: 0, now: now, policy: .forgettingRisk, retrievability: { _ in 0.5 })
+        }
+        XCTAssertEqual(queue(reviews.reversed() + [fresh], .mixed), reviews.prefix(3).map(\.id) + [fresh.id] + reviews.suffix(3).map(\.id))
+        XCTAssertEqual(queue(reviews + [fresh], .new), [fresh.id])
+        XCTAssertEqual(queue([], .review), [])
+        XCTAssertEqual(queue([reviews[0]], .review), [reviews[0].id])
+        XCTAssertEqual(queue(reviews, .review), reviews.map(\.id))
+    }
+}
