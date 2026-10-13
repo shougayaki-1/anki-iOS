@@ -126,50 +126,53 @@ struct LibraryView: View {
                     emptyLibrary
                 }
                 ForEach(visibleRows) { row in
-                    if let deck = row.deck {
-                        Button {
-                            guard row.expandable, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                            var expanded = LibraryTreeProjection.expandedIDs(savedExpansion)
-                            if !expanded.insert(deck.id).inserted { expanded.remove(deck.id) }
-                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                                savedExpansion = LibraryTreeProjection.saveExpanded(expanded)
-                            }
-                            store.haptics.play(.reveal, mode: store.settings.hapticsMode)
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: row.expandable ? (row.expanded ? "chevron.down" : "chevron.right") : "minus")
-                                    .font(.caption).frame(width: 12).accessibilityHidden(true)
-                                Image(systemName: row.expanded ? "folder.fill" : "folder").foregroundStyle(.secondary).accessibilityHidden(true)
-                                Text(deck.name).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
-                                Spacer(minLength: 4)
-                                Text(row.cardCount == 0 ? "空" : "\(row.cardCount)枚").font(.caption).foregroundStyle(.secondary)
-                            }
-                            .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
-                            .frame(minHeight: 36).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("階層\(row.depth + 1)、\(deck.name)、配下\(row.cardCount)枚")
-                        .accessibilityValue(row.expandable ? (row.expanded ? "展開中" : "折り畳み中") : "空のデッキ")
-                        .accessibilityHint(row.expandable ? (row.expanded ? "折り畳む" : "展開する") : "")
-                        .accessibilityIdentifier("libraryDeck-\(deck.id.uuidString)")
-                    } else if let note = row.note {
-                        if editMode.isEditing {
+                    // One List row per ID, even when the deck/note branch changes.
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let deck = row.deck {
                             Button {
-                                if note.cardIDs.isSubset(of: selection) { selection.subtract(note.cardIDs) }
-                                else { selection.formUnion(note.cardIDs) }
+                                guard row.expandable, search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                                var expanded = LibraryTreeProjection.expandedIDs(savedExpansion)
+                                if !expanded.insert(deck.id).inserted { expanded.remove(deck.id) }
+                                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                                    savedExpansion = LibraryTreeProjection.saveExpanded(expanded)
+                                }
+                                store.haptics.play(.reveal, mode: store.settings.hapticsMode)
                             } label: {
-                                HStack {
-                                    Image(systemName: note.cardIDs.isSubset(of: selection) ? "checkmark.circle.fill" : (selection.isDisjoint(with: note.cardIDs) ? "circle" : "minus.circle.fill"))
-                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
-                                }.foregroundStyle(.primary)
+                                HStack(spacing: 8) {
+                                    Image(systemName: row.expandable ? (row.expanded ? "chevron.down" : "chevron.right") : "minus")
+                                        .font(.caption).frame(width: 12).accessibilityHidden(true)
+                                    Image(systemName: row.expanded ? "folder.fill" : "folder").foregroundStyle(.secondary).accessibilityHidden(true)
+                                    Text(deck.name).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 4)
+                                    Text(row.cardCount == 0 ? "空" : "\(row.cardCount)枚").font(.caption).foregroundStyle(.secondary)
+                                }
+                                .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
+                                .frame(minHeight: 36).contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            .accessibilityValue(note.cardIDs.isSubset(of: selection) ? "選択中" : "未選択")
-                            .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
-                        } else {
-                            NavigationLink { NoteDetailView(store: store, cardID: note.card.id) } label: {
-                                LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
-                            }.padding(.leading, CGFloat(min(row.depth, 5)) * 12)
+                            .accessibilityLabel("階層\(row.depth + 1)、\(deck.name)、配下\(row.cardCount)枚")
+                            .accessibilityValue(row.expandable ? (row.expanded ? "展開中" : "折り畳み中") : "空のデッキ")
+                            .accessibilityHint(row.expandable ? (row.expanded ? "折り畳む" : "展開する") : "")
+                            .accessibilityIdentifier("libraryDeck-\(deck.id.uuidString)")
+                        } else if let note = row.note {
+                            if editMode.isEditing {
+                                Button {
+                                    if note.cardIDs.isSubset(of: selection) { selection.subtract(note.cardIDs) }
+                                    else { selection.formUnion(note.cardIDs) }
+                                } label: {
+                                    HStack {
+                                        Image(systemName: note.cardIDs.isSubset(of: selection) ? "checkmark.circle.fill" : (selection.isDisjoint(with: note.cardIDs) ? "circle" : "minus.circle.fill"))
+                                        LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
+                                    }.foregroundStyle(.primary)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityValue(note.cardIDs.isSubset(of: selection) ? "選択中" : "未選択")
+                                .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
+                            } else {
+                                NavigationLink { NoteDetailView(store: store, cardID: note.card.id) } label: {
+                                    LibraryCardRow(card: note.card, index: index, flag: cardMarks[note.card.id]?.flag).equatable()
+                                }.padding(.leading, CGFloat(min(row.depth, 5)) * 12)
+                            }
                         }
                     }
                 }
@@ -182,25 +185,27 @@ struct LibraryView: View {
                 defer { if !Task.isCancelled, wanted == request { loading = false } }
                 do {
                     if !query.isEmpty { try await Task.sleep(for: .milliseconds(150)) }
+                    try Task.checkCancellation()
                     let allowed = try wanted.deck.map { try store.repository.descendants(of: $0) }
                     let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let metadata = try await store.libraryReader.load(revision: revision)
                     let key = ProjectionKey(revision: revision, query: query, deck: wanted.deck, attempt: wanted.attempt)
                     let found: LibraryResults, projection: LibraryTreeProjection
                     if projectionKey == key, let tree {
                         found = results; projection = tree
                     } else {
-                        found = query.isEmpty ? metadata.results(deckIDs: allowed) : try await store.libraryReader.search(query, revision: revision, deckIDs: allowed)
                         let decks = store.decks.filter { allowed?.contains($0.id) ?? true }
-                        projection = LibraryTreeProjection(decks: decks, index: metadata, results: found, search: query)
+                        (found, projection) = try await store.libraryReader.projection(
+                            decks: decks, query: query, revision: revision, deckIDs: allowed)
                     }
                     let expanded = LibraryTreeProjection.expandedIDs(wanted.expansion)
-                    let rows = projection.rows(expanded: expanded)
+                    let rows = try await store.libraryReader.rows(projection: projection, expanded: expanded)
                     let visibleExpanded = Set(rows.filter(\.expanded).compactMap { $0.deck?.id })
                     let requested = query.isEmpty ? visibleExpanded : Set(found.cardsByDeck.keys)
                     let loaded = try await store.libraryReader.contents(revision: revision, deckIDs: requested)
                     try Task.checkCancellation()
                     guard wanted == request else { return }
+                    let publish = PerformanceProbe.begin("Library.publish")
+                    defer { PerformanceProbe.end(publish) }
                     cardMarks = Dictionary(uniqueKeysWithValues: (try store.repository.options().cardMarks ?? []).map { ($0.cardID, $0) })
                     let animate = projectionKey == key && shownExpansion != wanted.expansion
                     index = loaded; results = found; tree = projection; projectionKey = key; libraryFailure = nil
