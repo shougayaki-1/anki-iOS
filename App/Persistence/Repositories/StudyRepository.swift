@@ -40,6 +40,44 @@ final class StudyRepository {
     private(set) var fullHistoryFetchCount = 0
     private(set) var historyRowsFetched = 0
     #endif
+    // These value snapshots live only during one synchronous Store operation.
+    // Never retain managed models or reuse them across edits/imports/restores.
+    private var reusingStudyQueue = false
+    private var operationCards: [QueueCard]?
+    private var operationScopes: [(LearningScope, Set<UUID>)] = []
+
+    // Use only for start/grade/Undo plus their post-save screen refresh:
+    // start changes session state after reading; grade/Undo read after restoring
+    // or updating cards. Do not mutate queue inputs after the first projection
+    // within a transaction. Each new transaction and rollback invalidates it.
+    func withStudyQueueReuse<T>(_ body: () throws -> T) rethrows -> T {
+        precondition(!reusingStudyQueue)
+        reusingStudyQueue = true
+        defer {
+            reusingStudyQueue = false
+            clearOperationQueue()
+        }
+        return try body()
+    }
+
+    private func clearOperationQueue() {
+        operationCards = nil
+        operationScopes.removeAll()
+    }
+
+    func queueScopeNoteIDs(_ scope: LearningScope) throws -> Set<UUID> {
+        if reusingStudyQueue, let cached = operationScopes.first(where: { $0.0 == scope }) {
+            return cached.1
+        }
+        let decks = try scope.deckID.map { try descendants(of: $0) }
+        let tags = Set(scope.tagIDs)
+        let ids = Set(try notes().filter { note in
+            (decks == nil || decks!.contains(note.deckID)) && tags.isSubset(of: Set(note.tagIDs))
+        }.map(\.id))
+        if reusingStudyQueue { operationScopes.append((scope, ids)) }
+        return ids
+    }
+
     var save: (ModelContext) throws -> Void
 
     init(container: ModelContainer, calendar: Calendar = .current, mediaStore: MediaStore = MediaStore(),
@@ -49,12 +87,15 @@ final class StudyRepository {
     }
 
     func transaction<T>(_ body: () throws -> T) throws -> T {
+        // A second transaction in an operation must not see earlier snapshots.
+        clearOperationQueue()
         do {
             let result = try body()
             try save(context)
             return result
         } catch {
             context.rollback()
+            clearOperationQueue()
             throw error
         }
     }
@@ -346,6 +387,7 @@ final class StudyRepository {
     }
 
     func queueCards() throws -> [QueueCard] {
+        if reusingStudyQueue, let operationCards { return operationCards }
         let interval = PerformanceProbe.begin("Repository.queueCards")
         defer { PerformanceProbe.end(interval) }
         #if DEBUG
@@ -380,6 +422,7 @@ final class StudyRepository {
                              suspended: card.isSuspended, hiddenUntil: marks[card.id]?.hiddenUntil, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
         }
         queueStates = states
+        if reusingStudyQueue { operationCards = result }
         return result
     }
 

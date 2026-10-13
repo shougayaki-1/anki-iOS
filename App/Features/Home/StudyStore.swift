@@ -413,36 +413,42 @@ final class StudyStore {
         perform(metadata: false, changed: false) { try repository.applyHomeScope(value) }
     }
     func start(_ mode: StudyMode) {
-        let interval = PerformanceProbe.begin("Store.start")
-        defer { PerformanceProbe.end(interval) }
-        if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
+        repository.withStudyQueueReuse {
+            let interval = PerformanceProbe.begin("Store.start")
+            defer { PerformanceProbe.end(interval) }
+            if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, now: clock()) }) { showingReview = true }
+        }
     }
     func resume() {
         if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
     }
     func grade(_ grade: ReviewGrade, swipePrepared: Bool = false) {
-        let interval = PerformanceProbe.begin("Store.grade")
-        defer { PerformanceProbe.end(interval) }
-        guard flushTypedDraft() else { return }
-        let previouslyComplete = review?.sessionProgress?.isComplete == true
-        do { try repository.grade(grade, now: clock()) }
-        catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
-        do { try refreshStudy() }
-        catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
-        let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
-        if finishedSet || !swipePrepared {
-            haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
+        repository.withStudyQueueReuse {
+            let interval = PerformanceProbe.begin("Store.grade")
+            defer { PerformanceProbe.end(interval) }
+            guard flushTypedDraft() else { return }
+            let previouslyComplete = review?.sessionProgress?.isComplete == true
+            do { try repository.grade(grade, now: clock()) }
+            catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
+            do { try refreshStudy() }
+            catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+            let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
+            if finishedSet || !swipePrepared {
+                haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
+            }
         }
     }
     func undo() {
-        let interval = PerformanceProbe.begin("Store.undo")
-        defer { PerformanceProbe.end(interval) }
-        guard flushTypedDraft() else { return }
-        do { try repository.undo(now: clock()) }
-        catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
-        do { try refreshStudy() }
-        catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
-        haptics.play(.undo, mode: settings.hapticsMode)
+        repository.withStudyQueueReuse {
+            let interval = PerformanceProbe.begin("Store.undo")
+            defer { PerformanceProbe.end(interval) }
+            guard flushTypedDraft() else { return }
+            do { try repository.undo(now: clock()) }
+            catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
+            do { try refreshStudy() }
+            catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+            haptics.play(.undo, mode: settings.hapticsMode)
+        }
     }
     func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil, swipePrepared: Bool = false) {
         if let text, mode == nil, revealed == nil {

@@ -273,6 +273,45 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.grade(grade, now: date)
     }
 
+    func testOperationQueueReuseIsBoundedAndRollbackDiscardsPendingProjection() throws {
+        let repo = try fixture()
+        try create(repo); try create(repo)
+        let original = try repo.queueCards()
+        let before = repo.queueProjectionCount
+        try repo.withStudyQueueReuse {
+            _ = try repo.queueCards()
+            _ = try repo.queueCards()
+            XCTAssertEqual(repo.queueProjectionCount - before, 1)
+            let scope = LearningScope(deckID: try repo.decks()[0].id)
+            XCTAssertEqual(try repo.scopedQueueCards(scope).count, 2)
+            repo.save = { _ in throw Failure.save }
+            XCTAssertThrowsError(try repo.transaction {
+                try XCTUnwrap(repo.cards().first).isSuspended = true
+                XCTAssertEqual(try repo.queueCards().filter(\.suspended).count, 1)
+            })
+            XCTAssertEqual(try repo.queueCards().filter(\.suspended).count, 0)
+        }
+        let after = repo.queueProjectionCount
+        _ = try repo.queueCards()
+        XCTAssertEqual(repo.queueProjectionCount, after + 1)
+        XCTAssertEqual(try repo.cards().count, original.count)
+        repo.save = { try $0.save() }
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        let start = store.repository.queueProjectionCount
+        store.start(.new)
+        XCTAssertNil(store.failure)
+        XCTAssertEqual(store.repository.queueProjectionCount - start, 1)
+        store.draft(revealed: true)
+        let grade = store.repository.queueProjectionCount
+        store.grade(.good)
+        XCTAssertNil(store.failure)
+        XCTAssertEqual(store.repository.queueProjectionCount - grade, 1)
+        store.undo()
+        XCTAssertNil(store.failure)
+        XCTAssertEqual(store.counts.newRemaining, 2)
+        XCTAssertEqual(try store.repository.logs().count, 0)
+    }
+
     func testQueueStateCacheTracksGradeUndoRollbackAndRemoval() throws {
         let repo = try fixture()
         try create(repo); try create(repo)
