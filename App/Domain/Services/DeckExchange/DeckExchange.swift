@@ -34,9 +34,29 @@ struct ValidatedDeckPackage: Sendable {
     fileprivate init(package: DeckPackage, bytes: [UUID: Data]) { self.package = package; self.bytes = bytes }
     var cardCount: Int { package.notes.reduce(0) { $0 + ((try? CardGeneration.variants(kind: $1.kind, content: $1.content).count) ?? 0) } }
 }
-struct DeckImportPreview {
+enum DeckImportPlanError: LocalizedError {
+    case changed
+    var errorDescription: String? { "取込先または重複の状態が変わりました。更新されたプレビューを確認して、もう一度確定してください。" }
+}
+
+enum DeckImportDestination: Equatable {
+    case newRoot, childOf(UUID), mergeInto(UUID)
+}
+
+struct DeckImportMapping: Equatable, Identifiable {
+    let id: UUID
+    let targetID: UUID
+    let parentID: UUID?
+    let name: String
+    let sourcePath: String
+    let destinationPath: String
+    let reused: Bool
+}
+
+struct DeckImportPreview: Equatable {
     let duplicates: Set<UUID>
     let destinationName: String
+    let mappings: [DeckImportMapping]
 }
 
 struct DeckImportReceipt {
@@ -187,7 +207,7 @@ extension StudyRepository {
         let package = DeckPackage(rootID: rootID, decks: allDecks.filter { selected.contains($0.id) }.map { SharedDeck(id: $0.id, name: $0.name, parentID: $0.id == rootID ? nil : $0.parentID) }.sorted { $0.id.uuidString < $1.id.uuidString }, notes: shared, media: media)
         return (package, try Dictionary(uniqueKeysWithValues: assets.map { ($0.id, try assetURL(id: $0.id)) }))
     }
-    func previewDeckImport(_ validated: ValidatedDeckPackage) throws -> DeckImportPreview {
+    func previewDeckImport(_ validated: ValidatedDeckPackage, destination: DeckImportDestination = .newRoot) throws -> DeckImportPreview {
         let package = validated.package, hashes = Dictionary(uniqueKeysWithValues: package.media.map { ($0.id, $0.sha256) })
         let existingHashes = Dictionary(uniqueKeysWithValues: try assets().map { ($0.id, $0.sha256) })
         let existing = try Set(notes().map { try DeckExchange.fingerprint(kind: NoteKind(rawValue: $0.type) ?? .basic,
@@ -197,22 +217,63 @@ extension StudyRepository {
             let key = try DeckExchange.fingerprint(kind: note.kind, content: note.content, hashes: hashes)
             if !seen.insert(key).inserted { duplicates.insert(note.id) }
         }
-        let root = package.decks.first(where: { $0.id == package.rootID })!
-        let names = Set(try decks().filter { $0.parentID == nil }.map(\.name))
-        var name = root.name, suffix = 2
-        while names.contains(name) { name = "\(root.name)（取込 \(suffix)）"; suffix += 1 }
-        return DeckImportPreview(duplicates: duplicates, destinationName: name)
+        let existingDecks = try decks()
+        let paths = LibraryIndex.deckPaths(existingDecks)
+        let target: UUID?
+        switch destination {
+        case .newRoot: target = nil
+        case .childOf(let id), .mergeInto(let id):
+            guard existingDecks.contains(where: { $0.id == id }) else { throw StudyError.missingRecord }
+            target = id
+        }
+        var mappings: [DeckImportMapping] = []
+        var remaining = package.decks
+        while !remaining.isEmpty {
+            let ready = remaining.filter { source in source.parentID == nil || mappings.contains(where: { $0.id == source.parentID }) }
+            guard !ready.isEmpty else { throw StudyError.invalidContent }
+            for source in ready {
+                let parent = mappings.first { $0.id == source.parentID }
+                let parentID = parent?.targetID ?? target
+                let sourcePath = [parent?.sourcePath, source.name].compactMap { $0 }.joined(separator: " / ")
+                let parentPath = parent?.destinationPath ?? target.flatMap { paths[$0] }
+                let matches = existingDecks.filter { $0.parentID == parentID && $0.name == source.name }
+                let reuse: Deck?
+                if source.id == package.rootID, case .mergeInto(let id) = destination {
+                    reuse = existingDecks.first { $0.id == id }
+                } else if case .mergeInto = destination, matches.count == 1,
+                          package.decks.filter({ $0.parentID == source.parentID && $0.name == source.name }).count == 1 {
+                    reuse = matches[0]
+                } else { reuse = nil }
+                var name = reuse?.name ?? source.name
+                if reuse == nil {
+                    var names = Set(existingDecks.filter { $0.parentID == parentID }.map(\.name))
+                    names.formUnion(mappings.filter { $0.parentID == parentID }.map(\.name))
+                    var suffix = 2
+                    while names.contains(name) { name = "\(source.name)（取込 \(suffix)）"; suffix += 1 }
+                }
+                let path = reuse.flatMap { paths[$0.id] } ?? [parentPath, name].compactMap { $0 }.joined(separator: " / ")
+                // Stable proposed IDs let confirmation compare the complete mapping.
+                mappings.append(DeckImportMapping(id: source.id, targetID: reuse?.id ?? source.id,
+                    parentID: parentID, name: name, sourcePath: sourcePath, destinationPath: path, reused: reuse != nil))
+            }
+            let processed = Set(ready.map(\.id))
+            remaining.removeAll { processed.contains($0.id) }
+        }
+        return DeckImportPreview(duplicates: duplicates,
+            destinationName: mappings.first { $0.id == package.rootID }!.destinationPath, mappings: mappings)
     }
+
     func importDeckPackage(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date) throws -> Int {
         try importDeckPackageReceipt(validated, skipDuplicates: skipDuplicates, now: now).createdNotes
     }
-    func importDeckPackageReceipt(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date) throws -> DeckImportReceipt {
+    func importDeckPackageReceipt(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date, destination: DeckImportDestination = .newRoot, expectedPreview: DeckImportPreview? = nil) throws -> DeckImportReceipt {
         let interval = PerformanceProbe.begin("Import.deckPackage")
         defer { PerformanceProbe.end(interval) }
         // Only decode can construct this immutable, fully validated value. Do not
         // decode audio again on the UI actor when publishing the transaction.
         try Task.checkCancellation()
-        let preview = try previewDeckImport(validated)
+        let preview = try previewDeckImport(validated, destination: destination)
+        if let expectedPreview, expectedPreview != preview { throw DeckImportPlanError.changed }
         let notes = validated.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }
         let duplicateCount = skipDuplicates ? preview.duplicates.count : 0
         guard !notes.isEmpty else {
@@ -233,12 +294,14 @@ extension StudyRepository {
             }
             let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
             let fresh = try JSONEncoder().encode(scheduler.newCard(now: now))
-            let deckIDs = Dictionary(uniqueKeysWithValues: validated.package.decks.map { ($0.id, UUID()) })
+            let deckIDs = Dictionary(uniqueKeysWithValues: preview.mappings.map { ($0.id, $0.reused ? $0.targetID : UUID()) })
             return try transaction {
                 for asset in assets { context.insert(MediaAsset(image: asset, now: now)) }
-                for deck in validated.package.decks {
-                    let model = Deck(name: deck.id == validated.package.rootID ? preview.destinationName : deck.name, now: now)
-                    model.id = deckIDs[deck.id]!; model.parentID = deck.parentID.flatMap { deckIDs[$0] }; context.insert(model)
+                for mapping in preview.mappings where !mapping.reused {
+                    let model = Deck(name: mapping.name, now: now)
+                    model.id = deckIDs[mapping.id]!
+                    model.parentID = mapping.parentID.map { deckIDs[$0] ?? $0 }
+                    context.insert(model)
                 }
                 var cardCount = 0
                 var importedTags: [[String]: [UUID]] = [:]
