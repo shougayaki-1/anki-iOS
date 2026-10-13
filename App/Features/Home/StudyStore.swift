@@ -459,7 +459,8 @@ final class StudyStore {
                 review = ReviewPresentation(card: old.card, mode: old.mode, responseMode: mode ?? old.responseMode,
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
                                            canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable,
-                                           emptyState: old.emptyState, sessionProgress: old.sessionProgress)
+                                           emptyState: old.emptyState, sessionProgress: old.sessionProgress,
+                                           visibleAnswerTotal: old.visibleAnswerTotal)
             }
             if revealed == true && !wasRevealed && !swipePrepared { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
@@ -491,7 +492,7 @@ final class StudyStore {
                                    typedDraft: pending.text, answerRevealed: old.answerRevealed,
                                    canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering,
                                    orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState,
-                                   sessionProgress: old.sessionProgress)
+                                   sessionProgress: old.sessionProgress, visibleAnswerTotal: old.visibleAnswerTotal)
     }
     @discardableResult
     func flushTypedDraft() -> Bool {
