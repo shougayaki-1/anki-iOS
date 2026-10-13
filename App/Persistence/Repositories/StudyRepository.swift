@@ -37,6 +37,9 @@ final class StudyRepository {
     #if DEBUG
     private(set) var queueProjectionCount = 0
     private(set) var queueProjectionSeconds = 0.0
+    private(set) var queueNoteFetchCount = 0
+    private(set) var queueNoteRowsFetched = 0
+    private(set) var queueCardRowsFetched = 0
     private(set) var fullHistoryFetchCount = 0
     private(set) var historyRowsFetched = 0
     #endif
@@ -45,6 +48,12 @@ final class StudyRepository {
     // These value snapshots live only during one synchronous Store operation.
     // Never retain managed models or reuse them across edits/imports/restores.
     private var reusingStudyQueue = false
+    private struct QueueNote {
+        let id: UUID
+        let deckID: UUID
+        let tagIDs: [UUID]
+    }
+    private var operationNotes: [QueueNote]?
     private var operationCards: [QueueCard]?
     private var operationScopes: [(LearningScope, Set<UUID>)] = []
 
@@ -63,6 +72,7 @@ final class StudyRepository {
     }
 
     private func clearOperationQueue() {
+        operationNotes = nil
         operationCards = nil
         operationScopes.removeAll()
     }
@@ -73,11 +83,27 @@ final class StudyRepository {
         }
         let decks = try scope.deckID.map { try descendants(of: $0) }
         let tags = Set(scope.tagIDs)
-        let ids = Set(try notes().filter { note in
-            (decks == nil || decks!.contains(note.deckID)) && tags.isSubset(of: Set(note.tagIDs))
+        let ids = Set(try queueNotes().filter { note in
+            (decks == nil || decks!.contains(note.deckID)) && (tags.isEmpty || tags.isSubset(of: Set(note.tagIDs)))
         }.map(\.id))
         if reusingStudyQueue { operationScopes.append((scope, ids)) }
         return ids
+    }
+
+    // Queue/scoping projection needs only IDs and membership. Fetch full models
+    // because partial SwiftData fetches were slower in the hot-path comparison.
+    // Values may be reused only inside the existing synchronous operation lifetime.
+    private func queueNotes() throws -> [QueueNote] {
+        if reusingStudyQueue, let operationNotes { return operationNotes }
+        let interval = PerformanceProbe.begin("Repository.queueNotes")
+        defer { PerformanceProbe.end(interval) }
+        let values = try notes().map { QueueNote(id: $0.id, deckID: $0.deckID, tagIDs: $0.tagIDs) }
+        #if DEBUG
+        queueNoteFetchCount += 1
+        queueNoteRowsFetched += values.count
+        #endif
+        if reusingStudyQueue { operationNotes = values }
+        return values
     }
 
     var save: (ModelContext) throws -> Void
@@ -405,7 +431,7 @@ final class StudyRepository {
         defer { queueProjectionSeconds += Date().timeIntervalSince(started) }
         #endif
         let scheduler = try ReviewScheduler()
-        let noteDecks = Dictionary(uniqueKeysWithValues: try notes().map { ($0.id, $0.deckID) })
+        let noteDecks = Dictionary(uniqueKeysWithValues: try queueNotes().map { ($0.id, $0.deckID) })
         let ancestors = try deckAncestorMap()
         let overrides = try options().deckLearning ?? []
         let limits = ancestors.mapValues { ids in
@@ -416,6 +442,9 @@ final class StudyRepository {
         }
         let marks = Dictionary(uniqueKeysWithValues: (try options().cardMarks ?? []).map { ($0.cardID, $0) })
         let rows = try cards()
+        #if DEBUG
+        queueCardRowsFetched += rows.count
+        #endif
         // Compare persisted payloads rather than timestamps: Undo and rollback can
         // restore old timestamps. Keep only the current store's cards in the cache.
         var states: [UUID: (payload: Data, state: String)] = [:]
@@ -502,6 +531,8 @@ final class StudyRepository {
     }
 
     func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, now: Date) throws {
+        let interval = PerformanceProbe.begin("Repository.start")
+        defer { PerformanceProbe.end(interval) }
         try transaction {
             let normalized = try normalizedScope(scope)
             let selectedResponse = try responseMode ?? options().sessionResponseMode ?? .cardDefault

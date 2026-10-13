@@ -131,6 +131,30 @@ final class ReviewQueueTests: XCTestCase {
         QueueCard(id: UUID(), state: state, due: due, createdAt: due, suspended: suspended)
     }
 
+    func testTiedNewOrderBoundedPrefixAndSharedAncestorCaps() {
+        let now = date("2026-10-08T12:00:00+09:00")
+        let parent = UUID(), child = UUID()
+        let ids = (1...6).map { UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", $0))! }
+        let cards = ids.enumerated().reversed().map { index, id in
+            QueueCard(id: id, state: "new", due: now, createdAt: now, suspended: false,
+                      deckLimits: index < 3 ? [parent: 4, child: 2] : [parent: 4])
+        }
+        let logs = [QueueLog(cardID: UUID(), reviewedAt: now, wasNew: true, quotaDeckIDs: [parent, child])]
+        var settings = StudySettings()
+        settings.dailyNewLimit = 3 // Two global slots; one remaining child slot.
+        let builder = ReviewQueueBuilder(calendar: calendar(), shuffled: { $0 })
+        XCTAssertEqual(builder.counts(cards: cards, logs: logs, settings: settings, now: now).newRemaining, 2)
+        for mode in [StudyMode.new, .mixed] {
+            XCTAssertEqual(builder.queue(cards: cards, logs: logs, settings: settings, mode: mode,
+                                         touched: [], reviewStreak: 0, now: now), [ids[0], ids[3]])
+        }
+        XCTAssertEqual(builder.queue(cards: cards, logs: logs, settings: settings, mode: .review,
+                                     touched: [], reviewStreak: 0, now: now), [])
+        settings.dailyNewLimit = 1
+        XCTAssertEqual(builder.queue(cards: cards, logs: logs, settings: settings, mode: .new,
+                                     touched: [], reviewStreak: 0, now: now), [])
+    }
+
     func testDeckSharedCapsFourAMAndAllStudyModes() {
         let before = date("2026-10-08T03:59:59+09:00"), after = date("2026-10-08T04:00:00+09:00")
         let parent = UUID(), child = UUID()
