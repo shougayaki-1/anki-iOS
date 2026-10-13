@@ -138,10 +138,7 @@ extension StudyRepository {
         return ids
     }
     func scopedQueueCards(_ scope: LearningScope, cards: [QueueCard]? = nil) throws -> [QueueCard] {
-        let decks = try scope.deckID.map { try descendants(of: $0) }
-        let eligible = Set(try notes().filter { note in
-            (decks == nil || decks!.contains(note.deckID)) && Set(scope.tagIDs).isSubset(of: Set(note.tagIDs))
-        }.map(\.id))
+        let eligible = try queueScopeNoteIDs(scope)
         return try (cards ?? queueCards()).filter { $0.noteID.map { eligible.contains($0) } ?? false }
     }
     // Only an explicit ordering override restricts candidates. Use displayed answers
