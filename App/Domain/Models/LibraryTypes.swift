@@ -33,6 +33,8 @@ struct StudySessionProgressSnapshot: Codable, Equatable {
     var startSequence: Int
     var answerLimit: Int
     var responseMode: SessionResponseMode? = nil
+    // Display-only estimate; missing in sessions saved by older app versions.
+    var initialEligibleCount: Int? = nil
 }
 
 enum SessionResponseMode: String, Codable, CaseIterable {

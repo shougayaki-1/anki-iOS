@@ -513,7 +513,8 @@ final class StudyRepository {
             let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
-                startSequence: try lastReviewSequence(), answerLimit: limit, responseMode: selectedResponse)
+                startSequence: try lastReviewSequence(), answerLimit: limit, responseMode: selectedResponse,
+                initialEligibleCount: available.count)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
@@ -745,13 +746,24 @@ final class StudyRepository {
         let reason = requested == .ordering ? item.flatMap {
             OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) ?? (ordering == nil ? OrderingError.invalidDraft.localizedDescription : nil)
         } : nil
+        let sessionAnswerProgress = try sessionProgress()
+        let initialEligibleCount = try options().activeSessionProgress?.initialEligibleCount
+        // Use the starting queue size as the on-screen target, extending it only
+        // if short-term relearning creates another actual question. The configured
+        // answer limit remains the hard cap, regardless of this display estimate.
+        let visibleAnswerTotal: Int? = sessionAnswerProgress.flatMap { progress in
+            guard progress.limit > 0 else { return nil }
+            if progress.isComplete { return progress.limit }
+            if item == nil { return max(1, progress.answered) }
+            return min(progress.limit, max(initialEligibleCount ?? progress.limit, progress.answered + 1))
+        }
         return ReviewPresentation(card: item, mode: mode,
                                   responseMode: requested == .ordering && reason != nil ? .mental : requested,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
                                   canUndo: draft.undoLogID != nil, nextShortDue: short,
                                   ordering: ordering, orderingUnavailable: reason,
                                   emptyState: item == nil ? try emptyState(draft: draft, mode: mode, short: short, now: now, all: all) : nil,
-                                  sessionProgress: try sessionProgress())
+                                  sessionProgress: sessionAnswerProgress, visibleAnswerTotal: visibleAnswerTotal)
     }
     private func emptyState(draft: SessionDraft, mode: StudyMode, short: Date?, now: Date, all: [QueueCard]) throws -> ReviewEmptyState {
         let sessionCount = try sessionProgress()
@@ -853,7 +865,7 @@ final class StudyRepository {
         }
         if let progress = sessionCount, progress.limit > 0, !progress.isComplete {
             return ReviewEmptyState(reason: .complete, title: "今回はここまで",
-                                    message: "\(progress.answered) / \(progress.limit)問回答しました。現在、この条件で追加出題できるカードはありません。次回の復習は期限到来後に始められます。")
+                                    message: "\(progress.answered)問回答しました。現在、この条件で追加出題できるカードはありません。次回の復習は期限到来後に始められます。")
         }
         return ReviewEmptyState(reason: .complete, title: "今回の学習は完了しました",
                                 message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")
