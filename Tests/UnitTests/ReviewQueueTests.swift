@@ -77,6 +77,50 @@ final class ReviewQueueTests: XCTestCase {
         XCTAssertEqual(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(1)), .grade(.good))
         XCTAssertNil(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(2)))
     }
+    func testSwipeProgressTracksCandidatesReadinessAndHysteresis() {
+        var gate = ReviewSwipeGate()
+        let id = UUID(), now = Date(timeIntervalSince1970: 100)
+        gate.begin(id: id, revealed: true)
+        func update(_ x: Double, _ y: Double, _ seconds: Double = 0) -> ReviewSwipeProgress {
+            gate.update(id: id, revealed: true, x: x, y: y, now: now.addingTimeInterval(seconds))
+        }
+        let moving = update(48, 0)
+        XCTAssertEqual(moving.candidate, .grade(.good)); XCTAssertEqual(moving.fraction, 0.5)
+        XCTAssertFalse(moving.ready); XCTAssertFalse(moving.feedback)
+        XCTAssertTrue(update(96, 64).feedback)
+        XCTAssertFalse(update(95, 0, 0.1).ready)
+        XCTAssertFalse(update(97, 0, 0.2).feedback)
+        XCTAssertNil(update(100, 100, 0.3).candidate)
+        XCTAssertEqual(update(0, -120, 0.4).candidate, .grade(.easy))
+        XCTAssertFalse(update(0, -120, 0.4).feedback) // Direction changes do not repeatedly vibrate.
+        XCTAssertFalse(update(70, 0, 0.5).ready)
+        XCTAssertTrue(update(-100, 0, 0.6).feedback)
+        XCTAssertNil(gate.finish(id: id, revealed: true, x: 20, y: 0, now: now.addingTimeInterval(1)))
+        XCTAssertFalse(gate.gavePreparationFeedback)
+    }
+
+    func testSwipeProgressUsesGateAcceptanceAndNeverCommitsDuringDrag() {
+        var gate = ReviewSwipeGate()
+        let id = UUID(), now = Date(timeIntervalSince1970: 100)
+        gate.begin(id: id, revealed: false)
+        XCTAssertEqual(gate.update(id: id, revealed: false, x: -120, y: 0, now: now), .idle)
+        XCTAssertEqual(gate.update(id: id, revealed: false, x: 0, y: -120, now: now), .idle)
+        XCTAssertTrue(gate.update(id: id, revealed: false, x: 120, y: 0, now: now).ready)
+        XCTAssertEqual(gate.update(id: UUID(), revealed: false, x: 120, y: 0, now: now), .idle)
+        XCTAssertEqual(gate.update(id: id, revealed: true, x: 120, y: 0, now: now), .idle)
+        XCTAssertEqual(gate.update(id: id, revealed: false, x: 120, y: 0, now: now, enabled: false), .idle)
+        XCTAssertEqual(gate.update(id: id, revealed: false, x: .infinity, y: 0, now: now), .idle)
+        XCTAssertEqual(gate.finish(id: id, revealed: false, x: 120, y: 0, now: now), .reveal)
+        gate.begin(id: id, revealed: true)
+        XCTAssertEqual(gate.update(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(0.1)), .idle)
+        XCTAssertTrue(gate.update(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(0.61)).ready)
+        gate.invalidate()
+        XCTAssertEqual(gate.update(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(1)), .idle)
+        XCTAssertNil(gate.finish(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(1)))
+        gate.begin(id: id, revealed: true); gate.cancel()
+        XCTAssertEqual(gate.update(id: id, revealed: true, x: 120, y: 0, now: now.addingTimeInterval(2)), .idle)
+    }
+
     func calendar(_ zone: String = "Asia/Tokyo") -> Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: zone)!
