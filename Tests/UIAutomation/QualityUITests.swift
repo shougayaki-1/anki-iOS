@@ -1,6 +1,34 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testMemoryAnalysisOpensDistributionEvidence() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-new-review-due", "-study-test-shortcut", "progress"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["今日の記録"].waitForExistence(timeout: 15))
+        let link = app.buttons["openMemoryAnalysis"]
+        for _ in 0..<7 where !link.isHittable { app.swipeUp() }
+        XCTAssertTrue(link.waitForExistence(timeout: 15)); link.tap()
+        XCTAssertTrue(app.staticTexts["現在のカード（FSRS推定）"].waitForExistence(timeout: 15))
+        attach(app, name: "Issue101-memory-summary")
+        let bucket = app.buttons["memoryBucket-記憶の安定度（推定）-7–30日"]
+        for _ in 0..<4 where !bucket.isHittable { app.swipeUp() }
+        XCTAssertTrue(bucket.waitForExistence(timeout: 10))
+        attach(app, name: "Issue101-memory-distribution")
+        bucket.tap()
+        XCTAssertTrue(app.navigationBars["根拠のカード"].waitForExistence(timeout: 5))
+        attach(app, name: "Issue101-memory-evidence")
+        let card = app.buttons.containing(.staticText, identifier: "Long-term review").firstMatch
+        XCTAssertTrue(card.waitForExistence(timeout: 5)); card.tap()
+        XCTAssertTrue(app.staticTexts["Answer"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.navigationBars.buttons.firstMatch.tap()
+        let retention = app.staticTexts["実際の保持率（実測）"]
+        for _ in 0..<10 where !retention.isHittable { app.swipeUp() }
+        XCTAssertTrue(retention.waitForExistence(timeout: 5))
+        attach(app, name: "Issue101-observed-retention")
+    }
+
     func testEmptyLibraryStartsAddAndImportDirectly() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]

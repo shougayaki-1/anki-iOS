@@ -8,6 +8,10 @@ actor StatisticsReader {
     private let container: ModelContainer
     private struct DeckLink { let id: UUID; let parentID: UUID? }
     private struct PreparedCard {
+        let id: UUID
+        let title: String
+        let stability: Double
+        let difficulty: Double
         let deckID: UUID?
         let tagIDs: [UUID]
         let isSuspended: Bool
@@ -19,6 +23,7 @@ actor StatisticsReader {
         let cards: [PreparedCard]
         let decks: [DeckLink]
         let parameters: [Double]?
+        let targets: [UUID: Double]
         let cost: Int
     }
     private var cached: (revision: Int, material: Material)?
@@ -133,8 +138,23 @@ actor StatisticsReader {
                                                report: history))
             }
         }
-        let report = history.updatingCurrentCards(states, now: now, selectedDeckIDs: deckIDs,
+        var report = history.updatingCurrentCards(states, now: now, selectedDeckIDs: deckIDs,
                                                   selectedTagIDs: Set(scope.tagIDs))
+        func included(_ deckID: UUID?, _ tags: [UUID]) -> Bool {
+            (deckIDs == nil || deckID.map { deckIDs!.contains($0) } == true)
+                && Set(scope.tagIDs).isSubset(of: Set(tags))
+        }
+        let memoryCards = zip(material.cards, states).compactMap { card, state -> MemoryCard? in
+            guard included(card.deckID, card.tagIDs), !card.isSuspended, !card.state.isNew,
+                  let probability = state.retrievability else { return nil }
+            return MemoryCard(id: card.id, title: card.title, stability: card.stability,
+                              difficulty: card.difficulty, retrievability: probability)
+        }
+        let scopedLogs = material.logs.filter { included($0.deckID, $0.tagIDs) }
+        let targetDecks = Set(material.cards.filter { included($0.deckID, $0.tagIDs) && !$0.isSuspended }.compactMap(\.deckID))
+        report.memory = MemoryAnalysis.calculate(cards: memoryCards, logs: scopedLogs,
+            targets: targetDecks.compactMap { material.targets[$0] }, now: now,
+            calendar: calendar, startHour: startHour)
         try Task.checkCancellation()
         return report
     }
@@ -154,12 +174,15 @@ actor StatisticsReader {
         let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
         let noteIDByCardID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.noteID) })
 
+        let baseScheduler = try ReviewScheduler()
         let logs = try logRows.compactMap { row -> StatisticLog? in
             try Task.checkCancellation()
             guard let grade = ReviewGrade(rawValue: row.grade) else { return nil }
             let note = noteIDByCardID[row.cardID].flatMap { notesByID[$0] }
             return StatisticLog(cardID: row.cardID, date: row.reviewedAt, grade: grade,
-                                durationMs: row.durationMs, wasNew: row.wasNew,
+                                durationMs: row.durationMs,
+                                beforeState: try baseScheduler.summary(JSONDecoder().decode(SchedulerSnapshot.self, from: row.fsrsBefore)).state,
+                                sequence: row.sequence, wasNew: row.wasNew,
                                 deckID: note?.deckID, tagIDs: note?.tagIDs ?? [])
         }
         // Preserve the existing contract: an invalid persisted grade is a
@@ -167,7 +190,19 @@ actor StatisticsReader {
         guard logs.count == logRows.count else { throw StudyError.unsupportedContent }
 
         let extra = try context.fetch(FetchDescriptor<ExtraPreferences>()).first
-        let optimization = try extra.flatMap { try JSONDecoder().decode(StudyOptions.self, from: $0.payload).fsrsOptimization }
+        let options = try extra.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) }
+        let optimization = options?.fsrsOptimization
+        let globalTarget = try context.fetch(FetchDescriptor<StudyPreferences>()).first?.desiredRetention ?? 0.9
+        let parents = Dictionary(uniqueKeysWithValues: decks.map { ($0.id, $0.parentID) })
+        let overrides = options?.deckLearning ?? []
+        let targets = Dictionary(uniqueKeysWithValues: decks.map { deck in
+            var cursor: UUID? = deck.id, seen = Set<UUID>(), target = globalTarget
+            while let id = cursor, seen.insert(id).inserted {
+                if let value = overrides.first(where: { $0.deckID == id })?.retention { target = value; break }
+                cursor = parents[id] ?? nil
+            }
+            return (deck.id, target)
+        })
         let scheduler = try ReviewScheduler(parameters: optimization?.activeParameters)
         var cost = logs.reduce(0) { $0 + 256 + $1.tagIDs.count * 16 }
         let prepared: [PreparedCard] = try cards.map { card in
@@ -176,7 +211,10 @@ actor StatisticsReader {
             let snapshot = try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
             let state = try scheduler.predictionState(snapshot)
             cost += 512 + card.fsrsPayload.count + (note?.tagIDs.count ?? 0) * 16
-            return PreparedCard(deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
+            let summary = try scheduler.summary(snapshot)
+            let title = try note.map { try JSONDecoder().decode(TextContent.self, from: $0.contentPayload).question } ?? "カード"
+            cost += title.utf8.count
+            return PreparedCard(id: card.id, title: title, stability: summary.stability, difficulty: summary.difficulty, deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
                                 isSuspended: card.isSuspended, dueDate: card.dueDate, state: state)
         }
         #if DEBUG
@@ -186,7 +224,7 @@ actor StatisticsReader {
         cost += decks.count * 64
         return Material(logs: logs, cards: prepared,
                         decks: decks.map { DeckLink(id: $0.id, parentID: $0.parentID) },
-                        parameters: optimization?.activeParameters, cost: cost)
+                        parameters: optimization?.activeParameters, targets: targets, cost: cost)
     }
 }
 
