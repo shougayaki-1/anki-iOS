@@ -91,6 +91,11 @@ struct ReviewScheduler {
     struct PredictionState {
         fileprivate let card: Card
         var isNew: Bool { card.state.stringValue == "new" }
+        var state: String { card.state.stringValue }
+        var canRankReview: Bool {
+            state == "review" && card.stability.isFinite && card.stability > 0 &&
+                card.difficulty.isFinite && (1...10).contains(card.difficulty) && card.lastReview != nil
+        }
     }
     func predictionState(_ input: SchedulerSnapshot) throws -> PredictionState {
         PredictionState(card: try decode(input))

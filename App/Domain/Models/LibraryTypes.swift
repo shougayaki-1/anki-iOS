@@ -35,6 +35,8 @@ struct StudySessionProgressSnapshot: Codable, Equatable {
     var responseMode: SessionResponseMode? = nil
     // Display-only estimate; missing in sessions saved by older app versions.
     var initialEligibleCount: Int? = nil
+    var reviewOrderPolicy: ReviewOrderPolicy? = nil
+    var reviewOrder: [UUID]? = nil
 }
 
 enum SessionResponseMode: String, Codable, CaseIterable {

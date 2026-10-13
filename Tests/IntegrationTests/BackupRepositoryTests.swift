@@ -58,6 +58,12 @@ final class BackupRepositoryTests: XCTestCase {
         let marked = try XCTUnwrap(source.cards().first { $0.id != (try? source.session()?.cardID) })
         try source.setFlags(cardIDs: [marked.id], flag: .blue)
         try source.hideToday(cardID: marked.id, now: now)
+        try source.transaction {
+            var options = try source.options()
+            options.activeSessionProgress?.reviewOrderPolicy = .forgettingRisk
+            options.activeSessionProgress?.reviewOrder = try source.cards().map(\.id)
+            try source.writeOptionsInTransaction(options)
+        }
         let bytes = try await BackupService.export(repository: source, now: now, appVersion: "test")
         let backup = try BackupArchive.decode(bytes)
         let destinationRoot = root.appendingPathComponent("destination")
