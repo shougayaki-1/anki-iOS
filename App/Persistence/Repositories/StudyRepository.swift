@@ -32,7 +32,7 @@ final class StudyRepository {
     let context: ModelContext
     var calendar: Calendar
     var mediaStore: MediaStore
-    private var queueStates: [UUID: (payload: Data, state: String, prediction: ReviewScheduler.PredictionState?)] = [:]
+    private var queueStates: [UUID: (payload: Data, state: String, prediction: ReviewScheduler.PredictionState)] = [:]
     private(set) var queueStateDecodeCount = 0
     private(set) var reviewRankingFailureCount = 0
     #if DEBUG
@@ -475,14 +475,16 @@ final class StudyRepository {
         #endif
         // Compare persisted payloads rather than timestamps: Undo and rollback can
         // restore old timestamps. Keep only the current store's cards in the cache.
-        var states: [UUID: (payload: Data, state: String, prediction: ReviewScheduler.PredictionState?)] = [:]
+        var states: [UUID: (payload: Data, state: String, prediction: ReviewScheduler.PredictionState)] = [:]
         let result = try rows.map { card in
             let state: String
-            let prediction: ReviewScheduler.PredictionState?
+            let prediction: ReviewScheduler.PredictionState
             if let cached = queueStates[card.id], cached.payload == card.fsrsPayload { state = cached.state; prediction = cached.prediction }
             else {
-                prediction = try? scheduler.predictionState(snapshot(card))
-                state = prediction?.state ?? "review"
+                // Persisted state must decode successfully before any queue projection.
+                // Probability fallback belongs only to the ranking step.
+                prediction = try scheduler.predictionState(snapshot(card))
+                state = prediction.state
                 queueStateDecodeCount += 1
             }
             states[card.id] = (card.fsrsPayload, state, prediction)

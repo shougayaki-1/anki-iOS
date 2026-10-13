@@ -286,11 +286,11 @@ extension ReviewQueueTests {
         let logs = [QueueLog(cardID: UUID(), reviewedAt: now, wasNew: false, noteID: sibling.noteID)]
         let builder = ReviewQueueBuilder(shuffled: { $0 })
         var calculated: [UUID] = []
-        func queue(_ policy: ReviewOrderPolicy, order: [UUID]? = nil) -> [UUID] {
+        func queue(_ policy: ReviewOrderPolicy, order: [UUID]? = nil, failure: Double? = .nan) -> [UUID] {
             builder.queue(cards: cards, logs: logs, settings: StudySettings(), mode: .review,
                           touched: [], reviewStreak: 0, now: now, policy: policy, reviewOrder: order) { id in
                 calculated.append(id)
-                return id == older.id ? 0.9 : id == risky.id ? 0.1 : .nan
+                return id == older.id ? 0.9 : id == risky.id ? 0.1 : failure
             }
         }
         XCTAssertEqual(queue(.traditional), [short.id, older.id, invalid.id, risky.id])
@@ -298,6 +298,9 @@ extension ReviewQueueTests {
         let ranked = queue(.forgettingRisk)
         XCTAssertEqual(ranked, [short.id, risky.id, invalid.id, older.id])
         XCTAssertEqual(Set(calculated), Set([older.id, invalid.id, risky.id]))
+        for failure in [nil, .nan, .infinity, -0.1, 1.1] as [Double?] {
+            XCTAssertEqual(queue(.forgettingRisk, failure: failure), ranked)
+        }
         calculated = []
         XCTAssertEqual(queue(.forgettingRisk, order: ranked), ranked)
         XCTAssertTrue(calculated.isEmpty)

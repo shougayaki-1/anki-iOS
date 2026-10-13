@@ -2068,7 +2068,7 @@ extension StudyRepositoryTests {
         }
     }
 
-    func testRiskPolicyUsesFSRSProbabilityAndCorruptPayloadFallback() throws {
+    func testRiskPolicyUsesFSRSProbabilityAndUnrankablePredictionFallback() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         for index in 0..<3 { try repo.createNote(NoteInput(deckID: deck, question: "Q\(index)", answer: "A"), now: now) }
         let scheduler = try ReviewScheduler(), fresh = try scheduler.newCard(now: now)
@@ -2080,7 +2080,15 @@ extension StudyRepositoryTests {
         try repo.transaction {
             cards[0].fsrsPayload = try JSONEncoder().encode(strong); cards[0].dueDate = now
             cards[1].fsrsPayload = try JSONEncoder().encode(weak); cards[1].dueDate = now.addingTimeInterval(1)
-            cards[2].fsrsPayload = Data("broken".utf8); cards[2].dueDate = now.addingTimeInterval(2)
+            // A decodable review snapshot with no usable stability is not a
+            // decode failure: only risk ranking falls back to its due-order slot.
+            var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: strong.cardData) as? [String: Any])
+            raw["stability"] = 0
+            let unrankable = SchedulerSnapshot(schemaVersion: strong.schemaVersion,
+                algorithmVersion: strong.algorithmVersion, cardData: try JSONSerialization.data(withJSONObject: raw))
+            XCTAssertEqual(try scheduler.predictionState(unrankable).state, "review")
+            XCTAssertFalse(try scheduler.predictionState(unrankable).canRankReview)
+            cards[2].fsrsPayload = try JSONEncoder().encode(unrankable); cards[2].dueDate = now.addingTimeInterval(2)
         }
         XCTAssertLessThan(try scheduler.retrievability(weak, now: date), try scheduler.retrievability(strong, now: date))
         try repo.start(mode: .review, policy: .traditional, now: date)
@@ -2114,5 +2122,47 @@ extension StudyRepositoryTests {
         XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrder, [id])
         XCTAssertThrowsError(try repo.start(mode: .review, scope: scope, responseMode: .ordering, policy: .forgettingRisk, now: due))
         XCTAssertEqual(try repo.session()?.cardID, id)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testCorruptSnapshotThrowsForQueueHomeAndBothPoliciesWithoutChangingData() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A"), now: now)
+        let card = try XCTUnwrap(repo.cards().first)
+        let scheduler = try ReviewScheduler()
+        let valid = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now).after
+        try repo.transaction {
+            card.fsrsPayload = try JSONEncoder().encode(valid)
+            card.dueDate = try scheduler.summary(valid).dueDate
+        }
+        let date = card.dueDate.addingTimeInterval(1)
+        try repo.start(mode: .review, now: date)
+        let sessionID = try XCTUnwrap(repo.session()?.cardID)
+        let invalid = [
+            Data("broken".utf8),
+            try JSONEncoder().encode(SchedulerSnapshot(schemaVersion: 1, algorithmVersion: "FSRS-6", cardData: Data("broken".utf8))),
+            try JSONEncoder().encode(SchedulerSnapshot(schemaVersion: 999, algorithmVersion: "FSRS-6", cardData: valid.cardData))
+        ]
+        for payload in invalid {
+            try repo.transaction { card.fsrsPayload = payload }
+            let before = (card.id, card.fsrsPayload, card.dueDate, card.updatedAt)
+            // The warmed cache must not hide a newly corrupted persisted payload.
+            XCTAssertThrowsError(try repo.queueCards())
+            XCTAssertThrowsError(try repo.counts(now: date))
+            for policy in [ReviewOrderPolicy.traditional, .forgettingRisk] {
+                XCTAssertThrowsError(try repo.start(mode: .review, policy: policy, now: date))
+                XCTAssertEqual(try repo.session()?.cardID, sessionID)
+            }
+            XCTAssertEqual(card.id, before.0); XCTAssertEqual(card.fsrsPayload, before.1)
+            XCTAssertEqual(card.dueDate, before.2); XCTAssertEqual(card.updatedAt, before.3)
+            XCTAssertEqual(repo.reviewRankingFailureCount, 0)
+            XCTAssertTrue(try repo.logs().isEmpty)
+        }
+        try repo.transaction { card.fsrsPayload = try JSONEncoder().encode(valid) }
+        XCTAssertEqual(try repo.queueCards().first?.state, "review")
+        let decodes = repo.queueStateDecodeCount
+        _ = try repo.queueCards()
+        XCTAssertEqual(repo.queueStateDecodeCount, decodes)
     }
 }
