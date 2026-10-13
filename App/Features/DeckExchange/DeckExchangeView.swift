@@ -30,6 +30,7 @@ struct DeckExchangeView: View {
     @State private var exporting = false
     @State private var confirmation = false
     @State private var working = false
+    @State private var operationPhase: ImportOperationPhase?
     @State private var operation: Task<Void, Never>?
     @State private var failure: String?
     @State private var completion: DeckExchangeCompletion?
@@ -61,12 +62,6 @@ struct DeckExchangeView: View {
                     Text("基本・逆方向・穴埋めと、安全なフィールド参照のみの多フィールドテンプレートに対応。画像は問題面にJPEG/PNG1枚、音声は各面1本。文字装飾はプレーンテキストへ変わり、任意HTML/JS・画像遮蔽・動画・LaTeX・複数メディア等は未対応です。")
                     Text("AnkiのFSRS・予定・回答履歴は引き継げません。新規学習として開始します。未対応ノートと理由を表示し、対応するノートだけを確認してから追加します。")
                 }.font(.footnote)
-            }
-            if working {
-                Section {
-                    ProgressView("ファイルを検証しています…")
-                    Button("処理を取り消す") { operation?.cancel() }.accessibilityIdentifier("cancelDeckOperation")
-                }
             }
             if let ankiPreview {
                 Section("Ankiの移行結果") {
@@ -138,6 +133,14 @@ struct DeckExchangeView: View {
                 }
             }
         }
+        .disabled(working)
+        .navigationBarBackButtonHidden(working)
+        .interactiveDismissDisabled(working)
+        .overlay {
+            if let operationPhase {
+                ImportProcessingOverlay(phase: operationPhase, cancel: operationPhase.canCancel ? { operation?.cancel() } : nil)
+            }
+        }
         .navigationTitle("デッキファイル")
         .onAppear { if rootID == nil { rootID = store.decks.first?.id } }
         .onChange(of: rootID) { _, _ in clearPreview() }
@@ -155,13 +158,16 @@ struct DeckExchangeView: View {
         .fileImporter(isPresented: $importing, allowedContentTypes: [.studyDeck, .ankiPackage, .zip]) { outcome in
             switch outcome {
             case .failure(let error): if (error as NSError).code != NSUserCancelledError { failure = error.localizedDescription }
-            case .success(let url): run {
+            case .success(let url): run(phase: .reading) {
                 let value: ValidatedDeckPackage
                 if importingAnki {
                     let imported = try await AnkiImport.read(url)
                     try Task.checkCancellation()
                     value = imported.deck; ankiPreview = imported
                 } else { value = try await DeckExchange.read(url) }
+                try Task.checkCancellation()
+                operationPhase = .validating
+                await ImportOperationPhase.allowDisplay()
                 try Task.checkCancellation()
                 let summary = try store.repository.previewDeckImport(value)
                 selected = value; preview = summary; page = 0
@@ -180,15 +186,19 @@ struct DeckExchangeView: View {
         .confirmationDialog("新規カードとして取り込みますか？", isPresented: $confirmation, titleVisibility: .visible) {
             Button("取り込む") {
                 guard !working, completion == nil, let selected else { return }
-                run {
+                run(phase: .preparing) {
                     try Task.checkCancellation()
                     try await store.createRestorePoint("デッキ・APKGの取り込み")
                     try Task.checkCancellation()
+                    operationPhase = .saving
+                    await ImportOperationPhase.allowDisplay()
                     var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock())
                     receipt.skipped = ankiPreview?.skipped ?? []
                     receipt.warnings = ankiPreview?.warnings ?? []
                     var warning: String?
                     if receipt.createdNotes > 0 {
+                        operationPhase = .refreshing
+                        await ImportOperationPhase.allowDisplay()
                         do { try store.reload() }
                         catch { warning = "保存は完了しましたが、表示を更新できません。再取り込みせず、アプリを開き直してください。\n" + error.localizedDescription }
                         clearPreview()
@@ -202,18 +212,18 @@ struct DeckExchangeView: View {
             Button("閉じる", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
     }
-    private func run(_ action: @escaping @MainActor () async throws -> Void) {
+    private func run(phase: ImportOperationPhase, _ action: @escaping @MainActor () async throws -> Void) {
         guard !working else { return }
-        working = true; completion = nil
+        working = true; operationPhase = phase; completion = nil
         operation = Task { @MainActor in
-            defer { working = false }
-            do { try await action() } catch is CancellationError {} catch { failure = error.localizedDescription }
+            defer { working = false; operationPhase = nil }
+            do { await ImportOperationPhase.allowDisplay(); try await action() } catch is CancellationError {} catch { failure = error.localizedDescription }
         }
     }
     private func prepareExport() {
         guard let rootID else { return }
         clearPreview()
-        run {
+        run(phase: .exporting) {
             let bytes = try await DeckExchange.export(repository: store.repository, rootID: rootID)
             try Task.checkCancellation()
             let value = try await Task.detached(priority: .utility) { try DeckExchange.decode(bytes) }.value

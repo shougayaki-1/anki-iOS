@@ -2,6 +2,18 @@ import XCTest
 @testable import AnkiIOS
 
 final class StoredZIPTests: XCTestCase {
+    func testImportProcessingSeparatesCancelableReadingFromCommit() {
+        for phase in [ImportOperationPhase.reading, .validating, .exporting] {
+            XCTAssertTrue(phase.canCancel)
+        }
+        for phase in [ImportOperationPhase.preparing, .saving, .refreshing] {
+            XCTAssertFalse(phase.canCancel)
+            XCTAssertEqual(phase.title, "取り込み中")
+        }
+        XCTAssertNotEqual(ImportOperationPhase.validating.message, ImportOperationPhase.saving.message)
+        XCTAssertNotEqual(ImportOperationPhase.saving.message, ImportOperationPhase.refreshing.message)
+    }
+
     func testDeckCompletionDistinguishesCompletePartialEmptyAndExport() {
         var receipt = DeckImportReceipt(rootDeckID: UUID(), destinationName: "取込先", createdNotes: 2, createdCards: 4, duplicateNotes: 0)
         let complete = DeckExchangeCompletion.imported(receipt, reloadWarning: nil)

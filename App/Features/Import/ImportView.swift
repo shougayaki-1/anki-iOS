@@ -36,6 +36,7 @@ struct ImportView: View {
     @State private var result: ImportResult?
     @State private var reloadWarning: String?
     @State private var saving = false
+    @State private var operationPhase: ImportOperationPhase?
 
     init(store: StudyStore, initialText: String = "", sourceName: String = "貼り付け") {
         self.store = store
@@ -174,11 +175,11 @@ struct ImportView: View {
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: text) { _, _ in refreshColumnCount() }
             .onChange(of: format) { _, _ in refreshColumnCount() }
-            .disabled(saving)
-            .interactiveDismissDisabled(saving)
+            .disabled(saving || readingFile)
+            .interactiveDismissDisabled(saving || readingFile)
             .navigationTitle("一括登録")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving).accessibilityIdentifier("closeImport") } }
+                ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving || readingFile).accessibilityIdentifier("closeImport") } }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focused = false } }
             }
             .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText, .zip]) { result in
@@ -198,8 +199,13 @@ struct ImportView: View {
             }
             .onAppear { acceptingFiles = true }
             .onDisappear { acceptingFiles = false; fileOperation?.cancel(); fileGeneration = UUID(); readingFile = false }
-            .overlay { if readingFile { ProgressView("ファイルを読み込んでいます")
-                .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)) } }
+            .overlay {
+                if let phase = operationPhase ?? (readingFile ? .reading : nil) {
+                    ImportProcessingOverlay(phase: phase, cancel: readingFile ? {
+                        fileOperation?.cancel(); fileGeneration = UUID(); readingFile = false
+                    } : nil)
+                }
+            }
             .overlay { if dropTarget { RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }
             .confirmationDialog("入力中の内容をファイルで置き換えますか？", isPresented: $replaceInput, titleVisibility: .visible) {
                 Button("ファイルの内容に置き換える") { applyPendingFile() }
@@ -294,18 +300,24 @@ struct ImportView: View {
     private func commit() {
         guard !saving, result == nil else { return }
         saving = true
+        operationPhase = .preparing
         reloadWarning = nil
         let rows = rows, deckID = deckID, kind = kind, tagText = tagText, action = action, resetHistory = resetHistory, source = source
         Task {
-            defer { saving = false }
+            defer { saving = false; operationPhase = nil }
             do {
+                await ImportOperationPhase.allowDisplay()
                 try await store.createRestorePoint("テキスト・CSVの取り込み")
+                operationPhase = .saving
+                await ImportOperationPhase.allowDisplay()
                 let saved = try store.repository.importRows(rows, deckID: deckID, kind: kind,
                                                         tagNames: tagText.components(separatedBy: ","), action: action,
                                                         resetHistory: resetHistory, source: source, now: store.clock())
-                result = saved
+                operationPhase = .refreshing
+                await ImportOperationPhase.allowDisplay()
                 do { try store.reload() }
                 catch { reloadWarning = "保存は完了しましたが、表示を更新できません。再取り込みせず、閉じてアプリを開き直してください。\n" + error.localizedDescription }
+                result = saved
                 if saved.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
             } catch { failure = "保存されていません。入力を確認して再試行してください。\n" + error.localizedDescription }
         }
@@ -327,6 +339,7 @@ struct ImageZIPImportView: View {
     @State private var result: ImportResult?
     @State private var reloadWarning: String?
     @State private var saving = false
+    @State private var operationPhase: ImportOperationPhase?
     var body: some View {
         NavigationStack {
             Group {
@@ -385,6 +398,7 @@ struct ImageZIPImportView: View {
             .onChange(of: package.rows.map { $0.question + "\u{1f}" + $0.answer }) { refreshDuplicates() }
             .disabled(saving)
             .interactiveDismissDisabled(saving)
+            .overlay { if let operationPhase { ImportProcessingOverlay(phase: operationPhase) } }
             .navigationTitle("画像ZIPの取り込み")
             .toolbar { ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving).accessibilityIdentifier("closeImageImport") } } }
             .confirmationDialog("選択した行を保存しますか？", isPresented: $confirming, titleVisibility: .visible) {
@@ -398,16 +412,22 @@ struct ImageZIPImportView: View {
     private func commit() {
         guard !saving, result == nil else { return }
         saving = true
+        operationPhase = .preparing
         reloadWarning = nil
         let package = package, deckID = deckID, action = action
         Task {
-            defer { saving = false }
+            defer { saving = false; operationPhase = nil }
             do {
+                await ImportOperationPhase.allowDisplay()
                 try await store.createRestorePoint("画像ZIPの取り込み")
+                operationPhase = .saving
+                await ImportOperationPhase.allowDisplay()
                 let saved = try store.repository.importImagePackage(package, deckID: deckID, action: action, now: store.clock())
-                result = saved
+                operationPhase = .refreshing
+                await ImportOperationPhase.allowDisplay()
                 do { try store.reload() }
                 catch { reloadWarning = "保存は完了しましたが、表示を更新できません。再取り込みせず、閉じてアプリを開き直してください。\n" + error.localizedDescription }
+                result = saved
                 if saved.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
             } catch { failure = "保存されていません。入力を確認して再試行してください。\n" + error.localizedDescription }
         }
@@ -553,5 +573,65 @@ struct ImportCompletionHeader: View {
             Text(title).font(.title2.bold()).accessibilityIdentifier("importCompletionTitle")
         }
         .onAppear { appeared = true }
+    }
+}
+
+/// Presentation phases describe actual operations; no estimated percentage is shown.
+enum ImportOperationPhase: Equatable {
+    case reading, validating, preparing, saving, refreshing, exporting
+
+    var title: String {
+        switch self {
+        case .reading, .validating: return "内容を確認中"
+        case .exporting: return "書き出し準備中"
+        default: return "取り込み中"
+        }
+    }
+    var message: String {
+        switch self {
+        case .reading: return "ファイルを読み込んでいます…"
+        case .validating: return "内容を確認しています…"
+        case .preparing: return "復元ポイントを作成しています…"
+        case .saving: return "カード・デッキを保存しています…"
+        case .refreshing: return "表示を更新しています…"
+        case .exporting: return "共有ファイルを準備しています…"
+        }
+    }
+    var canCancel: Bool { self == .reading || self == .validating || self == .exporting }
+
+    // Give SwiftUI a render opportunity before entering synchronous repository work.
+    // This does not move SwiftData objects across actors or change transaction boundaries.
+    static func allowDisplay() async {
+        try? await Task.sleep(for: .milliseconds(30))
+    }
+}
+
+struct ImportProcessingOverlay: View {
+    let phase: ImportOperationPhase
+    var cancel: (() -> Void)? = nil
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.12).ignoresSafeArea()
+            VStack(spacing: 16) {
+                ProgressView().controlSize(.large)
+                Text(phase.title).font(.headline)
+                Text(phase.message).font(.subheadline)
+                if phase.canCancel, let cancel {
+                    Button("処理を取り消す", action: cancel)
+                        .accessibilityIdentifier("cancelImportOperation")
+                } else {
+                    Text("完了までお待ちください").font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            .multilineTextAlignment(.center).padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(24)
+            .accessibilityIdentifier("importProcessingOverlay")
+        }
+        .onAppear { announce() }
+        .onChange(of: phase) { _, _ in announce() }
+    }
+    private func announce() {
+        UIAccessibility.post(notification: .announcement, argument: phase.title + "。" + phase.message)
     }
 }
