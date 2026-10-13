@@ -10,7 +10,12 @@ enum HapticsMode: String, Codable, CaseIterable {
 
 @MainActor
 final class HapticsService {
-    enum Event { case reveal, grade, undo, goal, orderingCorrect, orderingIncorrect, noteSaved, widgetRefreshRequest, backupCompleted, importCompleted }
+    enum Event { case swipeReady, reveal, grade, undo, goal, orderingCorrect, orderingIncorrect, noteSaved, widgetRefreshRequest, backupCompleted, importCompleted }
+    private let selection = UISelectionFeedbackGenerator()
+    func prepareSwipe(mode: HapticsMode) {
+        guard mode != .off, UIApplication.shared.applicationState == .active else { return }
+        selection.prepare()
+    }
     private var engine: CHHapticEngine?
     func play(_ event: Event, mode: HapticsMode) {
         guard mode != .off, UIApplication.shared.applicationState == .active else { return }
@@ -29,6 +34,7 @@ final class HapticsService {
             } catch { engine = nil }
         }
         switch event {
+        case .swipeReady: selection.selectionChanged()
         case .reveal: UIImpactFeedbackGenerator(style: .soft).impactOccurred()
         case .grade: UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .undo, .widgetRefreshRequest: UISelectionFeedbackGenerator().selectionChanged()

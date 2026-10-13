@@ -1028,27 +1028,18 @@ final class StudyUITests: XCTestCase {
         app.terminate(); app.launch()
         app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap()
         let pad = app.otherElements["reviewSwipePad"]
+        let swipeToggle = app.buttons["reviewSwipeToggle"]
+        XCTAssertTrue(swipeToggle.isHittable)
+        XCTAssertFalse(pad.exists)
+        swipeToggle.tap()
         func visiblePad() {
-            for _ in 0..<8 {
-                // safeAreaInset changes visible content, but XCTest still reports
-                // the ScrollView's frame as the whole screen. Use fixed controls
-                // to determine the actual viewport rather than that frame.
-                let progress = app.progressIndicators["sessionProgressBar"]
-                let top = max(app.navigationBars.firstMatch.frame.maxY,
-                              progress.exists ? progress.frame.maxY + 12 : 0)
-                let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
-                let bottom = footer.frame.minY - 12
-                if pad.exists && pad.frame.minY >= top && pad.frame.maxY <= bottom { break }
-                // Scroll on ordinary text, outside the dedicated swipe pad.
-                // The pad intentionally reserves vertical drags for grading.
-                let towardTop = !pad.exists || pad.frame.minY >= top
-                let start = towardTop ? min(bottom - 20, pad.exists ? pad.frame.minY - 20 : bottom - 20)
-                    : max(top + 20, pad.frame.maxY + 20)
-                let end = towardTop ? top + 20 : bottom - 20
-                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: start / app.frame.height))
-                    .press(forDuration: 0.01, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: end / app.frame.height)))
-            }
             XCTAssertTrue(pad.isHittable)
+            let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
+            XCTAssertGreaterThanOrEqual(pad.frame.minY, app.navigationBars.firstMatch.frame.maxY)
+            XCTAssertLessThanOrEqual(pad.frame.maxY, footer.frame.minY)
+            // From the center, every direction must allow the unchanged 96pt threshold.
+            XCTAssertGreaterThanOrEqual(pad.frame.height / 2, 120)
+            XCTAssertGreaterThanOrEqual(pad.frame.width / 2, 120)
         }
         func swipe(_ x: CGFloat, _ y: CGFloat) {
             visiblePad()

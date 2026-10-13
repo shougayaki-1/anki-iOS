@@ -420,7 +420,7 @@ final class StudyStore {
     func resume() {
         if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
     }
-    func grade(_ grade: ReviewGrade) {
+    func grade(_ grade: ReviewGrade, swipePrepared: Bool = false) {
         let interval = PerformanceProbe.begin("Store.grade")
         defer { PerformanceProbe.end(interval) }
         guard flushTypedDraft() else { return }
@@ -430,7 +430,9 @@ final class StudyStore {
         do { try refreshStudy() }
         catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
         let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
-        haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
+        if finishedSet || !swipePrepared {
+            haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
+        }
     }
     func undo() {
         let interval = PerformanceProbe.begin("Store.undo")
@@ -442,7 +444,7 @@ final class StudyStore {
         catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
         haptics.play(.undo, mode: settings.hapticsMode)
     }
-    func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil) {
+    func draft(mode: ResponseMode? = nil, text: String? = nil, revealed: Bool? = nil, swipePrepared: Bool = false) {
         if let text, mode == nil, revealed == nil {
             bufferTypedDraft(text)
             return
@@ -459,7 +461,7 @@ final class StudyStore {
                                            canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable,
                                            emptyState: old.emptyState, sessionProgress: old.sessionProgress)
             }
-            if revealed == true && !wasRevealed { haptics.play(.reveal, mode: settings.hapticsMode) }
+            if revealed == true && !wasRevealed && !swipePrepared { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
     }
     private func bufferTypedDraft(_ text: String) {
