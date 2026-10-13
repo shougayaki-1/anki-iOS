@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import SwiftUI
 @testable import AnkiIOS
 
 @MainActor
@@ -882,6 +883,57 @@ extension LibraryRepositoryTests {
 }
 
 extension LibraryRepositoryTests {
+    func testLibraryRowEqualityTracksLocalPresentationAndActionTargets() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true),
+            clock: { self.now }, mediaStore: MediaStore(root: root.appendingPathComponent("Media")),
+            storageLocation: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")))
+        let deckID = try store.repository.decks()[0].id
+        let card = LibraryCard(id: UUID(), noteID: UUID(), deckID: deckID,
+            variantKey: "basic", isSuspended: false, createdAt: now)
+        func noteView(question: String = "Q", flag: CardFlag? = nil,
+                      selected: Bool = false, partial: Bool = false, editing: Bool = false,
+                      searching: Bool = false, target: LibraryCard? = nil,
+                      siblings: Set<UUID>? = nil, depth: Int = 1) -> LibraryTreeRowView {
+            let target = target ?? card
+            var index = LibraryIndex()
+            index.rowContents[target.id] = LibraryRowContent(question: question, kindTitle: "Basic",
+                siblingCount: 2, isSuspended: false)
+            let row = LibraryTreeRow(deck: nil,
+                note: LibraryNoteRow(card: target, cardIDs: siblings ?? [target.id]),
+                depth: depth, cardCount: 0, expanded: false, expandable: false)
+            return LibraryTreeRowView(row: row, store: store,
+                cardRow: LibraryCardRow(card: target, index: index, flag: flag),
+                isEditing: editing, hasSearch: searching, isSelected: selected,
+                isPartiallySelected: partial, savedExpansion: .constant(""), selection: .constant([]))
+        }
+        let original = noteView()
+        XCTAssertEqual(original, noteView(), "Rebuilt input with the same presentation can skip body")
+        XCTAssertNotEqual(original, noteView(question: "Edited"))
+        XCTAssertNotEqual(original, noteView(flag: .red))
+        XCTAssertNotEqual(original, noteView(selected: true))
+        XCTAssertNotEqual(original, noteView(partial: true))
+        XCTAssertNotEqual(original, noteView(editing: true))
+        XCTAssertNotEqual(original, noteView(searching: true))
+        XCTAssertNotEqual(original, noteView(depth: 2))
+        XCTAssertNotEqual(original, noteView(siblings: [card.id, UUID()]))
+        let replacement = LibraryCard(id: UUID(), noteID: card.noteID, deckID: deckID,
+            variantKey: "reverse", isSuspended: false, createdAt: now)
+        XCTAssertNotEqual(original, noteView(target: replacement), "Detail navigation must use the new representative card")
+        func deckView(name: String = "Deck", count: Int = 2, expanded: Bool = false) -> LibraryTreeRowView {
+            LibraryTreeRowView(row: LibraryTreeRow(deck: DeckTreeNode(id: deckID, name: name, children: []),
+                note: nil, depth: 0, cardCount: count, expanded: expanded, expandable: true),
+                store: store, cardRow: nil, isEditing: false, hasSearch: false,
+                isSelected: false, isPartiallySelected: false,
+                savedExpansion: .constant(""), selection: .constant([]))
+        }
+        XCTAssertEqual(deckView(), deckView())
+        XCTAssertNotEqual(deckView(), deckView(name: "Renamed"))
+        XCTAssertNotEqual(deckView(), deckView(count: 3))
+        XCTAssertNotEqual(deckView(), deckView(expanded: true))
+    }
+
     func testLibraryActorProjectionPreservesScopeGroupingAndExpansion() async throws {
         let repo = try fixture()
         let root = try repo.decks()[0].id
