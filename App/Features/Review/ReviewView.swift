@@ -30,6 +30,8 @@ struct ReviewView: View {
     @State private var confirmingEdit = false
     @State private var autoSpeechPaused = false
     @State private var swipeGate = ReviewSwipeGate()
+    @State private var swipeProgress = ReviewSwipeProgress.idle
+    @State private var swipeTranslation = CGSize.zero
     @State private var swipePanelExpanded = false
     @State private var swipePadFrame = CGRect.zero
     @GestureState private var swiping = false
@@ -197,7 +199,7 @@ struct ReviewView: View {
                         if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
                             Button {
                                 typingFocused = false
-                                swipeGate.invalidate()
+                                invalidateSwipe()
                                 swipePanelExpanded.toggle()
                             } label: {
                                 HStack {
@@ -242,7 +244,7 @@ struct ReviewView: View {
                     .background { ReviewFixedAreaGestureShield() }
                     .overlay(alignment: .top) { Divider() }
                 } else if let review = store.review, review.card == nil {
-                    Button { store.completeSession() } label: {
+                    Button { invalidateSwipe(); store.completeSession() } label: {
                         Text(review.emptyState?.reason == .waiting || review.sessionProgress.map { $0.limit > 0 && !$0.isComplete } == true ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
                             .font(.headline).multilineTextAlignment(.center)
                             .padding(.vertical, 8)
@@ -259,7 +261,7 @@ struct ReviewView: View {
             }
             .scrollDisabled(swiping)
             .onChange(of: typingFocused) { _, focused in
-                if focused { swipePanelExpanded = false; swipeGate.invalidate() }
+                if focused { swipePanelExpanded = false; invalidateSwipe() }
             }
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
@@ -267,6 +269,7 @@ struct ReviewView: View {
             .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active {
+                    invalidateSwipe()
                     speechPlayer.stop()
                     if phase == .background { pronunciation.discard() }
                     else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
@@ -274,19 +277,32 @@ struct ReviewView: View {
                 else { speechEventChanged(speechEvent) }
             }
             .onChange(of: store.showingReview) { _, showing in
-                if !showing { clearWhiteboard(); pronunciation.discard() }
+                if !showing { invalidateSwipe(); clearWhiteboard(); pronunciation.discard() }
             }
-            .onChange(of: voiceOver) { _, enabled in if enabled { speechPlayer.stop() } }
+            .onChange(of: voiceOver) { _, enabled in if enabled { invalidateSwipe(); speechPlayer.stop() } }
+            .onChange(of: store.settings.reviewAppearance.gesturesEnabled) { _, _ in invalidateSwipe() }
+            .onChange(of: store.review?.responseMode) { _, _ in invalidateSwipe() }
+            .onChange(of: store.failure) { _, failure in if failure != nil { invalidateSwipe() } }
+            .onChange(of: swiping) { _, active in
+                if !active {
+                    // GestureState can reset before onEnded. Let that callback commit first;
+                    // an actual recognizer cancellation still clears on the next actor turn.
+                    Task { @MainActor in
+                        await Task.yield()
+                        if !swiping { cancelSwipe() }
+                    }
+                }
+            }
             .onChange(of: store.review?.answerRevealed) { _, revealed in
-                swipeGate.invalidate()
+                invalidateSwipe()
                 if revealed == true { typingFocused = false; readingFocus = .answer }
             }
             .onChange(of: store.review?.card?.cardID) { _, _ in
                 clearWhiteboard()
-                swipeGate.invalidate(); readingFocus = .question
+                invalidateSwipe(); readingFocus = .question
             }
             .onDisappear {
-                swipeGate.cancel()
+                cancelSwipe()
                 speechPlayer.stop()
                 pronunciation.discard()
                 lastSpeechEvent = nil
@@ -311,7 +327,7 @@ struct ReviewView: View {
                 guard editingCard == nil, !confirmingEdit else { return }
                 typingFocused = false
                 speechPlayer.stop()
-                swipeGate.cancel()
+                cancelSwipe()
                 if pronunciation.phase == .requestingPermission { pronunciation.discard() }
                 else { pronunciation.stopRecording(); pronunciation.stopPlayback() }
                 whiteboardPresented = true
@@ -332,17 +348,17 @@ struct ReviewView: View {
                                     .disabled(card.flag == nil)
                             }
                             Button("今日は表示しない", systemImage: "clock") {
-                                speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
+                                speechPlayer.stop(); pronunciation.discard(); invalidateSwipe(); typingFocused = false
                                 store.perform { try store.repository.hideToday(cardID: card.cardID, now: store.clock()) }
                             }
                             Button("無期限で停止", systemImage: "pause.circle") {
-                                speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
+                                speechPlayer.stop(); pronunciation.discard(); invalidateSwipe(); typingFocused = false
                                 store.perform { try store.repository.setSuspended(cardID: card.cardID, value: true, now: store.clock()) }
                             }
                             if let flag = card.flag { Label("フラグ: " + flag.title, systemImage: "flag.fill") }
                         }
                         Button("カードを編集", systemImage: "pencil") {
-                            speechPlayer.stop(); pronunciation.discard(); swipeGate.invalidate(); typingFocused = false
+                            speechPlayer.stop(); pronunciation.discard(); invalidateSwipe(); typingFocused = false
                             if store.review?.answerRevealed == true { openEditor() }
                             else { confirmingEdit = true }
                         }.disabled(store.review?.card == nil || whiteboardPresented || editingCard != nil)
@@ -358,14 +374,14 @@ struct ReviewView: View {
                         speechPlayer.stop()
                         pronunciation.discard()
                         clearWhiteboard()
-                        store.pause()
+                        invalidateSwipe(); store.pause()
                     }
                         .keyboardShortcut(.escape, modifiers: [])
                         .accessibilityIdentifier("pauseStudy")
                         .accessibilityHint("学習を中断し、セッションを保存してホームへ戻ります")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Undo") { speechPlayer.stop(); pronunciation.discard(); clearWhiteboard(); store.undo() }
+                    Button("Undo") { invalidateSwipe(); speechPlayer.stop(); pronunciation.discard(); clearWhiteboard(); store.undo() }
                         .keyboardShortcut("z", modifiers: .command)
                         .disabled(store.review?.canUndo != true).accessibilityIdentifier("undoReview")
                         .accessibilityLabel("直前の評価を取り消す")
@@ -611,21 +627,31 @@ struct ReviewView: View {
     }
     private func swipePad(_ review: ReviewPresentation, item: NoteItem) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: "hand.draw").accessibilityHidden(true)
-            Text("スワイプ操作").font(.headline)
+            Image(systemName: swipeProgress.ready ? "checkmark.circle.fill" : (swipeProgress.candidate?.symbol ?? "hand.draw"))
+                .font(.title2)
+                .foregroundStyle(swipeProgress.ready ? Color.accentColor : Color.secondary)
+                .offset(x: motionReduced ? 0 : min(max(swipeTranslation.width * 0.2, -24), 24),
+                        y: motionReduced ? 0 : min(max(swipeTranslation.height * 0.2, -24), 24))
+                .accessibilityHidden(true)
+            Text(swipeProgress.candidate.map { swipeProgress.ready ? "離すと\($0.title)" : "移動中：\($0.title)" } ?? "スワイプ操作")
+                .font(.headline)
+            ProgressView(value: swipeProgress.fraction)
+                .tint(swipeProgress.ready ? Color.accentColor : Color.secondary)
+                .frame(maxWidth: 180)
             Text(review.answerRevealed ? "← Again　↓ Hard\n→ Good　↑ Easy" : "右へスワイプして答えを表示")
                 .font(.body).multilineTextAlignment(.center)
-            Text("この領域で大きく動かして指を離します。戻すとキャンセルできます。")
+            Text("この領域で指を離します。戻すとキャンセルできます。")
                 .font(.footnote).multilineTextAlignment(.center)
         }
         .padding(16).frame(maxWidth: .infinity, minHeight: 260)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 16))
         .background {
             GeometryReader { proxy in
-                Color.clear.preference(key: ReviewSwipePadFrameKey.self, value: proxy.frame(in: .global))
+                Color.clear
+                    .onAppear { swipePadFrame = proxy.frame(in: .global) }
+                    .onChange(of: proxy.frame(in: .global)) { _, frame in swipePadFrame = frame }
             }
         }
-        .onPreferenceChange(ReviewSwipePadFrameKey.self) { swipePadFrame = $0 }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore).accessibilityLabel("スワイプ操作領域")
         .accessibilityIdentifier("reviewSwipePad")
@@ -634,22 +660,41 @@ struct ReviewView: View {
                 active = swipePadFrame.contains(value.startLocation)
             }
             .onChanged { value in
-                guard swipePadFrame.contains(value.startLocation), !voiceOver, imageAvailable(item) else { return }
+                guard swipePadFrame.contains(value.startLocation), swipePadFrame.contains(value.location), swipeEnabled, imageAvailable(item) else {
+                    invalidateSwipe(); return
+                }
                 swipeGate.begin(id: item.cardID, revealed: review.answerRevealed)
+                if swipeTranslation == .zero { store.haptics.prepareSwipe(mode: store.settings.hapticsMode) }
+                swipeTranslation = value.translation
+                swipeProgress = swipeGate.update(id: item.cardID, revealed: review.answerRevealed,
+                    x: Double(value.translation.width), y: Double(value.translation.height), now: Date(),
+                    enabled: swipePadFrame.contains(value.location))
+                if swipeProgress.feedback { store.haptics.play(.swipeReady, mode: store.settings.hapticsMode) }
             }
             .onEnded { value in
-                guard swipePadFrame.contains(value.startLocation), !voiceOver, imageAvailable(item),
-                      let current = store.review, let card = current.card else {
-                    swipeGate.cancel(); return
-                }
+                defer { cancelSwipe() }
+                guard swipePadFrame.contains(value.startLocation), swipePadFrame.contains(value.location),
+                      swipeEnabled, imageAvailable(item), let current = store.review, let card = current.card else { return }
+                let prepared = swipeGate.gavePreparationFeedback
                 guard let action = swipeGate.finish(id: card.cardID, revealed: current.answerRevealed,
                                                     x: Double(value.translation.width), y: Double(value.translation.height), now: Date()) else { return }
                 typingFocused = false
                 switch action {
-                case .reveal: store.draft(revealed: true)
-                case .grade(let grade): pronunciation.discard(); store.grade(grade)
+                case .reveal: store.draft(revealed: true, swipePrepared: prepared)
+                case .grade(let grade): pronunciation.discard(); store.grade(grade, swipePrepared: prepared)
                 }
             })
+    }
+
+    private var swipeEnabled: Bool {
+        store.settings.reviewAppearance.gesturesEnabled && !voiceOver && scenePhase == .active &&
+        store.showingReview && store.failure == nil && !whiteboardPresented && editingCard == nil && !confirmingEdit
+    }
+    private func invalidateSwipe() {
+        swipeGate.invalidate(); swipeProgress = .idle; swipeTranslation = .zero
+    }
+    private func cancelSwipe() {
+        swipeGate.cancel(); swipeProgress = .idle; swipeTranslation = .zero
     }
 
     private func canUse(_ mode: ResponseMode, review: ReviewPresentation) -> Bool {
@@ -706,13 +751,6 @@ struct ReviewView: View {
 
 
 
-private struct ReviewSwipePadFrameKey: PreferenceKey {
-    static let defaultValue = CGRect.zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) { value = nextValue() }
-}
-
-// Gaps and padding in fixed controls must not forward a drag to content
-// underneath them. The background receives those gestures; buttons stay above it.
 private struct ReviewFixedAreaGestureShield: View {
     var body: some View {
         Color.clear.contentShape(Rectangle())

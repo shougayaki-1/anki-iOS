@@ -73,6 +73,33 @@ final class StudyRepositoryTests: XCTestCase {
         print("TYPED_DRAFT characters=100 old_saves=\(oldSaves) new_saves=\(saves) old_input_ms=\(baselineMs) new_input_ms=\(bufferedMs) debounce_ms=600")
     }
 
+    func testPreparedSwipeKeepsRevealGradeFailureAndUndoSemantics() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try create(store.repository)
+        store.start(.new)
+        let id = try XCTUnwrap(store.review?.card?.cardID)
+        let before = try store.repository.card(id)?.fsrsPayload
+        store.repository.save = { _ in throw Failure.save }
+        store.draft(revealed: true, swipePrepared: true)
+        XCTAssertFalse(store.review?.answerRevealed == true)
+        XCTAssertNotNil(store.failure)
+        store.repository.save = { try $0.save() }
+        store.draft(revealed: true, swipePrepared: true)
+        XCTAssertTrue(store.review?.answerRevealed == true)
+        store.repository.save = { _ in throw Failure.save }
+        store.grade(.good, swipePrepared: true)
+        XCTAssertEqual(store.review?.card?.cardID, id)
+        XCTAssertEqual(try store.repository.card(id)?.fsrsPayload, before)
+        XCTAssertTrue(try store.repository.logs().isEmpty)
+        store.repository.save = { try $0.save() }
+        store.grade(.good, swipePrepared: true)
+        XCTAssertEqual(try store.repository.logs().count, 1)
+        store.undo()
+        XCTAssertEqual(store.review?.card?.cardID, id)
+        XCTAssertEqual(try store.repository.card(id)?.fsrsPayload, before)
+        XCTAssertTrue(try store.repository.logs().isEmpty)
+    }
+
     func testTypedDraftFailureKeepsInputBlocksGradeAndRetries() throws {
         let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
         try create(store.repository, mode: .typing)

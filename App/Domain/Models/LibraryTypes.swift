@@ -263,32 +263,91 @@ enum ReviewImageDisplay: String, Codable, CaseIterable {
 
 enum ReviewSwipeAction: Equatable {
     case reveal, grade(ReviewGrade)
-    static func decide(x: Double, y: Double, revealed: Bool) -> Self? {
-        guard x.isFinite, y.isFinite else { return nil }
-        if abs(x) >= 96 && abs(x) >= abs(y) * 1.5 {
+    static let distance = 96.0
+    static let dominance = 1.5
+    var title: String {
+        switch self {
+        case .reveal: return "答えを表示"
+        case .grade(.again): return "Again"
+        case .grade(.hard): return "Hard"
+        case .grade(.good): return "Good"
+        case .grade(.easy): return "Easy"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .reveal, .grade(.good): return "arrow.right"
+        case .grade(.again): return "arrow.left"
+        case .grade(.hard): return "arrow.down"
+        case .grade(.easy): return "arrow.up"
+        }
+    }
+    static func candidate(x: Double, y: Double, revealed: Bool) -> Self? {
+        guard x.isFinite, y.isFinite, max(abs(x), abs(y)) > 0 else { return nil }
+        if abs(x) >= abs(y) * dominance {
             if !revealed { return x > 0 ? .reveal : nil }
             return .grade(x > 0 ? .good : .again)
         }
-        if revealed && abs(y) >= 96 && abs(y) >= abs(x) * 1.5 {
+        if revealed && abs(y) >= abs(x) * dominance {
             return .grade(y > 0 ? .hard : .easy)
         }
         return nil
     }
+    static func decide(x: Double, y: Double, revealed: Bool) -> Self? {
+        guard max(abs(x), abs(y)) >= distance else { return nil }
+        return candidate(x: x, y: y, revealed: revealed)
+    }
+}
+
+struct ReviewSwipeProgress: Equatable {
+    var candidate: ReviewSwipeAction?
+    var fraction = 0.0
+    var ready = false
+    var feedback = false
+    static let idle = Self()
 }
 
 struct ReviewSwipeGate {
     private var start: (id: UUID, revealed: Bool)?
     private var lastAction: Date?
     private var invalidated = false
+    private var feedbackArmed = true
+    private var lastFeedback: Date?
+    private(set) var gavePreparationFeedback = false
     mutating func begin(id: UUID, revealed: Bool) {
         if start == nil && !invalidated { start = (id, revealed) }
     }
-    mutating func cancel() { start = nil; invalidated = false }
+    mutating func cancel() {
+        start = nil; invalidated = false; feedbackArmed = true
+        gavePreparationFeedback = false; lastFeedback = nil
+    }
     mutating func invalidate() { if start != nil { invalidated = true } }
-    mutating func finish(id: UUID, revealed: Bool, x: Double, y: Double, now: Date) -> ReviewSwipeAction? {
-        defer { start = nil; invalidated = false }
-        guard !invalidated, let start, start.id == id, start.revealed == revealed,
-              lastAction == nil || now.timeIntervalSince(lastAction!) >= 0.6,
+    private func accepts(id: UUID, revealed: Bool, now: Date, enabled: Bool) -> Bool {
+        enabled && !invalidated && start?.id == id && start?.revealed == revealed &&
+        (lastAction == nil || now.timeIntervalSince(lastAction!) >= 0.6)
+    }
+    mutating func update(id: UUID, revealed: Bool, x: Double, y: Double, now: Date,
+                         enabled: Bool = true) -> ReviewSwipeProgress {
+        guard accepts(id: id, revealed: revealed, now: now, enabled: enabled),
+              x.isFinite, y.isFinite else { return .idle }
+        let magnitude = max(abs(x), abs(y))
+        // Rearm only after a substantial retreat, not on diagonal/direction jitter.
+        if magnitude < ReviewSwipeAction.distance * 0.75 { feedbackArmed = true }
+        let candidate = ReviewSwipeAction.candidate(x: x, y: y, revealed: revealed)
+        let ready = ReviewSwipeAction.decide(x: x, y: y, revealed: revealed) != nil
+        let feedback = ready && feedbackArmed &&
+            (lastFeedback == nil || now.timeIntervalSince(lastFeedback!) >= 0.3)
+        if feedback {
+            feedbackArmed = false; lastFeedback = now; gavePreparationFeedback = true
+        }
+        return ReviewSwipeProgress(candidate: candidate,
+                                   fraction: candidate == nil ? 0 : min(magnitude / ReviewSwipeAction.distance, 1),
+                                   ready: ready, feedback: feedback)
+    }
+    mutating func finish(id: UUID, revealed: Bool, x: Double, y: Double, now: Date,
+                         enabled: Bool = true) -> ReviewSwipeAction? {
+        defer { cancel() }
+        guard accepts(id: id, revealed: revealed, now: now, enabled: enabled),
               let action = ReviewSwipeAction.decide(x: x, y: y, revealed: revealed) else { return nil }
         lastAction = now
         return action
