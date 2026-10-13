@@ -102,6 +102,31 @@ final class QualityRepositoryTests: XCTestCase {
         options.schemaVersion = 2; try repo.updateOptions(options)
         store.refreshHome(); XCTAssertNil(store.homeFailure)
     }
+    func testHomeProjectionReuseInvalidatesAfterMutationFailureAndDeletion() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        let note = try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        try store.reload()
+        let projected = repo.queueProjectionCount
+        for _ in 0..<3 { store.refreshHome() }
+        XCTAssertEqual(repo.queueProjectionCount, projected)
+        let card = try XCTUnwrap(repo.cards().first)
+        try repo.setSuspended(cardID: card.id, value: true, now: now)
+        store.refreshHome()
+        XCTAssertEqual(store.counts.newRemaining, 0)
+        XCTAssertEqual(repo.queueProjectionCount, projected + 1)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.setSuspended(cardID: card.id, value: false, now: now))
+        store.refreshHome()
+        XCTAssertEqual(store.counts.newRemaining, 0)
+        XCTAssertEqual(repo.queueProjectionCount, projected + 2)
+        repo.save = { try $0.save() }
+        try repo.deleteNote(id: note)
+        store.refreshHome()
+        XCTAssertFalse(store.hasCards)
+        XCTAssertNil(store.homeFailure)
+    }
+
     func testHomeSnapshotDueDayBoundaryAndBackupRestorePreserveFilterAndDraft() async throws {
         var date = now
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

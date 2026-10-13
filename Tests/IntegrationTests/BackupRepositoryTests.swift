@@ -804,6 +804,31 @@ extension BackupRepositoryTests {
         XCTAssertEqual(try Data(contentsOf: archive), original)
         XCTAssertTrue(files.keys.contains { $0.hasPrefix("Media/") })
     }
+    func testBackgroundBackupReadsCommittedDataAndPreservesModelsAndMedia() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = try fixture(root)
+        try populate(repo)
+        let expected = try BackupData.capture(repo).canonical()
+        // Unsaved edits in the UI context must not leak into an automatic archive.
+        try repo.notes()[0].contentPayload = Data("unsaved".utf8)
+        let bytes = try await BackupService.exportCommitted(container: repo.context.container,
+            mediaStore: repo.mediaStore, now: now, appVersion: "test")
+        let backup = try BackupArchive.decode(bytes)
+        XCTAssertEqual(backup.data.canonical(), expected)
+        XCTAssertEqual(backup.media.count, expected.media.count)
+        repo.context.rollback()
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), expected)
+        let cancelled = Task { () throws -> Data in
+            try Task.checkCancellation()
+            return try await BackupService.exportCommitted(container: repo.context.container,
+                mediaStore: repo.mediaStore, now: now, appVersion: "test")
+        }
+        cancelled.cancel()
+        do { _ = try await cancelled.value; XCTFail("Cancelled capture must fail") }
+        catch { XCTAssertTrue(error is CancellationError) }
+    }
+
     func testSnapshot3000CardsWithMediaMeasuresMainCaptureAndFullArchive() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -815,7 +840,7 @@ extension BackupRepositoryTests {
         let start = Date(); let data = try BackupData.capture(repo)
         let captureSeconds = Date().timeIntervalSince(start)
         let started = Date()
-        let bytes = try await BackupService.export(repository: repo, now: now, appVersion: "test", pruneExpiredAnswers: false)
+        let bytes = try await BackupService.exportCommitted(container: repo.context.container, mediaStore: repo.mediaStore, now: now, appVersion: "test")
         let manager = LocalSnapshots(root: root.appendingPathComponent("snapshots"))
         let job = Task.detached { try manager.save(bytes, kind: .automatic, reason: "scale", now: Date()) }
         let entry = try await job.value
