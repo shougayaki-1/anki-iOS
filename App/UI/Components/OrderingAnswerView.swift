@@ -6,8 +6,9 @@ struct OrderingAnswerView: View {
     let problem: OrderingAnswer
     let draft: OrderingDraft
     var hapticsEnabled = false
-    let action: (OrderingAction) -> Void
+    let action: (OrderingAction) -> Bool
 
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var draggedID: Int?
     @State private var insertionIndex: Int?
@@ -36,14 +37,12 @@ struct OrderingAnswerView: View {
                 ForEach(Array(draft.pool.enumerated()), id: \.element) { index, id in
                     if !draft.selected.contains(id) {
                         Button {
-                            action(.select(id))
-                            selectionPulse += 1
+                            if action(.select(id)) { selectionPulse += 1 }
                         } label: { chip(problem.tokens[id].text) }
                             .accessibilityLabel("語句 \(spokenToken(problem.tokens[id].text)) を選ぶ")
                             .accessibilityValue("候補\(index + 1)")
                             .accessibilityAction(named: "選ぶ") {
-                                action(.select(id))
-                                selectionPulse += 1
+                                if action(.select(id)) { selectionPulse += 1 }
                             }
                             .accessibilityIdentifier("ordering-token-\(id)")
                     }
@@ -71,12 +70,12 @@ struct OrderingAnswerView: View {
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .environment(\.layoutDirection, .leftToRight)
-        .sensoryFeedback(trigger: selectionPulse) { _, _ in hapticsEnabled ? .selection : nil }
+        .sensoryFeedback(trigger: selectionPulse) { _, _ in hapticsEnabled && scenePhase == .active ? .selection : nil }
         .sensoryFeedback(trigger: liftPulse) { _, _ in
-            hapticsEnabled ? .impact(weight: .light, intensity: 0.45) : nil
+            hapticsEnabled && scenePhase == .active ? .impact(weight: .light, intensity: 0.45) : nil
         }
         .sensoryFeedback(trigger: dropPulse) { _, _ in
-            hapticsEnabled ? .impact(weight: .light, intensity: 0.55) : nil
+            hapticsEnabled && scenePhase == .active ? .impact(weight: .light, intensity: 0.55) : nil
         }
         .onChange(of: draft.selected) { _, _ in
             // The persisted draft is authoritative after a tap or a committed drag.
@@ -98,8 +97,7 @@ struct OrderingAnswerView: View {
         ChipFlowLayout {
             ForEach(Array(draft.selected.enumerated()), id: \.element) { index, id in
                 Button {
-                    action(.remove(id))
-                    selectionPulse += 1
+                    if action(.remove(id)) { selectionPulse += 1 }
                 } label: { chip(problem.tokens[id].text) }
                     .accessibilityLabel("\(index + 1)番目の語句 \(spokenToken(problem.tokens[id].text)) を取り消す")
                     .accessibilityValue("現在の位置 \(index + 1) / \(draft.selected.count)")
@@ -189,7 +187,7 @@ struct OrderingAnswerView: View {
         // Slot is indexed before removal; the model takes the final index after removal.
         let destination = slot > source ? slot - 1 : slot
         guard destination != source else { return true }
-        action(.move(id, to: destination))
+        guard action(.move(id, to: destination)) else { return false }
         dropPulse += 1
         return true
     }
@@ -211,7 +209,7 @@ struct OrderingAnswerView: View {
         var updated = draft.selected
         updated.remove(at: source)
         updated.insert(id, at: destination)
-        action(.move(id, to: destination))
+        guard action(.move(id, to: destination)) else { return }
         selectionPulse += 1
         UIAccessibility.post(notification: .announcement,
                              argument: "\(destination + 1)番目へ移動。現在の英文: \(sentence(updated))")
