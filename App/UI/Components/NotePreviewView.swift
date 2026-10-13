@@ -41,7 +41,8 @@ struct NotePreviewView: View {
                                             var updated = draft; try updated.apply(action, problem: problem)
                                             ordering = updated
                                             if updated.result == .correct { revealed = true }
-                                        } catch { }
+                                            return updated != draft
+                                        } catch { return false }
                                     }
                                 } else if let reason = OrderingAnswer.reason(kind: input.kind, answer: shown.answer) {
                                     Text(reason).font(.footnote).foregroundStyle(.secondary)

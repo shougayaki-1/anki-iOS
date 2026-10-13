@@ -82,6 +82,52 @@ final class OrderingRepositoryTests: XCTestCase {
         XCTAssertEqual(try reopened.logs().count, 0)
     }
 
+    func testStoreAcknowledgesOnlySavedOrderingChangesForFeedback() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try store.repository.createNote(NoteInput(deckID: store.repository.decks()[0].id,
+                                                 question: "並び替え", answer: "I walk to school every day.",
+                                                 responseMode: .ordering), now: now)
+        store.start(.new)
+        let initial = try XCTUnwrap(store.review?.ordering)
+        let card = try XCTUnwrap(store.repository.cards().first)
+        let originalFSRS = card.fsrsPayload
+        let originalID = card.id
+        store.repository.save = { _ in throw Failure.save }
+        XCTAssertFalse(store.ordering(.select(0)))
+        XCTAssertEqual(store.review?.ordering, initial)
+        XCTAssertEqual(try state(store.repository), initial)
+        store.repository.save = { try $0.save() }
+        XCTAssertTrue(store.ordering(.select(0)))
+        XCTAssertFalse(store.ordering(.select(0))) // Invalid duplicate selection.
+        XCTAssertFalse(store.ordering(.move(0, to: 0))) // No position change.
+        XCTAssertTrue(store.ordering(.select(1)))
+        let beforeMove = try XCTUnwrap(store.review?.ordering)
+        store.repository.save = { _ in throw Failure.save }
+        XCTAssertFalse(store.ordering(.move(1, to: 0)))
+        XCTAssertFalse(store.ordering(.remove(0)))
+        XCTAssertEqual(store.review?.ordering, beforeMove)
+        XCTAssertEqual(try state(store.repository), beforeMove)
+        store.repository.save = { try $0.save() }
+        XCTAssertTrue(store.ordering(.move(1, to: 0)))
+        XCTAssertTrue(store.ordering(.remove(1)))
+        XCTAssertTrue(store.ordering(.reset))
+        XCTAssertFalse(store.ordering(.reset)) // Empty reset.
+        XCTAssertFalse(store.ordering(.check)) // Incomplete answer.
+        for id in 0..<6 { XCTAssertTrue(store.ordering(.select(id))) }
+        let beforeCheck = try XCTUnwrap(store.review?.ordering)
+        store.repository.save = { _ in throw Failure.save }
+        XCTAssertFalse(store.ordering(.check))
+        XCTAssertEqual(store.review?.ordering, beforeCheck)
+        XCTAssertFalse(try XCTUnwrap(store.review).answerRevealed)
+        store.repository.save = { try $0.save() }
+        XCTAssertTrue(store.ordering(.check))
+        XCTAssertEqual(store.review?.ordering?.result, .correct)
+        XCTAssertFalse(store.ordering(.check)) // Revealed answer cannot be checked twice.
+        XCTAssertEqual(card.id, originalID)
+        XCTAssertEqual(card.fsrsPayload, originalFSRS)
+        XCTAssertTrue(try store.repository.logs().isEmpty)
+    }
+
     func testSaveFailureRollsBackSelectionAndCorrectRevealWithoutFSRSWrites() throws {
         let repo = try fixture()
         let initial = try state(repo)

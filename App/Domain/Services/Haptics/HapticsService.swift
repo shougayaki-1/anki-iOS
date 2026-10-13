@@ -10,7 +10,7 @@ enum HapticsMode: String, Codable, CaseIterable {
 
 @MainActor
 final class HapticsService {
-    enum Event { case swipeReady, reveal, grade, undo, goal, orderingCorrect, orderingIncorrect, noteSaved, widgetRefreshRequest, backupCompleted, importCompleted }
+    enum Event { case swipeReady, reveal, grade, undo, sessionCompleted, orderingCorrect, orderingIncorrect, noteSaved, widgetRefreshRequest, backupCompleted, importCompleted }
     private let selection = UISelectionFeedbackGenerator()
     func prepareSwipe(mode: HapticsMode) {
         guard mode != .off, UIApplication.shared.applicationState == .active else { return }
@@ -19,7 +19,7 @@ final class HapticsService {
     private var engine: CHHapticEngine?
     func play(_ event: Event, mode: HapticsMode) {
         guard mode != .off, UIApplication.shared.applicationState == .active else { return }
-        if event == .goal, mode == .rich, CHHapticEngine.capabilitiesForHardware().supportsHaptics {
+        if event == .sessionCompleted, mode == .rich, CHHapticEngine.capabilitiesForHardware().supportsHaptics {
             do {
                 if engine == nil { engine = try CHHapticEngine(); engine?.isAutoShutdownEnabled = true }
                 try engine?.start()
@@ -38,7 +38,7 @@ final class HapticsService {
         case .reveal: UIImpactFeedbackGenerator(style: .soft).impactOccurred()
         case .grade: UIImpactFeedbackGenerator(style: .light).impactOccurred()
         case .undo, .widgetRefreshRequest: UISelectionFeedbackGenerator().selectionChanged()
-        case .goal: UINotificationFeedbackGenerator().notificationOccurred(.success)
+        case .sessionCompleted: UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .noteSaved, .orderingCorrect, .backupCompleted, .importCompleted: UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .orderingIncorrect: UINotificationFeedbackGenerator().notificationOccurred(.error)
         }
