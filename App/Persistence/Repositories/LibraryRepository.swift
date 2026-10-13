@@ -563,10 +563,20 @@ extension StudyRepository {
         guard try context.fetchCount(FetchDescriptor<StudyReviewLog>()) <= 10000 else { throw OptimizationError.tooLarge }
         let rows = try logs()
         let scheduler = try ReviewScheduler()
+        var last: [UUID: (after: SchedulerSnapshot, date: Date)] = [:]
         return try rows.map { row in
             let before = try JSONDecoder().decode(SchedulerSnapshot.self, from: row.fsrsBefore)
+            let after = try JSONDecoder().decode(SchedulerSnapshot.self, from: row.fsrsAfter)
+            let startsNew = try scheduler.summary(before).state == "new"
+            if let previous = last[row.cardID] {
+                // A clock reversal cannot be repaired by sorting dates. A missing
+                // middle log must not silently turn into a complete training series.
+                guard row.reviewedAt >= previous.date,
+                      startsNew || before == previous.after else { throw OptimizationError.invalid }
+            }
+            last[row.cardID] = (after, row.reviewedAt)
             return OptimizationReview(id: row.id, cardID: row.cardID, date: row.reviewedAt, grade: row.grade,
-                                      sequence: row.sequence, startsNew: try scheduler.summary(before).state == "new")
+                                      sequence: row.sequence, startsNew: startsNew)
         }
     }
     func saveOptimizationReport(_ report: OptimizationReport) throws {

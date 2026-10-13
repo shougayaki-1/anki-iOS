@@ -1445,3 +1445,57 @@ extension LibraryRepositoryTests {
         XCTAssertFalse(deleted.cardIDs.contains(selected.id))
     }
 }
+
+
+extension LibraryRepositoryTests {
+    func testOptimizationMissingMiddleLogAndClockReversalFailWithoutWrites() throws {
+        let repo = try fixture()
+        _ = try acceptedReport(repo)
+        let original = try repo.optimizationReviews()
+        let rows = try repo.logs()
+        let middle = rows[60]
+        // A missing middle entry leaves the first new entry present.
+        try repo.transaction { repo.context.delete(middle) }
+        let before = try BackupData.capture(repo)
+        XCTAssertThrowsError(try repo.optimizationReviews())
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        XCTAssertNil(try repo.optimizationState().activeParameters)
+        XCTAssertEqual(try repo.logs().count, original.count - 1)
+
+        let clockRepo = try fixture()
+        _ = try acceptedReport(clockRepo)
+        let clockRows = try clockRepo.logs()
+        try clockRepo.transaction { clockRows[60].reviewedAt = clockRows[0].reviewedAt.addingTimeInterval(-1) }
+        let reversed = try BackupData.capture(clockRepo)
+        XCTAssertThrowsError(try clockRepo.optimizationReviews())
+        XCTAssertEqual(try BackupData.capture(clockRepo), reversed)
+    }
+
+    func testOptimizationFailedReportSaveAndRepeatedApplyPreserveData() throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        var fail = false
+        let repo = StudyRepository(container: container, save: { context in
+            if fail { throw Failure.save }; try context.save()
+        })
+        try repo.initialize(now: now)
+        let report = try acceptedReport(repo)
+        let before = try BackupData.capture(repo)
+        fail = true
+        XCTAssertThrowsError(try repo.saveOptimizationReport(report))
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        fail = false
+        try repo.saveOptimizationReport(report)
+        try repo.applyOptimization(now: now)
+        let applied = try BackupData.capture(repo)
+        // Previous parameters no longer match; repeated apply cannot append a change.
+        XCTAssertThrowsError(try repo.applyOptimization(now: now))
+        XCTAssertEqual(try BackupData.capture(repo), applied)
+        try repo.resetOptimization(now: now)
+        try repo.saveOptimizationReport(report)
+        try repo.applyOptimization(now: now)
+        XCTAssertEqual(try repo.optimizationState().changes.count, 3)
+        let after = try BackupData.capture(repo)
+        XCTAssertEqual(before.cards, after.cards); XCTAssertEqual(before.logs, after.logs)
+        XCTAssertEqual(before.sessions, after.sessions)
+    }
+}
