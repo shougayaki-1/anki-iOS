@@ -191,6 +191,8 @@ struct ReviewPresentation {
     var orderingUnavailable: String? = nil
     var emptyState: ReviewEmptyState? = nil
     var sessionProgress: SessionAnswerProgress? = nil
+    // Current display denominator; the configured answer limit remains unchanged.
+    var visibleAnswerTotal: Int? = nil
 }
 
 // Count confirmed answers in this session, not the number of unique cards studied today.
