@@ -107,6 +107,7 @@ enum FSRSOptimization {
     static func prepare(_ reviews: [OptimizationReview]) throws -> Prepared {
         guard reviews.count <= 10000 else { throw OptimizationError.tooLarge }
         guard Set(reviews.map(\.id)).count == reviews.count,
+              Set(reviews.map(\.sequence)).count == reviews.count,
               reviews.allSatisfy({ (1...4).contains($0.grade) && $0.date.timeIntervalSince1970.isFinite && $0.sequence >= 0 })
         else { throw OptimizationError.invalid }
         let ordered = reviews.sorted { $0.date == $1.date ? $0.sequence < $1.sequence : $0.date < $1.date }
@@ -131,7 +132,8 @@ enum FSRSOptimization {
         return Prepared(events: events, eligible: Set(eligible.map(\.id)), split: split, days: days)
     }
     static func evaluate(_ input: Prepared, parameters: [Double], validation: Bool,
-                         deadline: Date? = nil) throws -> OptimizationMetrics {
+                         deadline: Date? = nil,
+                         observe: ((OptimizationReview, Double) -> Void)? = nil) throws -> OptimizationMetrics {
         guard validParameters(parameters) else { throw OptimizationError.invalid }
         let engine = FSRS(parameters: FSRSParameters(w: parameters, enableFuzz: false, enableShortTerm: true))
         var cards: [UUID: Card] = [:], loss = 0.0, squared = 0.0, count = 0
@@ -146,6 +148,8 @@ enum FSRSOptimization {
                 let probability = min(1 - 1e-7, max(1e-7, engine.getRetrievability(card: before, now: event.date).number))
                 let outcome = event.grade == 1 ? 0.0 : 1.0
                 guard probability.isFinite else { throw OptimizationError.invalid }
+                // Read-only diagnostics for the synthetic audit, before the answer transition.
+                observe?(event, probability)
                 loss -= outcome * log(probability) + (1 - outcome) * log(1 - probability)
                 squared += pow(probability - outcome, 2); count += 1
             }

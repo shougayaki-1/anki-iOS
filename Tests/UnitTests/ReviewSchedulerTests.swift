@@ -1,4 +1,5 @@
 import XCTest
+import Darwin
 @testable import AnkiIOS
 
 final class ReviewSchedulerTests: XCTestCase {
@@ -376,5 +377,238 @@ final class FSRSOptimizationTests: XCTestCase {
         XCTAssertFalse(operation.outcome.isComplete)
         XCTAssertTrue(operation.warning?.contains("保存できませんでした") == true)
         XCTAssertNil(operation.kind.successMessage)
+    }
+}
+
+// Synthetic data only. This audit deliberately makes no assertion that fitting wins.
+final class FSRSOptimizationAuditTests: XCTestCase {
+    struct Random {
+        var state: UInt64
+        mutating func unit() -> Double {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return Double(state >> 11) / 9007199254740992
+        }
+    }
+    struct Prediction {
+        let event: OptimizationReview
+        let probability: Double
+        var outcome: Double { event.grade == 1 ? 0 : 1 }
+        var loss: Double { -outcome * log(probability) - (1 - outcome) * log(1 - probability) }
+    }
+    let base = Date(timeIntervalSince1970: 1_700_000_000)
+    func uuid(_ value: Int) -> UUID {
+        UUID(uuidString: String(format: "00000000-0000-0000-0000-%012x", value))!
+    }
+    func personalized() -> [Double] {
+        var w = FSRSOptimization.defaults
+        for index in 0...3 { w[index] *= 0.6 }
+        w[8] *= 0.7
+        return w
+    }
+    func fixture(seed: UInt64, scenario: String) throws -> [OptimizationReview] {
+        var random = Random(state: seed), result: [OptimizationReview] = []
+        var states: [Int: SchedulerSnapshot] = [:]
+        for day in 0..<40 {
+            let w = scenario == "standard" || (scenario == "drift" && day >= 32)
+                ? FSRSOptimization.defaults : personalized()
+            let scheduler = try ReviewScheduler(parameters: w)
+            for card in 0..<30 {
+                let date = base.addingTimeInterval(Double(day * day * 172800 + card * 90 + (day % 3) * 7200))
+                let before = try states[card] ?? scheduler.newCard(now: date)
+                let p = day == 0 ? 1 : try scheduler.retrievability(before, now: date)
+                let recalled = random.unit() < p, rating = random.unit()
+                let grade: ReviewGrade = recalled ? (rating < 0.6 ? .hard : rating > 0.95 ? .easy : .good) : .again
+                result.append(OptimizationReview(id: uuid(result.count + 1000), cardID: uuid(card + 1),
+                                                date: date, grade: grade.rawValue, sequence: result.count,
+                                                startsNew: day == 0))
+                states[card] = try scheduler.review(before, grade: grade, now: date).after
+                if day == 0 {
+                    let shortDate = date.addingTimeInterval(600)
+                    result.append(OptimizationReview(id: uuid(result.count + 1000), cardID: uuid(card + 1),
+                                                    date: shortDate, grade: 3, sequence: result.count, startsNew: false))
+                    states[card] = try scheduler.review(states[card]!, grade: .good, now: shortDate).after
+                }
+            }
+        }
+        return result
+    }
+    func predictions(_ input: FSRSOptimization.Prepared, _ w: [Double], validation: Bool) throws -> (OptimizationMetrics, [Prediction]) {
+        var values: [Prediction] = []
+        let metrics = try FSRSOptimization.evaluate(input, parameters: w, validation: validation) {
+            values.append(Prediction(event: $0, probability: $1))
+        }
+        return (metrics, values)
+    }
+    func interval(_ values: [Double]) -> (Double, Double) {
+        let ordered = values.sorted()
+        return (ordered[Int(Double(ordered.count) * 0.025)], ordered[Int(Double(ordered.count) * 0.975)])
+    }
+    func pairedCI(_ a: [Prediction], _ b: [Prediction]) -> (Double, Double) {
+        let differences = Dictionary(grouping: Array(zip(a, b)), by: { $0.0.event.cardID })
+            .sorted { $0.key.uuidString < $1.key.uuidString }.map { $0.value.map { $0.0.loss - $0.1.loss } }
+        var random = Random(state: 189), samples: [Double] = []
+        for _ in 0..<1000 {
+            var sum = 0.0, count = 0
+            for _ in differences.indices {
+                let group = differences[Int(random.unit() * Double(differences.count))]
+                sum += group.reduce(0, +); count += group.count
+            }
+            samples.append(sum / Double(count))
+        }
+        return interval(samples)
+    }
+    func testSyntheticAccuracyCalibrationAndUncertainty() throws {
+        for scenario in ["standard", "personal", "drift"] {
+            for seed: UInt64 in [189, 190, 191] {
+                let data = try fixture(seed: seed, scenario: scenario), input = try FSRSOptimization.prepare(data)
+                var previous = FSRSOptimization.defaults
+                previous[2] *= 0.8; previous[8] *= 0.9
+                let report = try FSRSOptimization.run(data, previous: previous, now: base.addingTimeInterval(90 * 86400))
+                XCTAssertTrue(report.valid)
+                var all: [[Prediction]] = []
+                for (name, w, reported) in [("standard", FSRSOptimization.defaults, report.standard),
+                                          ("previous", previous, report.previous!), ("candidate", report.parameters, report.candidate)] {
+                    let (train, _) = try predictions(input, w, validation: false)
+                    let (test, values) = try predictions(input, w, validation: true)
+                    XCTAssertEqual(test, reported)
+                    if let first = all.first { XCTAssertEqual(values.map(\.event.id), first.map(\.event.id)) }
+                    all.append(values)
+                    let recall = values.map(\.outcome).reduce(0, +) / Double(values.count)
+                    let mean = values.map(\.probability).reduce(0, +) / Double(values.count)
+                    var ece = 0.0
+                    for bin in 0..<5 {
+                        let subset = values.filter { min(4, Int($0.probability * 5)) == bin }
+                        guard !subset.isEmpty else { continue }
+                        let predicted = subset.map(\.probability).reduce(0, +) / Double(subset.count)
+                        let actual = subset.map(\.outcome).reduce(0, +) / Double(subset.count)
+                        ece += Double(subset.count) / Double(values.count) * abs(predicted - actual)
+                        print("FSRS_CAL|\(scenario)|\(seed)|\(name)|\(bin)|\(subset.count)|\(predicted)|\(actual)")
+                    }
+                    print("FSRS_AUDIT|\(scenario)|\(seed)|\(name)|\(train.count)|\(test.count)|\(train.logLoss)|\(test.logLoss)|\(train.rmse)|\(test.rmse)|\(recall)|\(mean)|\(ece)")
+                }
+                let ci = pairedCI(all[2], all[0])
+                let previousCI = pairedCI(all[2], all[1])
+                print("FSRS_DELTA|\(scenario)|\(seed)|\(report.accepted)|\(ci.0)|\(ci.1)|\(previousCI.0)|\(previousCI.1)")
+            }
+        }
+    }
+    func testPredictionsAreBeforeAnswersAndFutureAnswersDoNotFit() throws {
+        let data = try fixture(seed: 189, scenario: "standard"), input = try FSRSOptimization.prepare(data)
+        var changed = data
+        let firstValidation = try XCTUnwrap(input.events.first { input.eligible.contains($0.id) && $0.date > input.split })
+        for i in changed.indices where changed[i].date > input.split {
+            let old = changed[i]
+            changed[i] = OptimizationReview(id: old.id, cardID: old.cardID, date: old.date,
+                                           grade: old.grade == 1 ? 3 : 1, sequence: old.sequence, startsNew: old.startsNew)
+        }
+        let changedInput = try FSRSOptimization.prepare(changed)
+        let (_, a) = try predictions(input, FSRSOptimization.defaults, validation: true)
+        let (_, b) = try predictions(changedInput, FSRSOptimization.defaults, validation: true)
+        XCTAssertEqual(a.first?.event.id, firstValidation.id)
+        XCTAssertEqual(a.first?.probability, b.first?.probability)
+        XCTAssertNotEqual(a.first?.outcome, b.first?.outcome)
+        let original = try FSRSOptimization.run(data, now: base)
+        let modified = try FSRSOptimization.run(changed, now: base)
+        XCTAssertEqual(original.parameters, modified.parameters)
+        XCTAssertEqual(try FSRSOptimization.evaluate(input, parameters: original.parameters, validation: false),
+                       try FSRSOptimization.evaluate(changedInput, parameters: modified.parameters, validation: false))
+    }
+    func testExactThresholdsTiesShortTermAndDuplicateSequences() throws {
+        // Exactly 400 eligible reviews, 30 UTC days and 20 cards; 320/80 split.
+        var data: [OptimizationReview] = []
+        for day in 0..<30 {
+            let cards = day == 0 ? 20 : day <= 13 ? 20 : day == 14 ? 4 : day == 28 ? 12 : day <= 28 ? 8 : 20
+            for card in 0..<cards {
+                data.append(OptimizationReview(id: uuid(data.count + 1000), cardID: uuid(card + 1),
+                    date: base.addingTimeInterval(Double(day * 86400)), grade: (day + card) % 5 == 0 ? 1 : 3,
+                    sequence: data.count, startsNew: day == 0))
+            }
+        }
+        let input = try FSRSOptimization.prepare(data)
+        XCTAssertEqual(input.eligible.count, 400); XCTAssertEqual(input.days, 30)
+        XCTAssertEqual(try FSRSOptimization.evaluate(input, parameters: FSRSOptimization.defaults, validation: false).count, 320)
+        XCTAssertEqual(try FSRSOptimization.evaluate(input, parameters: FSRSOptimization.defaults, validation: true).count, 80)
+        XCTAssertThrowsError(try FSRSOptimization.prepare(Array(data.dropLast())))
+        var shortGap = data
+        let index = shortGap.count - 20, shortEvent = shortGap[index]
+        shortGap[index] = OptimizationReview(id: shortEvent.id, cardID: shortEvent.cardID,
+            date: shortEvent.date.addingTimeInterval(-1), grade: shortEvent.grade, sequence: shortEvent.sequence, startsNew: false)
+        XCTAssertThrowsError(try FSRSOptimization.prepare(shortGap)) // 399 eligible: 23:59:59 is short-term.
+
+        // The full timestamp boundary is on one side. Input permutation cannot change replay.
+        XCTAssertEqual(try FSRSOptimization.prepare(Array(data.reversed())).split, input.split)
+        var duplicate = data
+        let old = duplicate[1]
+        duplicate[1] = OptimizationReview(id: old.id, cardID: old.cardID, date: old.date,
+                                         grade: old.grade, sequence: duplicate[0].sequence, startsNew: old.startsNew)
+        XCTAssertThrowsError(try FSRSOptimization.prepare(duplicate))
+        for grade in [1, 3] {
+            XCTAssertThrowsError(try FSRSOptimization.prepare(data.map {
+                OptimizationReview(id: $0.id, cardID: $0.cardID, date: $0.date,
+                                   grade: grade, sequence: $0.sequence, startsNew: $0.startsNew)
+            }))
+        }
+        let mixed = try fixture(seed: 189, scenario: "standard")
+        XCTAssertEqual(try FSRSOptimization.prepare(mixed).eligible.count, 1170)
+        // Midnight crossing alone is not >=24h. UTC learning days ignore device zone/DST.
+        let utc = try FSRSOptimization.prepare(mixed)
+        let shifted = mixed.map {
+            OptimizationReview(id: $0.id, cardID: $0.cardID, date: $0.date.addingTimeInterval(60),
+                               grade: $0.grade, sequence: $0.sequence, startsNew: $0.startsNew)
+        }
+        let shiftedInput = try FSRSOptimization.prepare(shifted)
+        XCTAssertEqual(utc.eligible, shiftedInput.eligible)
+        XCTAssertEqual(utc.days, shiftedInput.days)
+        XCTAssertEqual(try FSRSOptimization.evaluate(utc, parameters: FSRSOptimization.defaults, validation: true),
+                       try FSRSOptimization.evaluate(shiftedInput, parameters: FSRSOptimization.defaults, validation: true))
+    }
+    func testRemainingMinimumsLimitsAndRejectingEqualOrWorseCandidates() throws {
+        func regular(cards: Int, days: Int) -> [OptimizationReview] {
+            (0..<days).flatMap { day in
+                (0..<cards).map { card in
+                    OptimizationReview(id: uuid(day * cards + card + 10000), cardID: uuid(card + 1),
+                        date: base.addingTimeInterval(Double(day * 86400)), grade: (day + card) % 5 == 0 ? 1 : 3,
+                        sequence: day * cards + card, startsNew: day == 0)
+                }
+            }
+        }
+        XCTAssertThrowsError(try FSRSOptimization.prepare(regular(cards: 19, days: 40)))
+        XCTAssertThrowsError(try FSRSOptimization.prepare(regular(cards: 20, days: 29)))
+        let limit = regular(cards: 100, days: 100)
+        XCTAssertEqual(try FSRSOptimization.prepare(limit).events.count, 10000)
+        let extra = OptimizationReview(id: uuid(30000), cardID: uuid(1), date: base.addingTimeInterval(101 * 86400),
+                                       grade: 3, sequence: 10000, startsNew: false)
+        XCTAssertThrowsError(try FSRSOptimization.prepare(limit + [extra]))
+        let metrics = OptimizationMetrics(count: 80, logLoss: 0.5, rmse: 0.4)
+        let report = OptimizationReport(generatedAt: base, digest: String(repeating: "a", count: 64),
+            reviews: 400, days: 30, splitDate: base, parameters: FSRSOptimization.defaults, previousParameters: nil,
+            standard: metrics, candidate: metrics, previous: nil, duration: 1)
+        XCTAssertFalse(report.accepted)
+        let worse = OptimizationReport(generatedAt: base, digest: report.digest,
+            reviews: 400, days: 30, splitDate: base, parameters: report.parameters, previousParameters: nil,
+            standard: metrics, candidate: OptimizationMetrics(count: 80, logLoss: 0.6, rmse: 0.4), previous: nil, duration: 1)
+        XCTAssertFalse(worse.accepted)
+        let previousWins = OptimizationReport(generatedAt: base, digest: report.digest,
+            reviews: 400, days: 30, splitDate: base, parameters: report.parameters, previousParameters: report.parameters,
+            standard: metrics, candidate: OptimizationMetrics(count: 80, logLoss: 0.49, rmse: 0.39),
+            previous: OptimizationMetrics(count: 80, logLoss: 0.48, rmse: 0.38), duration: 1)
+        XCTAssertFalse(previousWins.accepted)
+    }
+    func testThreeThousandCardLoad() throws {
+        var data: [OptimizationReview] = []
+        for round in 0..<3 {
+            for card in 0..<3000 {
+                data.append(OptimizationReview(id: uuid(data.count + 10000), cardID: uuid(card + 1),
+                    date: base.addingTimeInterval(Double(round * 130 * 86400 + card * 3600)),
+                    grade: (card + round) % 5 == 0 ? 1 : 3, sequence: data.count, startsNew: round == 0))
+            }
+        }
+        var usage = rusage()
+        getrusage(RUSAGE_SELF, &usage)
+        let beforePeak = usage.ru_maxrss, start = Date()
+        let report = try FSRSOptimization.run(data, now: base)
+        getrusage(RUSAGE_SELF, &usage)
+        XCTAssertTrue(report.valid)
+        print("FSRS_LOAD|3000|\(data.count)|\(Date().timeIntervalSince(start))|\(report.standard.count)|\(report.accepted)|\(beforePeak)|\(usage.ru_maxrss)")
     }
 }
