@@ -851,6 +851,36 @@ extension LibraryRepositoryTests {
 }
 
 extension LibraryRepositoryTests {
+    func testLibraryActorProjectionPreservesScopeGroupingAndExpansion() async throws {
+        let repo = try fixture()
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: root, now: now)
+        let other = try repo.createDeck(name: "Other", now: now)
+        let note = try repo.createNote(NoteInput(deckID: child, question: "Needle", answer: "Answer", reverseEnabled: true), now: now)
+        _ = try repo.createNote(NoteInput(deckID: other, question: "Needle outside", answer: "Answer"), now: now)
+        let reader = LibraryReader(container: repo.context.container)
+        let decks = try repo.decks().filter { $0.id != other }.map {
+            DeckItem(id: $0.id, name: $0.name, shortName: $0.name, parentID: $0.parentID)
+        }
+        let (all, tree) = try await reader.projection(decks: decks, query: "", revision: 1, deckIDs: [root, child])
+        XCTAssertEqual(all.cardCount, 2)
+        let decodes = await reader.contentDecodes
+        XCTAssertEqual(decodes, 0, "Closed folders need metadata only")
+        let closed = try await reader.rows(projection: tree, expanded: [])
+        XCTAssertTrue(closed.allSatisfy { $0.note == nil })
+        let open = try await reader.rows(projection: tree, expanded: [root, child])
+        XCTAssertEqual(open.compactMap { $0.note?.id }, [note])
+        XCTAssertEqual(open.first { $0.note != nil }?.note?.cardIDs.count, 2)
+        let (hits, searchTree) = try await reader.projection(decks: decks, query: "Needle", revision: 1, deckIDs: [root, child])
+        XCTAssertEqual(hits.cardIDs, all.cardIDs)
+        let searchRows = try await reader.rows(projection: searchTree, expanded: [])
+        XCTAssertEqual(searchRows.map(\.id), open.map(\.id))
+        let (missing, emptyTree) = try await reader.projection(decks: decks, query: "missing", revision: 1, deckIDs: [root, child])
+        XCTAssertEqual(missing.cardCount, 0)
+        let emptyRows = try await reader.rows(projection: emptyTree, expanded: [])
+        XCTAssertTrue(emptyRows.isEmpty)
+    }
+
     func testLibraryIndexScopesSearchVariantsAndRefreshesCommittedChanges() async throws {
         let container = try PersistenceController.makeStudyContainer(inMemory: true)
         let repo = StudyRepository(container: container)

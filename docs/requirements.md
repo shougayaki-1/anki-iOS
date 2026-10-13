@@ -553,3 +553,9 @@ Note/Card UUID、タグ、メディア／音声、FSRS、due、ReviewLogは保�
 - FSRS欠損/未学習を数値0扱いしない。想起確率は評価時刻と有効なFSRSパラメーターを利用する。検索は履歴・FSRSを更新しない。
 - 結果から詳細、一括選択/既存一括操作、検索結果のカスタム学習（練習のみ。FSRS・履歴・予定を保存しない）へ移動できる。
 - 軽量行と既存actor検索を再利用し、スケジュールはデータrevisionごとに一度decodeする。入力は180ms debounce、本文・FSRSの読み込みはUI actor外で実行する。キャッシュは現在のストア1 revision分に限定する。
+
+### ライブラリ検索の一覧更新（Issue #121）
+
+通常ライブラリの検索結果グループ化・階層生成・可視行展開は既存の `LibraryReader` Actorで行う。フォルダー開閉では既存の階層を再利用し、閉じたデッキの本文取得を増やさない。Listの各安定IDには固定の1行コンテナを割り当て、デッキ／ノート条件分岐による全行評価を避ける。既存の表示DTO・equatable行・キャッシュ上限・検索キャンセル判定を維持する。
+
+性能計測には `Library.projection`（階層生成）、`Library.rows`（可視行展開）、`Library.publish`（MainActorへの結果反映）を追加する。publishはSwiftUIの後続描画時間を含まない。実機で報告済みの272〜312msのpotential hangについて、これらのAPI区間とSwiftUI/UIKitの描画スタックを分けて再計測し、解消が確認できるまでIssueをCloseしない。

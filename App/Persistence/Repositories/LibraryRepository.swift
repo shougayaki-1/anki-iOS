@@ -662,6 +662,25 @@ actor LibraryReader {
         return index
     }
 
+    /// Build the hierarchy beside the read cache, rather than grouping every search hit on MainActor.
+    func projection(decks: [DeckItem], query: String, revision: Int, deckIDs: Set<UUID>?) throws
+        -> (LibraryResults, LibraryTreeProjection) {
+        let index = try load(revision: revision)
+        let results = query.isEmpty ? index.results(deckIDs: deckIDs)
+            : try search(query, revision: revision, deckIDs: deckIDs)
+        try Task.checkCancellation()
+        let interval = PerformanceProbe.begin("Library.projection")
+        defer { PerformanceProbe.end(interval) }
+        return (results, LibraryTreeProjection(decks: decks, index: index, results: results, search: query))
+    }
+
+    func rows(projection: LibraryTreeProjection, expanded: Set<UUID>) throws -> [LibraryTreeRow] {
+        try Task.checkCancellation()
+        let interval = PerformanceProbe.begin("Library.rows")
+        defer { PerformanceProbe.end(interval) }
+        return projection.rows(expanded: expanded)
+    }
+
     func search(_ query: String, revision: Int, deckIDs: Set<UUID>?) throws -> LibraryResults {
         let interval = PerformanceProbe.begin("Library.search")
         defer { PerformanceProbe.end(interval) }
