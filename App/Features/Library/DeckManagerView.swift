@@ -79,6 +79,8 @@ struct DeckManagerView: View {
     @State private var adding = false
     @State private var addingParentID: UUID?
     @State private var expanded = Set<UUID>()
+    @State private var importing = false
+    @State private var importDeckID: UUID?
 
     private var visibleRows: [DeckTreeRow] {
         DeckTreeBuilder.visibleRows(roots: DeckTreeBuilder.roots(from: store.decks), expanded: expanded)
@@ -87,7 +89,8 @@ struct DeckManagerView: View {
     var body: some View {
         NavigationStack {
             List {
-                NavigationLink("デッキファイルの共有・取込") { DeckExchangeView(store: store) }.accessibilityIdentifier("openDeckExchange")
+                Button("ファイルを取り込む") { importDeckID = nil; importing = true }.accessibilityIdentifier("openManagerImport")
+                NavigationLink("デッキファイルを書き出す") { DeckExchangeView(store: store) }.accessibilityIdentifier("openDeckExchange")
                 ForEach(visibleRows) { row in
                     HStack(spacing: 4) {
                         if row.hasChildren {
@@ -125,6 +128,9 @@ struct DeckManagerView: View {
                     }
                     .padding(.leading, CGFloat(min(row.depth, 6)) * 14)
                     .contextMenu {
+                        Button("ファイルを取り込む", systemImage: "square.and.arrow.down") {
+                            importDeckID = row.id; importing = true
+                        }
                         Button("子デッキを追加", systemImage: "folder.badge.plus") {
                             addingParentID = row.id
                             adding = true
@@ -142,6 +148,7 @@ struct DeckManagerView: View {
                     }
                 }
             }
+            .sheet(isPresented: $importing) { ImportView(store: store, initialDeckID: importDeckID) }
             .sheet(isPresented: $adding, onDismiss: {
                 if let parent = addingParentID { expanded.insert(parent) }
                 addingParentID = nil
