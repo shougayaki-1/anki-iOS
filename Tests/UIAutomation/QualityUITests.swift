@@ -453,14 +453,14 @@ extension QualityUITests {
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15)); app.tabBars.buttons["ライブラリ"].tap()
         app.buttons["openImport"].tap(); app.buttons["selectImportFile"].tap()
         selectFile("Images-\(id)", app: app)
-        XCTAssertTrue(app.navigationBars["画像ZIPの取り込み"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.navigationBars["インポート"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["images/symbol.png"].firstMatch.exists)
         attach(app, name: "Issue22-image-ZIP-preview")
         let confirm = app.buttons["confirmImageImport"]
         scrollTo(confirm, app: app); confirm.tap(); app.buttons["確定して保存"].firstMatch.tap()
         let result = app.staticTexts["imageImportResult"]
         XCTAssertTrue(result.waitForExistence(timeout: 20)); XCTAssertTrue(result.label.contains("新規 100ノート"))
-        app.buttons["closeImageImport"].tap(); app.buttons["closeImport"].tap()
+        app.buttons["closeImageImport"].tap()
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))
         XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "画像を見て答えてください")

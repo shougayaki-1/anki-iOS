@@ -99,22 +99,59 @@ enum LocalFileInput {
     enum ImportContents: Sendable {
         case text(String)
         case images(ImageImportPackage)
+        case deck(ValidatedDeckPackage)
+        case anki(AnkiImportPreview)
     }
     static func readImport(_ url: URL) async throws -> ImportContents {
         try Task.checkCancellation()
         let task = Task.detached(priority: .utility) {
             try Task.checkCancellation()
-            if url.pathExtension.lowercased() == "zip" {
-                return ImportContents.images(try ImageImportPackage.read(read(url, extensions: ["zip"], maximumBytes: 200_000_000)))
-            }
-            let data = try read(url, extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000)
-            guard let text = String(data: data, encoding: .utf8) else { throw LibraryError.invalidUTF8 }
-            try Task.checkCancellation()
-            return ImportContents.text(text.hasPrefix("\u{feff}") ? String(text.dropFirst()) : text)
+            let ext = url.pathExtension.lowercased()
+            if ext == "studybackup" { throw ImportRoutingError.backup }
+            let archives: Set<String> = ["zip", "studydeck", "apkg"]
+            let data = try read(url, extensions: archives.union(["csv", "tsv", "txt"]),
+                                maximumBytes: archives.contains(ext) ? 200_000_000 : 10_000_000)
+            return try decodeImport(data, extension: ext)
         }
         let contents = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
         try Task.checkCancellation()
         return contents
+    }
+    // Classification never falls back to another parser after a validation failure.
+    static func decodeImport(_ data: Data, extension ext: String) throws -> ImportContents {
+        try Task.checkCancellation()
+        let ext = ext.lowercased()
+        if ext == "studybackup" { throw ImportRoutingError.backup }
+        guard data.count <= (["zip", "studydeck", "apkg"].contains(ext) ? 200_000_000 : 10_000_000) else { throw LibraryError.fileTooLarge }
+        if ["zip", "studydeck", "apkg"].contains(ext) {
+            switch try archiveKind(data, extension: ext) {
+            case .deck: return .deck(try DeckExchange.decode(data))
+            case .anki: return .anki(try AnkiImport.decode(data))
+            case .images: return .images(try ImageImportPackage.read(data))
+            }
+        }
+        guard ["csv", "tsv", "txt"].contains(ext) else { throw ImportRoutingError.unsupported }
+        guard !data.starts(with: [0x50, 0x4b, 0x03, 0x04]), !data.contains(0),
+              let text = String(data: data, encoding: .utf8) else { throw ImportRoutingError.mismatch }
+        return .text(text.hasPrefix("\u{feff}") ? String(text.dropFirst()) : text)
+    }
+    private enum ArchiveKind { case deck, anki, images }
+    private static func archiveKind(_ data: Data, extension ext: String) throws -> ArchiveKind {
+        let files = try AnkiPackageZIP.read(data, budget: AnkiReadBudget())
+        let format: String?
+        if let manifest = files["manifest.json"] {
+            guard manifest.count <= 1_000_000 else { throw BackupError.tooLarge }
+            format = (try JSONSerialization.jsonObject(with: manifest) as? [String: Any])?["format"] as? String
+        } else { format = nil }
+        if format == "studybackup" || (files["data.json"] != nil && files["manifest.json"] != nil) { throw ImportRoutingError.backup }
+        let deck = files["deck.json"] != nil || format == "studydeck"
+        let anki = ["collection.anki2", "collection.anki21", "collection.anki21b"].contains { files[$0] != nil }
+        let images = files["cards.csv"] != nil || files["cards.tsv"] != nil
+        guard [deck, anki, images].filter({ $0 }).count == 1 else { throw ImportRoutingError.ambiguous }
+        guard ext == "zip" || (ext == "studydeck" && deck) || (ext == "apkg" && anki) else {
+            throw ImportRoutingError.mismatch
+        }
+        return deck ? .deck : anki ? .anki : .images
     }
     static func read(_ url: URL, extensions: Set<String>, maximumBytes: Int) throws -> Data {
         guard url.isFileURL, extensions.contains(url.pathExtension.lowercased()) else { throw StudyError.unsupportedContent }
@@ -140,6 +177,19 @@ enum LocalFileInput {
                 return (url, try read(url, extensions: extensions, maximumBytes: maximumBytes))
             }
             Task { @MainActor in completion(result) }
+        }
+    }
+}
+
+
+enum ImportRoutingError: LocalizedError {
+    case backup, ambiguous, mismatch, unsupported
+    var errorDescription: String? {
+        switch self {
+        case .backup: return "完全バックアップは通常のインポートでは取り込めません。設定 → バックアップ・復元から復元してください。"
+        case .ambiguous: return "ZIPの内容を一意に判定できません。デッキ・Anki・画像ZIPの構造を確認し、元の形式で書き出し直してください。"
+        case .mismatch: return "拡張子とファイルの内容が一致しません。元のアプリから正しい形式で書き出し直してください。テキストはUTF-8を使用してください。"
+        case .unsupported: return "CSV / TSV / TXT / 画像ZIP / .studydeck / .apkgを選択してください。"
         }
     }
 }

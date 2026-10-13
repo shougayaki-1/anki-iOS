@@ -2,6 +2,50 @@ import XCTest
 @testable import AnkiIOS
 
 final class ImportParserTests: XCTestCase {
+    func testUnifiedImportRoutesTextDeckAndImageZIPWithoutFallback() throws {
+        for ext in ["csv", "tsv", "txt"] {
+            guard case .text(let value) = try LocalFileInput.decodeImport(Data("\u{feff}Q: 問題\nA: 解答".utf8), extension: ext) else {
+                return XCTFail("Expected text for \(ext)")
+            }
+            XCTAssertEqual(value, "Q: 問題\nA: 解答")
+        }
+        let id = UUID()
+        let package = DeckPackage(rootID: id, decks: [SharedDeck(id: id, name: "Test", parentID: nil)], notes: [], media: [])
+        let deck = try DeckExchange.encode(package, bytes: [:])
+        for ext in ["studydeck", "zip", "STUDYDECK"] {
+            guard case .deck(let value) = try LocalFileInput.decodeImport(deck, extension: ext) else { return XCTFail("Expected deck") }
+            XCTAssertEqual(value.package, package)
+        }
+        let images = try StoredZIP.write(["cards.csv": Data("question,answer,image\nQ,A,images/missing.png".utf8)])
+        guard case .images(let value) = try LocalFileInput.decodeImport(images, extension: "zip") else { return XCTFail("Expected images") }
+        XCTAssertEqual(value.rows.count, 1)
+        XCTAssertNotNil(value.rows[0].error) // Missing media remains an explicit row error.
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(images, extension: "studydeck"))
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(deck, extension: "apkg"))
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(deck, extension: "csv"))
+        var mixed = try StoredZIP.read(deck); mixed["cards.csv"] = Data("answer,image".utf8)
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(StoredZIP.write(mixed), extension: "zip"))
+        mixed = try StoredZIP.read(deck); mixed["deck.json"] = Data("broken".utf8)
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(StoredZIP.write(mixed), extension: "zip"))
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(Data("not a ZIP".utf8), extension: "zip"))
+    }
+
+    func testUnifiedImportRejectsBackupEvenWhenRenamedAndUnknownVersion() throws {
+        let backup = try StoredZIP.write(["data.json": Data("{}".utf8), "manifest.json": Data("{}".utf8)])
+        for ext in ["studybackup", "zip", "studydeck", "apkg"] {
+            XCTAssertThrowsError(try LocalFileInput.decodeImport(backup, extension: ext)) { error in
+                guard case ImportRoutingError.backup = error else { return XCTFail("Expected restore guidance: \(error)") }
+            }
+        }
+        let id = UUID()
+        let package = DeckPackage(rootID: id, decks: [SharedDeck(id: id, name: "Test", parentID: nil)], notes: [], media: [])
+        var files = try StoredZIP.read(DeckExchange.encode(package, bytes: [:]))
+        var manifest = try JSONSerialization.jsonObject(with: XCTUnwrap(files["manifest.json"])) as! [String: Any]
+        manifest["schemaVersion"] = 999
+        files["manifest.json"] = try JSONSerialization.data(withJSONObject: manifest)
+        XCTAssertThrowsError(try LocalFileInput.decodeImport(StoredZIP.write(files), extension: "zip"))
+    }
+
     func testAsyncImportFileReaderPreservesBOMAndCancellation() async throws {
         let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("csv")
         try Data("\u{feff}question,answer\r\n日本語,解答".utf8).write(to: file)

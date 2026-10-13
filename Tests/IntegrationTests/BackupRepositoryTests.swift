@@ -329,6 +329,35 @@ extension BackupRepositoryTests {
 }
 
 extension BackupRepositoryTests {
+    func testUnifiedFileRoutingUsesExistingAtomicDeckAndAnkiImport() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source")); try populate(source)
+        let target = try fixture(root.appendingPathComponent("target")); try populate(target)
+        let existing = try BackupData.capture(target)
+        let data = try await DeckExchange.export(repository: source, rootID: source.decks()[0].id)
+        guard case .deck(let deck) = try LocalFileInput.decodeImport(data, extension: "studydeck") else { return XCTFail("Expected deck") }
+        let destination = try XCTUnwrap(target.decks().first).id
+        let plan = try target.previewDeckImport(deck, destination: .childOf(destination))
+        target.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try target.importDeckPackageReceipt(deck, skipDuplicates: false, now: now,
+                            destination: .childOf(destination), expectedPreview: plan))
+        XCTAssertEqual(try BackupData.capture(target), existing)
+        target.save = { try $0.save() }
+        let receipt = try target.importDeckPackageReceipt(deck, skipDuplicates: false, now: now,
+                            destination: .childOf(destination), expectedPreview: plan)
+        XCTAssertGreaterThan(receipt.createdNotes, 0)
+        XCTAssertEqual(try target.logs().map(\.id), existing.logs.map(\.id))
+        for name in ["latest-media", "legacy2-media"] {
+            let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: "apkg", subdirectory: "Anki"))
+            for ext in ["apkg", "zip"] {
+                guard case .anki(let anki) = try LocalFileInput.decodeImport(Data(contentsOf: url), extension: ext) else { return XCTFail("Expected Anki") }
+                XCTAssertGreaterThan(anki.deck.cardCount, 0)
+                XCTAssertGreaterThan(anki.sourceNotes, 0)
+            }
+        }
+    }
+
     func testDeckExchangeExportsOnlySelectedContentAndImportsFreshCardsWithMedia() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

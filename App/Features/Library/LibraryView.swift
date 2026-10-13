@@ -56,7 +56,7 @@ struct LibraryView: View {
                 .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
                 .accessibilityIdentifier("emptyLibraryAdd")
                 if isFirstCard {
-                    Button("一括登録") { selection.removeAll(); editMode = .inactive; importing = true }
+                    Button("インポート") { selection.removeAll(); editMode = .inactive; importing = true }
                         .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryImport")
                 }
             }
@@ -263,7 +263,7 @@ struct LibraryView: View {
                         Button("文字認識", systemImage: "text.viewfinder") { ocr = true }.accessibilityIdentifier("openOCR")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("一括登録", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
+                        Button("インポート", systemImage: "square.and.arrow.down") { importing = true }.accessibilityIdentifier("openImport")
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("カード追加", systemImage: "plus") { adding = true }.keyboardShortcut("n", modifiers: .command).accessibilityIdentifier("addNote")
@@ -283,7 +283,7 @@ struct LibraryView: View {
             }
             .sheet(isPresented: $adding) { NoteEditorView(store: store, item: nil, initialDeckID: activeDeckFilter) }
             .sheet(isPresented: $addingDeck) { DeckManagerView(store: store) }
-            .sheet(isPresented: $importing) { ImportView(store: store) }
+            .sheet(isPresented: $importing) { ImportView(store: store, initialDeckID: activeDeckFilter) }
             .sheet(isPresented: $ocr) { OCRImportView(store: store) }
 
         }

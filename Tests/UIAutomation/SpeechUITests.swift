@@ -80,6 +80,9 @@ extension SpeechUITests {
                 if folder.exists { folder.tap() }
             }
             XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription); file.tap()
+        if name.hasPrefix("Deck-") || name.hasPrefix("Anki-") {
+            XCTAssertTrue(app.buttons["confirmDeckImport"].waitForExistence(timeout: 10))
+        }
             XCTAssertTrue(app.buttons["preview\(side)Audio"].waitForExistence(timeout: 10))
         }
         app.buttons["saveNote"].tap()
@@ -107,13 +110,20 @@ extension SpeechUITests {
 extension SpeechUITests {
     private func exchangeScroll(_ element: XCUIElement, app: XCUIApplication) {
         for _ in 0..<12 {
-            if element.exists && element.isHittable { return }
-            app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.8)).press(forDuration: 0.01,
-                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.25)))
+            let top = app.navigationBars["インポート"].exists ? app.navigationBars["インポート"].frame.maxY : 110
+            let confirm = app.buttons["confirmDeckImport"]
+            let bottom = confirm.exists ? confirm.frame.minY : app.frame.maxY - 70
+            let fixed = element.exists && element.identifier == "confirmDeckImport"
+            if element.exists && element.isHittable && (fixed || (element.frame.minY >= top && element.frame.maxY <= bottom)) { return }
+            let down = element.exists && element.frame.minY < top
+            let low = (top + 0.75 * (bottom - top)) / app.frame.height
+            let high = (top + 0.2 * (bottom - top)) / app.frame.height
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: down ? high : low)).press(forDuration: 0.01,
+                thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: down ? low : high)))
         }
         XCTAssertTrue(element.exists && element.isHittable, app.debugDescription)
     }
-    private func exchangeSelect(_ name: String, app: XCUIApplication, identifier: String = "selectDeckFile") {
+    private func exchangeSelect(_ name: String, app: XCUIApplication, identifier: String = "selectImportFile") {
         exchangeScroll(app.buttons[identifier], app: app); app.buttons[identifier].tap()
         let file = app.cells.matching(NSPredicate(format: "label CONTAINS %@", name)).firstMatch
         if !file.waitForExistence(timeout: 3) {
@@ -136,18 +146,52 @@ extension SpeechUITests {
         }
         XCTAssertTrue(file.waitForExistence(timeout: 10), app.debugDescription); file.tap()
     }
+    func testUnifiedLibraryFilePickerRoutesPackagesAndPreservesCancelledReplacement() {
+        let app = XCUIApplication(), id = UUID().uuidString
+        app.launchArguments = ["-study-test-store", id, "-study-test-file-fixtures"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["openImport"].tap()
+        exchangeSelect("Deck-\(id)", app: app)
+        let confirm = app.buttons["confirmDeckImport"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        XCTAssertTrue(confirm.isHittable)
+        XCTAssertEqual(confirm.label, "取り込みを確定")
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "Issue108-unified-deck-preview"; attachment.lifetime = .keepAlways; add(attachment)
+        // A different valid file requires confirmation; cancelling retains this preview.
+        exchangeSelect("Anki-\(id)", app: app)
+        XCTAssertTrue(app.buttons["ファイルの内容に置き換える"].waitForExistence(timeout: 10))
+        app.buttons["キャンセル"].firstMatch.tap()
+        XCTAssertTrue(confirm.exists); XCTAssertFalse(app.staticTexts["ankiHistoryPolicy"].exists)
+        confirm.tap(); app.buttons["commitDeckImport"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("1ノート"))
+        app.buttons["continueDeckImport"].tap()
+        exchangeSelect("Anki-\(id)", app: app)
+        XCTAssertTrue(app.staticTexts["ankiHistoryPolicy"].waitForExistence(timeout: 10))
+        XCTAssertTrue(confirm.isHittable)
+        exchangeScroll(app.buttons["cancelDeckPreview"], app: app); app.buttons["cancelDeckPreview"].tap()
+        exchangeSelect("Images-\(id)", app: app)
+        XCTAssertTrue(app.buttons["confirmImageImport"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["confirmImageImport"].isHittable)
+        XCTAssertEqual(app.buttons["confirmImageImport"].label, "取り込みを確定")
+        app.buttons["closeImport"].tap()
+        XCTAssertTrue(app.buttons["openImport"].waitForExistence(timeout: 5))
+    }
+
     func testDeckFilePreviewCancellationImportExportAndOfflineStudy() {
         let app = XCUIApplication(), id = UUID().uuidString
         app.launchArguments = ["-study-test-store", id, "-study-test-file-fixtures"]
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
         app.tabBars.buttons["ライブラリ"].tap(); app.buttons["デッキ管理"].tap()
-        app.buttons["openDeckExchange"].tap()
+        app.buttons["openManagerImport"].tap()
         exchangeSelect("Deck-\(id)", app: app)
         exchangeScroll(app.buttons["confirmDeckImport"], app: app)
         exchangeScroll(app.buttons["cancelDeckPreview"], app: app); app.buttons["cancelDeckPreview"].tap()
         XCTAssertFalse(app.buttons["confirmDeckImport"].exists)
-        for _ in 0..<5 { if app.buttons["selectDeckFile"].isHittable { break }; app.swipeDown() }
+        for _ in 0..<5 { if app.buttons["selectImportFile"].isHittable { break }; app.swipeDown() }
         exchangeSelect("Deck-\(id)", app: app)
         exchangeScroll(app.buttons["deckImportMode"], app: app)
         app.buttons["deckImportMode"].tap()
@@ -160,12 +204,14 @@ extension SpeechUITests {
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].label.contains("新規カード 2枚"))
         app.buttons["viewImportedDeck"].tap()
         XCTAssertTrue(app.staticTexts["shortcutDeckPath"].waitForExistence(timeout: 10))
-        app.navigationBars.buttons.element(boundBy: 0).tap()
+        app.buttons["BackButton"].tap()
         app.buttons["continueDeckImport"].tap()
         exchangeSelect("Deck-\(id)", app: app)
         exchangeScroll(app.buttons["confirmDeckImport"], app: app)
         XCTAssertFalse(app.buttons["confirmDeckImport"].isEnabled)
         exchangeScroll(app.buttons["cancelDeckPreview"], app: app); app.buttons["cancelDeckPreview"].tap()
+        app.buttons["closeImport"].tap()
+        app.buttons["openDeckExchange"].tap()
         for _ in 0..<5 { if app.buttons["exchangeDeckPicker"].isHittable { break }; app.swipeDown() }
         app.buttons["exchangeDeckPicker"].tap(); app.buttons["マイデッキ"].tap()
         app.buttons["previewDeckExport"].tap()
@@ -194,8 +240,8 @@ extension SpeechUITests {
         app.launchArguments = ["-study-test-store", id, "-study-test-file-fixtures"]
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
-        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["デッキ管理"].tap(); app.buttons["openDeckExchange"].tap()
-        exchangeSelect("Anki-\(id)", app: app, identifier: "selectAnkiPackage")
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["デッキ管理"].tap(); app.buttons["openManagerImport"].tap()
+        exchangeSelect("Anki-\(id)", app: app, identifier: "selectImportFile")
         exchangeScroll(app.staticTexts["ankiHistoryPolicy"], app: app)
         XCTAssertTrue(app.staticTexts["ankiHistoryPolicy"].label.contains("新規学習"))
         XCTAssertTrue(app.staticTexts["ankiHistoryPolicy"].label.contains("回答履歴1件"))
@@ -203,8 +249,8 @@ extension SpeechUITests {
         XCTAssertTrue(unsupported.exists)
         exchangeScroll(app.buttons["cancelDeckPreview"], app: app); app.buttons["cancelDeckPreview"].tap()
         XCTAssertFalse(app.buttons["confirmDeckImport"].exists)
-        for _ in 0..<6 { if app.buttons["selectAnkiPackage"].isHittable { break }; app.swipeDown() }
-        exchangeSelect("Anki-\(id)", app: app, identifier: "selectAnkiPackage")
+        for _ in 0..<6 { if app.buttons["selectImportFile"].isHittable { break }; app.swipeDown() }
+        exchangeSelect("Anki-\(id)", app: app, identifier: "selectImportFile")
         exchangeScroll(app.buttons["confirmDeckImport"], app: app); app.buttons["confirmDeckImport"].tap()
         app.buttons["commitDeckImport"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["deckExchangeResult"].waitForExistence(timeout: 10))
