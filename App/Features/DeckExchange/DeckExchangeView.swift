@@ -17,6 +17,8 @@ struct DeckFileDocument: FileDocument {
 }
 struct DeckExchangeView: View {
     @Bindable var store: StudyStore
+    @State private var destinationMode = 0
+    @State private var destinationID: UUID?
     @State private var rootID: UUID?
     @State private var selected: ValidatedDeckPackage?
     @State private var exportBytes: Data?
@@ -50,7 +52,7 @@ struct DeckExchangeView: View {
             Section("デッキを受け取る") {
                 Button(".studydeckファイルを選択") { clearPreview(); importingAnki = false; importing = true }
                     .disabled(working).accessibilityIdentifier("selectDeckFile")
-                Text("既存データに追加します。全カードが未学習で開始し、同名デッキは別名で新しく作成します。")
+                Text("既存データに追加します。取込先はプレビューで選択できます。追加カードは未学習で開始し、既存ノート・学習履歴は変更しません。")
                     .font(.footnote)
             }
             Section("Ankiから移行する") {
@@ -109,12 +111,34 @@ struct DeckExchangeView: View {
                         Text(deckPath(deck.id, in: selected.package)).font(.footnote)
                     }
                     if let preview, exportBytes == nil {
+                        if ankiPreview == nil {
+                            Picker("取込方法", selection: $destinationMode) {
+                                Text("新規デッキとして追加").tag(0)
+                                Text("既存デッキの下へ追加").tag(1)
+                                Text("選択した既存デッキに統合").tag(2)
+                            }.disabled(working).accessibilityIdentifier("deckImportMode")
+                            if destinationMode != 0 {
+                                DeckSelectionField("取込先", decks: store.decks, selection: $destinationID)
+                                    .disabled(working).accessibilityIdentifier("deckImportDestination")
+                            }
+                        }
                         LabeledContent("取込先", value: preview.destinationName)
+                        LabeledContent("追加デッキ", value: "\(preview.mappings.filter { !$0.reused }.count)")
+                        LabeledContent("再利用デッキ", value: "\(preview.mappings.filter(\.reused).count)")
+                        DisclosureGroup("階層の変更を確認") {
+                            ForEach(preview.mappings) { mapping in
+                                Text("\(mapping.sourcePath) → \(mapping.destinationPath)（\(mapping.reused ? "再利用" : "追加")）")
+                                    .font(.footnote)
+                            }
+                        }
+                        let count = selected.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }.count
+                        LabeledContent("追加ノート", value: "\(count)")
+                        LabeledContent("追加カード", value: "\(selected.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }.reduce(0) { $0 + ((try? CardGeneration.variants(kind: $1.kind, content: $1.content).count) ?? 0) })")
                         LabeledContent("重複ノート", value: "\(preview.duplicates.count)")
                         Toggle("重複をスキップ", isOn: $skipDuplicates).accessibilityIdentifier("skipDeckDuplicates")
                         Text("本文・形式・画像/音声の内容が同じノートを重複として扱います。タグや回答方法の違いは重複判定に含みません。既存ノートの上書きは行いません。")
                             .font(.footnote)
-                        Button("確認して取り込む") { confirmation = true }.disabled(working)
+                        Button("確認して取り込む") { confirmation = true }.disabled(working || count == 0)
                             .accessibilityIdentifier("confirmDeckImport")
                     } else if exportBytes != nil {
                         Button("Filesに書き出す") { exporting = true }.accessibilityIdentifier("exportDeckFile")
@@ -139,7 +163,9 @@ struct DeckExchangeView: View {
             }
         }
         .navigationTitle("デッキファイル")
-        .onAppear { if rootID == nil { rootID = store.decks.first?.id } }
+        .onAppear { if rootID == nil { rootID = store.decks.first?.id }; if destinationID == nil { destinationID = store.decks.first?.id } }
+        .onChange(of: destinationMode) { _, _ in refreshImportPreview() }
+        .onChange(of: destinationID) { _, _ in refreshImportPreview() }
         .onChange(of: rootID) { _, _ in clearPreview() }
         .onDisappear { operation?.cancel(); if !showingCompletion { removeShareFile() } }
         .sheet(isPresented: $showingCompletion, onDismiss: { completion = nil }) {
@@ -163,7 +189,7 @@ struct DeckExchangeView: View {
                     value = imported.deck; ankiPreview = imported
                 } else { value = try await DeckExchange.read(url) }
                 try Task.checkCancellation()
-                let summary = try store.repository.previewDeckImport(value)
+                let summary = try store.repository.previewDeckImport(value, destination: importDestination)
                 selected = value; preview = summary; page = 0
             }
             }
@@ -184,7 +210,7 @@ struct DeckExchangeView: View {
                     try Task.checkCancellation()
                     try await store.createRestorePoint("デッキ・APKGの取り込み")
                     try Task.checkCancellation()
-                    var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock())
+                    var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock(), destination: importDestination, expectedPreview: preview)
                     receipt.skipped = ankiPreview?.skipped ?? []
                     receipt.warnings = ankiPreview?.warnings ?? []
                     var warning: String?
@@ -202,12 +228,25 @@ struct DeckExchangeView: View {
             Button("閉じる", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
     }
+    private var importDestination: DeckImportDestination {
+        guard ankiPreview == nil, let destinationID else { return .newRoot }
+        switch destinationMode {
+        case 1: return .childOf(destinationID)
+        case 2: return .mergeInto(destinationID)
+        default: return .newRoot
+        }
+    }
+    private func refreshImportPreview() {
+        guard let selected, exportBytes == nil else { return }
+        do { preview = try store.repository.previewDeckImport(selected, destination: importDestination) }
+        catch { preview = nil; failure = error.localizedDescription }
+    }
     private func run(_ action: @escaping @MainActor () async throws -> Void) {
         guard !working else { return }
         working = true; completion = nil
         operation = Task { @MainActor in
             defer { working = false }
-            do { try await action() } catch is CancellationError {} catch { failure = error.localizedDescription }
+            do { try await action() } catch is CancellationError {} catch { refreshImportPreview(); failure = error.localizedDescription }
         }
     }
     private func prepareExport() {

@@ -818,3 +818,83 @@ extension BackupRepositoryTests {
         XCTAssertEqual(try BackupData.capture(store.repository).canonical(), before)
     }
 }
+
+extension BackupRepositoryTests {
+    func testDeckImportDestinationsAndStalePlanPreserveExistingData() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let sourceRoot = try source.decks()[0].id
+        let child = try source.createDeck(name: "Child", parentID: sourceRoot, now: now)
+        try source.createNote(NoteInput(deckID: child, question: "Imported", answer: "Answer", hint: "Hint", tagNames: ["Tag"]), now: now)
+        let package = try DeckExchange.decode(try await DeckExchange.export(repository: source, rootID: sourceRoot))
+        for mode in 0..<3 {
+            let target = try fixture(root.appendingPathComponent("target\(mode)"))
+            try populate(target)
+            let parent = try target.decks()[0].id
+            let existingChild = try target.createDeck(name: "Child", parentID: parent, now: now)
+            let before = try BackupData.capture(target)
+            let destination: DeckImportDestination = mode == 0 ? .newRoot : mode == 1 ? .childOf(parent) : .mergeInto(parent)
+            let preview = try target.previewDeckImport(package, destination: destination)
+            XCTAssertEqual(preview.mappings.filter(\.reused).count, mode == 2 ? 2 : 0)
+            let receipt = try target.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview)
+            XCTAssertEqual(receipt.createdNotes, 1)
+            XCTAssertEqual(receipt.createdCards, 1)
+            let imported = try XCTUnwrap(target.noteItems().first { $0.content.question == "Imported" })
+            XCTAssertEqual(imported.content.hint, "Hint")
+            XCTAssertEqual(imported.tagNames, ["Tag"])
+            XCTAssertEqual(imported.deckName, preview.mappings.first { $0.id == child }?.destinationPath)
+            if mode == 2 { XCTAssertEqual(imported.deckID, existingChild); XCTAssertEqual(receipt.rootDeckID, parent) }
+            let after = try BackupData.capture(target)
+            XCTAssertEqual(after.logs, before.logs)
+            XCTAssertEqual(after.cards.filter { card in before.cards.contains { $0.id == card.id } }, before.cards)
+            XCTAssertEqual(after.notes.filter { note in before.notes.contains { $0.id == note.id } }, before.notes)
+            let duplicate = try target.previewDeckImport(package, destination: destination)
+            let count = try target.decks().count
+            XCTAssertEqual(try target.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: duplicate).createdNotes, 0)
+            XCTAssertEqual(try target.decks().count, count)
+        }
+        let target = try fixture(root.appendingPathComponent("stale"))
+        let parent = try target.decks()[0].id
+        let destination = DeckImportDestination.mergeInto(parent)
+        let preview = try target.previewDeckImport(package, destination: destination)
+        try target.createDeck(name: "Child", parentID: parent, now: now)
+        let before = try BackupData.capture(target)
+        XCTAssertThrowsError(try target.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview))
+        XCTAssertEqual(try BackupData.capture(target), before)
+        let fresh = try target.previewDeckImport(package, destination: destination)
+        target.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try target.importDeckPackageReceipt(package, skipDuplicates: false, now: now, destination: destination, expectedPreview: fresh))
+        XCTAssertEqual(try BackupData.capture(target), before)
+        XCTAssertThrowsError(try target.previewDeckImport(package, destination: .mergeInto(UUID())))
+    }
+}
+
+extension BackupRepositoryTests {
+    func testDeckMergeDoesNotCollapseAmbiguousSiblingNames() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let sourceRoot = try source.decks()[0].id
+        let first = try source.createDeck(name: "Same", parentID: sourceRoot, now: now)
+        let second = try source.createDeck(name: "Same", parentID: sourceRoot, now: now)
+        try source.createNote(NoteInput(deckID: first, question: "First", answer: "A"), now: now)
+        try source.createNote(NoteInput(deckID: second, question: "Second", answer: "A"), now: now)
+        let package = try DeckExchange.decode(try await DeckExchange.export(repository: source, rootID: sourceRoot))
+        let target = try fixture(root.appendingPathComponent("target"))
+        let parent = try target.decks()[0].id
+        let existing = try target.createDeck(name: "Same", parentID: parent, now: now)
+        let preview = try target.previewDeckImport(package, destination: .mergeInto(parent))
+        XCTAssertEqual(preview.mappings.filter(\.reused).count, 1)
+        XCTAssertEqual(Set(preview.mappings.map(\.destinationPath)).count, 3)
+        try target.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: .mergeInto(parent), expectedPreview: preview)
+        let items = try target.noteItems()
+        XCTAssertEqual(Set(items.map(\.deckID)).count, 2)
+        XCTAssertFalse(items.contains { $0.deckID == existing })
+        let another = try target.createDeck(name: "Same", parentID: parent, now: now)
+        XCTAssertNotEqual(existing, another)
+        let single = try DeckExchange.decode(try await DeckExchange.export(repository: source, rootID: first))
+        let ambiguous = try target.previewDeckImport(single, destination: .childOf(parent))
+        XCTAssertTrue(ambiguous.mappings.allSatisfy { !$0.reused })
+    }
+}
