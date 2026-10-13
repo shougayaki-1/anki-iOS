@@ -72,6 +72,31 @@ final class ScaleRepositoryTests: XCTestCase {
         XCTAssertEqual(count, 1900)
         _ = try ImportMemoryProbe.run("apkg_1900_home") { try StudyStore(container: repo.context.container, clock: { now }, mediaStore: repo.mediaStore) }
     }
+    func testTextImportPreparationScale() async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id
+        let rows = (0..<3000).map { ImportRow(line: $0 + 1, question: "Question \($0)", answer: "Answer \($0)") }
+        // Reproduce the previous per-row persistence validation without saving.
+        let oldPayloads = try ImportMemoryProbe.run("csv_previous_validation_3000") {
+            try rows.map { try repo.validate(NoteInput(deckID: deck, question: $0.question, answer: $0.answer)) }
+        }
+        let prepared = try await Task.detached(priority: .userInitiated) {
+            try ImportMemoryProbe.run("csv_worker_preparation_3000") {
+                try PreparedTextImport.make(rows, deckID: deck, kind: .basic, tagNames: [])
+            }
+        }.value
+        XCTAssertEqual(try prepared.rows.map { try JSONDecoder().decode(TextContent.self, from: $0.content) },
+                       try oldPayloads.map { try JSONDecoder().decode(TextContent.self, from: $0) })
+        let result = try ImportMemoryProbe.run("csv_prepared_commit_3000") {
+            try repo.importPreparedRows(prepared, action: .skip, source: "CSV", now: now)
+        }
+        XCTAssertEqual(result.createdCards, 3000)
+        XCTAssertEqual(try repo.cards().count, 3000)
+        XCTAssertEqual(try repo.context.fetch(FetchDescriptor<ImportBatch>()).count, 1)
+    }
+
     func testImportBufferScaleMeasurements() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

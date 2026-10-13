@@ -188,9 +188,14 @@ final class StudyRepository {
         for id in input.audioIDs {
             guard media.contains(where: { $0.id == id && AudioEncodingPolicy.extensions[$0.mediaType] != nil }) else { throw AttachedAudioError.missing }
         }
+        guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
+        return try Self.encodeContent(input)
+    }
+
+    // Pure validation shared by editing and background text-import preparation.
+    nonisolated static func encodeContent(_ input: NoteInput) throws -> Data {
         guard !input.question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               ([.cloze, .imageOcclusion].contains(input.kind) || !input.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) else { throw StudyError.invalidContent }
-        guard try decks().contains(where: { $0.id == input.deckID }) else { throw StudyError.missingRecord }
         let content = TextContent(question: input.question, answer: input.answer,
                                   explanation: input.explanation, hint: input.hint, reverseEnabled: input.reverseEnabled,
                                   imageID: input.imageID, masks: input.masks, hideAllMasks: input.hideAllMasks,

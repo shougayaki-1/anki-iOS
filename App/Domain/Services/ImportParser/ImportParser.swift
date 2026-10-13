@@ -202,3 +202,42 @@ enum ImageImportError: LocalizedError {
         }
     }
 }
+
+// Contains values only: no SwiftData models or contexts cross the worker boundary.
+struct PreparedTextImport {
+    struct Row {
+        let line: Int
+        let updatesMode: Bool
+        let input: NoteInput
+        let content: Data
+        let variants: [String]
+        let duplicateKey: [String]
+    }
+    let deckID: UUID
+    let kind: NoteKind
+    let tagNames: [String]
+    let rows: [Row]
+    let errors: [String]
+    let excluded: Int
+
+    static func make(_ rows: [ImportRow], deckID: UUID, kind: NoteKind, tagNames: [String]) throws -> Self {
+        var valid: [Row] = [], errors: [String] = [], excluded = 0
+        for row in rows {
+            try Task.checkCancellation()
+            guard row.included else { excluded += 1; continue }
+            let requested = row.responseMode ?? .mental
+            let mode: ResponseMode = requested == .ordering && OrderingAnswer.reason(kind: kind, answer: row.answer) != nil ? .mental : requested
+            let input = NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer,
+                                  explanation: row.explanation, hint: row.hint, responseMode: mode,
+                                  tagNames: tagNames, questionLayout: row.questionLayout, answerLayout: row.answerLayout)
+            do {
+                let content = try StudyRepository.encodeContent(input)
+                let decoded = try JSONDecoder().decode(TextContent.self, from: content)
+                valid.append(Row(line: row.line, updatesMode: row.responseMode != nil, input: input,
+                                 content: content, variants: try CardGeneration.variants(kind: kind, content: decoded),
+                                 duplicateKey: [ImportParser.normalized(input.question), ImportParser.normalized(input.answer)]))
+            } catch { errors.append("\(row.line)行: \(error.localizedDescription)") }
+        }
+        return Self(deckID: deckID, kind: kind, tagNames: tagNames, rows: valid, errors: errors, excluded: excluded)
+    }
+}
