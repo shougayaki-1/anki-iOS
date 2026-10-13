@@ -171,6 +171,7 @@ actor StatisticsReader {
         let decks = try context.fetch(FetchDescriptor<Deck>())
         let logRows = try context.fetch(FetchDescriptor<StudyReviewLog>())
 
+        let paused = DeckStudyEligibility.pausedIDs(decks.map { ($0.id, $0.parentID, $0.isStudyPaused) })
         let notesByID = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0) })
         let noteIDByCardID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.noteID) })
 
@@ -215,7 +216,7 @@ actor StatisticsReader {
             let title = try note.map { try JSONDecoder().decode(TextContent.self, from: $0.contentPayload).question } ?? "カード"
             cost += title.utf8.count
             return PreparedCard(id: card.id, title: title, stability: summary.stability, difficulty: summary.difficulty, deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
-                                isSuspended: card.isSuspended, dueDate: card.dueDate, state: state)
+                                isSuspended: card.isSuspended || note.map { paused.contains($0.deckID) } == true, dueDate: card.dueDate, state: state)
         }
         #if DEBUG
         materialReads += 1
@@ -238,7 +239,8 @@ extension StudyRepository {
                                 durationMs: $0.durationMs, wasNew: $0.wasNew)
         }
         let scheduler = try ReviewScheduler(parameters: optimizationState().activeParameters)
-        let retention = try cards().filter { !$0.isSuspended }.compactMap { card -> Double? in
+        let eligible = Set(try queueCards().filter { !$0.suspended }.map(\.id))
+        let retention = try cards().filter { eligible.contains($0.id) }.compactMap { card -> Double? in
             let snapshot = try snapshot(card)
             guard try scheduler.summary(snapshot).state != "new" else { return nil }
             return try scheduler.retrievability(snapshot, now: now)
@@ -290,7 +292,7 @@ extension StudyRepository {
     func weakCards(scope: LearningScope, days: Int?, now: Date) throws -> [WeakCardItem] {
         guard days == nil || [7, 30, 90].contains(days!) else { throw StudyError.invalidContent }
         let normalized = try normalizedScope(scope)
-        let scopedIDs = Set(try scopedQueueCards(normalized).map(\.id))
+        let scopedIDs = Set(try scopedQueueCards(normalized).filter { !$0.suspended }.map(\.id))
         let startHour = try settings().dayStartHour
         let day = StudyDay(calendar: calendar, startHour: startHour).interval(containing: now)
         let start = days.flatMap { calendar.date(byAdding: .day, value: 1 - $0, to: day.start) }

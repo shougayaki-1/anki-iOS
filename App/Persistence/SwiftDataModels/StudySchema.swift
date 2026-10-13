@@ -111,7 +111,7 @@ enum StudySchema: VersionedSchema {
     }
 }
 
-typealias Deck = StudySchema.Deck
+typealias Deck = StudySchemaV6.Deck
 typealias Note = StudySchema.Note
 typealias StudyCard = StudySchema.StudyCard
 typealias StudyReviewLog = StudySchema.StudyReviewLog

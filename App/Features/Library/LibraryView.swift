@@ -7,6 +7,7 @@ struct LibraryView: View {
     var deckFilter: UUID? = nil
     @State private var clearedDeckFilter = false
     private var activeDeckFilter: UUID? { clearedDeckFilter ? nil : deckFilter }
+    @State private var showingPausedDecks = false
     @State private var adding = false
     @State private var ocr = false
     @State private var importing = false
@@ -92,6 +93,28 @@ struct LibraryView: View {
                 attempt: loadAttempt, expansion: savedExpansion)
     }
 
+    // Keep entire top-level subtrees together. Paused children of active roots
+    // remain under their parent and use the existing per-deck disclosure.
+    private var partitionedRows: (active: [LibraryTreeRow], paused: [LibraryTreeRow]) {
+        guard !hasSearch, activeDeckFilter == nil else { return (visibleRows, []) }
+        var active: [LibraryTreeRow] = [], paused: [LibraryTreeRow] = [], inPausedRoot = false
+        for row in visibleRows {
+            if row.depth == 0 { inPausedRoot = row.deck?.isStudyPaused == true }
+            if inPausedRoot { paused.append(row) } else { active.append(row) }
+        }
+        return (active, paused)
+    }
+    private func libraryRows(_ rows: [LibraryTreeRow]) -> some View {
+                ForEach(rows) { row in
+                    LibraryTreeRowView(row: row, store: store,
+                        cardRow: row.note.map { LibraryCardRow(card: $0.card, index: index, flag: cardMarks[$0.card.id]?.flag) },
+                        isEditing: editMode.isEditing, hasSearch: hasSearch,
+                        isSelected: row.note.map { $0.cardIDs.isSubset(of: selection) } ?? false,
+                        isPartiallySelected: row.note.map { !selection.isDisjoint(with: $0.cardIDs) } ?? false,
+                        savedExpansion: $savedExpansion, selection: $selection)
+                        .equatable()
+                }
+    }
     var body: some View {
         let interval = PerformanceProbe.begin("Library.listBody")
         defer { PerformanceProbe.end(interval) }
@@ -127,14 +150,11 @@ struct LibraryView: View {
                 if results.cardCount == 0 && !loading && libraryFailure == nil {
                     emptyLibrary
                 }
-                ForEach(visibleRows) { row in
-                    LibraryTreeRowView(row: row, store: store,
-                        cardRow: row.note.map { LibraryCardRow(card: $0.card, index: index, flag: cardMarks[$0.card.id]?.flag) },
-                        isEditing: editMode.isEditing, hasSearch: hasSearch,
-                        isSelected: row.note.map { $0.cardIDs.isSubset(of: selection) } ?? false,
-                        isPartiallySelected: row.note.map { !selection.isDisjoint(with: $0.cardIDs) } ?? false,
-                        savedExpansion: $savedExpansion, selection: $selection)
-                        .equatable()
+                libraryRows(partitionedRows.active)
+                if !partitionedRows.paused.isEmpty {
+                    DisclosureGroup("休止中のデッキ", isExpanded: $showingPausedDecks) {
+                        libraryRows(partitionedRows.paused)
+                    }
                 }
             }
             .task(id: request) {
@@ -281,6 +301,7 @@ struct LibraryTreeRowView: View, Equatable {
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.store === rhs.store && lhs.row.id == rhs.row.id &&
         lhs.row.deck?.name == rhs.row.deck?.name &&
+        lhs.row.deck?.isStudyPaused == rhs.row.deck?.isStudyPaused &&
         lhs.row.note?.card.id == rhs.row.note?.card.id &&
         lhs.row.note?.cardIDs == rhs.row.note?.cardIDs &&
         lhs.row.depth == rhs.row.depth && lhs.row.cardCount == rhs.row.cardCount &&
@@ -308,7 +329,7 @@ struct LibraryTreeRowView: View, Equatable {
                         Image(systemName: row.expandable ? (row.expanded ? "chevron.down" : "chevron.right") : "minus")
                             .font(.caption).frame(width: 12).accessibilityHidden(true)
                         Image(systemName: row.expanded ? "folder.fill" : "folder").foregroundStyle(.secondary).accessibilityHidden(true)
-                        Text(deck.name).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                        Text(deck.name + (deck.isStudyPaused ? "・休止中" : "")).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 4)
                         Text(row.cardCount == 0 ? "空" : "\(row.cardCount)枚").font(.caption).foregroundStyle(.secondary)
                     }
@@ -666,7 +687,9 @@ private struct WeakPracticeView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     Text("練習のみ・復習予定と学習履歴は変更しません")
                         .font(.footnote).foregroundStyle(.secondary)
-                    if let item = session.current {
+                    if let item = session.current, store.decks.first(where: { $0.id == item.deckID })?.isEffectivelyStudyPaused == true {
+                        Text("このデッキは学習を休止しています。下書きは保持しています。デッキ管理で再開してください。")
+                    } else if let item = session.current {
                         Text("\(session.index + 1)／\(session.cards.count)枚")
                         Text(item.content.question).font(.title2).accessibilityIdentifier("weakPracticeQuestion")
                         if let id = item.sourceContent.imageID {
@@ -912,7 +935,8 @@ struct AdvancedLibrarySearchView: View {
                 } else {
                     Button("検索結果でカスタム学習") {
                         do {
-                            practice = WeakPracticeSession(cards: try store.repository.noteItems(cardIDs: results.cardIDs))
+                            let eligible = Set(try store.repository.queueCards().filter { !$0.suspended }.map(\.id))
+                            practice = WeakPracticeSession(cards: try store.repository.noteItems(cardIDs: results.cardIDs.intersection(eligible)))
                         } catch { failure = error.localizedDescription }
                     }
                 }

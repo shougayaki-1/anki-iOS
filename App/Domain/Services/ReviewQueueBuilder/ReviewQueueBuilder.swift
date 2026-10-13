@@ -21,6 +21,7 @@ struct StudyDay {
 }
 
 struct QueueCard: Sendable, Equatable {
+    var studyPaused = false
     let id: UUID
     let state: String
     let due: Date

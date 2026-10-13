@@ -116,6 +116,7 @@ extension BackupData {
         value.typedAnswers?.sort { $0.id.uuidString < $1.id.uuidString }
         if value.orderingDrafts?.isEmpty == true { value.orderingDrafts = nil }
         value.orderingDrafts?.sort { $0.key < $1.key }
+        for index in value.decks.indices { value.decks[index].isStudyPaused = value.decks[index].isStudyPaused ?? false }
         value.decks.sort { $0.id.uuidString < $1.id.uuidString }; value.notes.sort { $0.id.uuidString < $1.id.uuidString }
         value.cards.sort { $0.id.uuidString < $1.id.uuidString }; value.logs.sort { $0.sequence < $1.sequence }
         value.tags.sort { $0.id.uuidString < $1.id.uuidString }; value.media.sort { $0.id.uuidString < $1.id.uuidString }

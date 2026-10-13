@@ -3,7 +3,7 @@ import SwiftData
 
 extension PersistenceController {
     static func makeStudyContainer(storeURL: URL? = nil, inMemory: Bool = false, mediaStore: MediaStore = MediaStore()) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: StudySchemaV5.self)
+        let schema = Schema(versionedSchema: StudySchemaV6.self)
         let config: ModelConfiguration
         if let storeURL {
             config = ModelConfiguration("Study", schema: schema, url: try StudyStorageLocation(canonicalStore: storeURL).activeStore(), cloudKitDatabase: .none)
@@ -17,7 +17,7 @@ extension PersistenceController {
         }
         let location = StudyStorageLocation(canonicalStore: storeURL ?? StudyStorageLocation.defaultStore)
         let rescue = MigrationRescue(location: location)
-        let schemaID = "5.0.0" // Keep in sync with the schema selected above.
+        let schemaID = "6.0.0" // Keep in sync with the schema selected above.
         // All production opens share this preflight, including shortcuts.
         // UI-test/custom stores use their own Media root from the caller.
         if !inMemory { try rescue.preserveIfNeeded(schema: schemaID, mediaStore: mediaStore) }
@@ -54,6 +54,7 @@ final class StudyRepository {
         let tagIDs: [UUID]
     }
     private var operationNotes: [QueueNote]?
+    private var operationPausedDecks: Set<UUID>?
     private var operationCards: [QueueCard]?
     private var operationScopes: [(LearningScope, Set<UUID>)] = []
 
@@ -72,6 +73,7 @@ final class StudyRepository {
     }
 
     private func clearOperationQueue() {
+        operationPausedDecks = nil
         operationNotes = nil
         operationCards = nil
         operationScopes.removeAll()
@@ -144,6 +146,30 @@ final class StudyRepository {
 
     func decks() throws -> [Deck] {
         try context.fetch(FetchDescriptor<Deck>(sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)]))
+    }
+    func pausedDeckIDs() throws -> Set<UUID> {
+        if reusingStudyQueue, let operationPausedDecks { return operationPausedDecks }
+        let ids = DeckStudyEligibility.pausedIDs(try decks().map { ($0.id, $0.parentID, $0.isStudyPaused) })
+        if reusingStudyQueue { operationPausedDecks = ids }
+        return ids
+    }
+    func isStudyPaused(cardID: UUID) throws -> Bool {
+        guard let card = try card(cardID), let note = try note(card.noteID) else { return false }
+        return try pausedDeckIDs().contains(note.deckID)
+    }
+    func setStudyPaused(deckID: UUID, paused: Bool, now: Date) throws {
+        try transaction {
+            guard let deck = try decks().first(where: { $0.id == deckID }) else { throw StudyError.missingRecord }
+            deck.isStudyPaused = paused; deck.updatedAt = now
+            try pauseSessionIfNeeded(now: now)
+        }
+    }
+    func pauseSessionIfNeeded(now: Date) throws {
+        // Preserve the complete draft and Undo. Explicit resume restores it.
+        if let draft = try session(), let id = draft.cardID, try isStudyPaused(cardID: id) {
+            if let since = draft.activeSince { draft.elapsedMs += max(0, Int(now.timeIntervalSince(since) * 1000)) }
+            draft.activeSince = nil
+        }
     }
     func card(_ id: UUID) throws -> StudyCard? {
         var fetch = FetchDescriptor<StudyCard>(predicate: #Predicate { $0.id == id })
@@ -432,6 +458,7 @@ final class StudyRepository {
         #endif
         let scheduler = try ReviewScheduler()
         let noteDecks = Dictionary(uniqueKeysWithValues: try queueNotes().map { ($0.id, $0.deckID) })
+        let paused = try pausedDeckIDs()
         let ancestors = try deckAncestorMap()
         let overrides = try options().deckLearning ?? []
         let limits = ancestors.mapValues { ids in
@@ -456,8 +483,9 @@ final class StudyRepository {
                 queueStateDecodeCount += 1
             }
             states[card.id] = (card.fsrsPayload, state)
-            return QueueCard(id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
-                             suspended: card.isSuspended, hiddenUntil: marks[card.id]?.hiddenUntil, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
+            let studyPaused = noteDecks[card.noteID].map { paused.contains($0) } == true
+            return QueueCard(studyPaused: studyPaused, id: card.id, state: state, due: card.dueDate, createdAt: card.createdAt,
+                             suspended: card.isSuspended || studyPaused, hiddenUntil: marks[card.id]?.hiddenUntil, noteID: card.noteID, deckLimits: noteDecks[card.noteID].flatMap { limits[$0] } ?? [:])
         }
         queueStates = states
         if reusingStudyQueue { operationCards = result }
@@ -592,6 +620,7 @@ final class StudyRepository {
     func resume(now: Date) throws {
         try transaction {
             guard let draft = try session() else { throw StudyError.noSession }
+            if let id = draft.cardID, try isStudyPaused(cardID: id) { throw StudyError.deckStudyPaused }
             let held = try draft.cardID.flatMap { try cardMark($0)?.hiddenUntil }.map { now < $0 } ?? false
             if draft.cardID == nil || held {
                 try selectNext(draft: draft, now: now)
@@ -650,7 +679,8 @@ final class StudyRepository {
             if let since = draft.activeSince {
                 draft.elapsedMs += max(0, Int(now.timeIntervalSince(since) * 1000))
             }
-            draft.activeSince = active && draft.cardID != nil ? now : nil
+            let paused = try draft.cardID.map { try isStudyPaused(cardID: $0) } ?? false
+            draft.activeSince = active && draft.cardID != nil && !paused ? now : nil
             draft.updatedAt = now
         }
     }
@@ -666,6 +696,7 @@ final class StudyRepository {
             }
             let progressBefore = try sessionProgress()
             guard let note = try note(card.noteID) else { throw StudyError.missingRecord }
+            guard try !pausedDeckIDs().contains(note.deckID) else { throw StudyError.deckStudyPaused }
             let scheduler = try ReviewScheduler(desiredRetention: deckRetention(note.deckID), parameters: optimizationState().activeParameters)
             let before = try snapshot(card)
             let summary = try scheduler.summary(before)
@@ -766,7 +797,8 @@ final class StudyRepository {
             context.delete(latest)
             // Undo restores the evaluation, while independent holds remain in force.
             let held = try cardMark(card.id)?.hiddenUntil.map { now < $0 } ?? false
-            if card.isSuspended || held {
+            if try isStudyPaused(cardID: card.id) { draft.activeSince = nil }
+            else if card.isSuspended || held {
                 try selectNext(draft: draft, now: now)
             }
         }
@@ -776,7 +808,9 @@ final class StudyRepository {
         guard let draft = try session() else { return nil }
         let all = try cards ?? queueCards()
         let mode = StudyMode(rawValue: draft.mode) ?? .review
-        let item = try draft.cardID.flatMap { try noteItems(cardID: $0).first }
+        let item = try draft.cardID.flatMap { id in
+            try all.first(where: { $0.id == id })?.studyPaused == true ? nil : noteItems(cardID: id).first
+        }
         let short = try responseEligibleCards(scopedQueueCards(scope(), cards: all), mode: options().activeSessionProgress?.responseMode ?? .cardDefault).filter {
             !$0.suspended && !$0.isHidden(at: now) && ($0.state == "learning" || $0.state == "relearning") && $0.due > now
                 && (mode != .new || draft.touchedCardIDs.contains($0.id))

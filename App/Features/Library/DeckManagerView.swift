@@ -4,6 +4,7 @@ import SwiftUI
 struct DeckTreeNode: Identifiable {
     let id: UUID
     let name: String
+    var isStudyPaused = false
     let children: [DeckTreeNode]
 }
 
@@ -19,6 +20,7 @@ enum DeckTreeBuilder {
     static func roots(from decks: [DeckItem]) -> [DeckTreeNode] {
         let byID = Dictionary(uniqueKeysWithValues: decks.map { ($0.id, $0) })
         let sorted = decks.sorted {
+            if $0.isEffectivelyStudyPaused != $1.isEffectivelyStudyPaused { return !$0.isEffectivelyStudyPaused }
             let order = $0.shortName.localizedStandardCompare($1.shortName)
             return order == .orderedSame ? $0.id.uuidString < $1.id.uuidString : order == .orderedAscending
         }
@@ -30,7 +32,7 @@ enum DeckTreeBuilder {
             seen.insert(deck.id)
             let chain = ancestors.union([deck.id])
             return DeckTreeNode(id: deck.id, name: deck.shortName,
-                                children: (byParent[deck.id] ?? []).compactMap { build($0, ancestors: chain) })
+                                isStudyPaused: deck.isEffectivelyStudyPaused, children: (byParent[deck.id] ?? []).compactMap { build($0, ancestors: chain) })
         }
 
         let topLevel = sorted.filter { $0.parentID == nil || $0.parentID.map { byID[$0] == nil } == true }
@@ -89,9 +91,11 @@ struct DeckManagerView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let notice = store.noteSaveNotice { Text(notice.message).font(.footnote) }
                 Button("ファイルを取り込む") { importDeckID = nil; importing = true }.accessibilityIdentifier("openManagerImport")
                 NavigationLink("デッキファイルを書き出す") { DeckExchangeView(store: store) }.accessibilityIdentifier("openDeckExchange")
                 ForEach(visibleRows) { row in
+                    let deck = store.decks.first(where: { $0.id == row.id })
                     HStack(spacing: 4) {
                         if row.hasChildren {
                             Button {
@@ -114,6 +118,9 @@ struct DeckManagerView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Label(row.name, systemImage: "folder")
                                     .fixedSize(horizontal: false, vertical: true)
+                                if deck?.isEffectivelyStudyPaused == true {
+                                    Text("休止中").font(.caption).foregroundStyle(.secondary)
+                                }
                                 // Keep names readable on narrow screens without hiding
                                 // levels once visual indentation reaches its width budget.
                                 if row.depth >= 6 {
@@ -128,6 +135,9 @@ struct DeckManagerView: View {
                     }
                     .padding(.leading, CGFloat(min(row.depth, 6)) * 14)
                     .contextMenu {
+                        if let deck = store.decks.first(where: { $0.id == row.id }) {
+                            Button(deck.isStudyPaused ? "学習を再開" : "学習を休止", systemImage: deck.isStudyPaused ? "play.circle" : "pause.circle") { store.toggleStudyPaused(row.id) }
+                        }
                         Button("ファイルを取り込む", systemImage: "square.and.arrow.down") {
                             importDeckID = row.id; importing = true
                         }
@@ -138,6 +148,7 @@ struct DeckManagerView: View {
                     }
                 }
             }
+            .alert("処理結果", isPresented: Binding(get: { store.failure != nil }, set: { if !$0 { store.failure = nil } })) { Button("閉じる", role: .cancel) { store.failure = nil } } message: { Text(store.failure ?? "") }
             .navigationTitle("デッキ管理")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() } }
@@ -186,6 +197,18 @@ struct DeckEditorView: View {
                 DeckSelectionField("親デッキ", decks: store.decks, selection: $parentID, nilTitle: "なし（最上位）", excluded: excluded).accessibilityIdentifier("deckParentPicker")
             }
             if let deckID {
+                Section("学習の休止") {
+                    if let notice = store.noteSaveNotice { Text(notice.message).font(.footnote) }
+                    if let deck = store.decks.first(where: { $0.id == deckID }) {
+                        Label(deck.isEffectivelyStudyPaused ? "休止中" : "学習中", systemImage: deck.isEffectivelyStudyPaused ? "pause.circle" : "play.circle")
+                        if deck.isEffectivelyStudyPaused && !deck.isStudyPaused {
+                            Text("親デッキの休止を引き継いでいます。再開するには親デッキの設定を変更してください。")
+                        }
+                        Button(deck.isStudyPaused ? "学習を再開" : "学習を休止") { store.toggleStudyPaused(deckID) }
+                        Text("カード・学習履歴と復習期限は保持します。再開時は元の期限を過ぎたカードがまとめて復習対象になることがあります。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
                 Section("学習設定") {
                     Toggle("新規上限を指定", isOn: Binding(get: { learning?.newLimit != nil }, set: { learning?.newLimit = $0 ? 20 : nil }))
                     if let value = learning?.newLimit {
@@ -256,9 +279,9 @@ struct DeckEditorView: View {
             Button("ノートを移動して削除") { remove(move: destination) }.disabled(destination == nil)
             Button("ノート・カードも削除", role: .destructive) { remove(move: nil) }
         }
-        .alert("処理できませんでした", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+        .alert("処理できませんでした", isPresented: Binding(get: { failure != nil || store.failure != nil }, set: { if !$0 { failure = nil; store.failure = nil } })) {
             Button("閉じる", role: .cancel) { failure = nil }
-        } message: { Text(failure ?? "") }
+        } message: { Text(failure ?? store.failure ?? "") }
     }
     private func save() {
         do {

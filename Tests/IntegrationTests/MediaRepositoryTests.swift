@@ -253,7 +253,7 @@ final class MediaRepositoryTests: XCTestCase {
         let schema = Schema(versionedSchema: StudySchemaV2.self)
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration("Study", schema: schema, url: url, cloudKitDatabase: .none)])
         let context = ModelContext(container)
-        let deck = Deck(name: "V2", now: now), tag = Tag(name: "Tag", normalizedName: "tag")
+        let deck = StudySchema.Deck(name: "V2", now: now), tag = Tag(name: "Tag", normalizedName: "tag")
         context.insert(deck); context.insert(tag); context.insert(StudyPreferences())
         context.insert(try SessionScope(scope: LearningScope(deckID: deck.id, tagIDs: [tag.id])))
         context.insert(try ExtraPreferences(options: StudyOptions(siblingBuryEnabled: false)))
