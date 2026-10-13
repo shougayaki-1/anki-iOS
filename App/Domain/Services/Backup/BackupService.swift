@@ -27,6 +27,28 @@ struct BackupService {
         }.value
     }
 
+    /// Automatic backups read committed data using a context created on the worker.
+    /// Restore points retain the caller's context capture before a destructive edit.
+    static func exportCommitted(container: ModelContainer, mediaStore: MediaStore,
+                                now: Date, appVersion: String) async throws -> Data {
+        let job = Task.detached(priority: .utility) {
+            try Task.checkCancellation()
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            let snapshot = try BackupData.capture(context: context)
+            var media: [UUID: Data] = [:]
+            for asset in snapshot.media {
+                try Task.checkCancellation()
+                let url = try mediaStore.url(for: asset.relativePath)
+                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? Int.max) <= ImageEncodingPolicy.maximumBytes else { throw BackupError.tooLarge }
+                media[asset.id] = try Data(contentsOf: url, options: .mappedIfSafe)
+            }
+            try Task.checkCancellation()
+            return try BackupArchive.create(data: snapshot, media: media, now: now, appVersion: appVersion)
+        }
+        return try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
+    }
+
     static func restore(_ backup: ValidatedBackup, location: StudyStorageLocation, mediaStore: MediaStore, now: Date,
                         save: (ModelContext) throws -> Void = { try $0.save() }) throws -> ModelContainer {
         // Revalidate even if a caller constructed ValidatedBackup directly.

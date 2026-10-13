@@ -50,6 +50,7 @@ final class StudyStore {
     var newSlotsRemaining = 0
     var homeFailure: String?
     var hasCards = false
+    @ObservationIgnored private var homeCards: (repository: ObjectIdentifier, revision: Int, cards: [QueueCard])?
     @ObservationIgnored private var homeDayStart: Date?
     @ObservationIgnored private var homeTimeZone: String?
     var settings = StudySettings()
@@ -109,6 +110,7 @@ final class StudyStore {
     private func refreshStudy(metadata: Bool = false, changed: Bool = true, forceWidget: Bool = false) throws {
         // Invalidate even if post-save display reads fail. A successful mutation
         // must never reuse the material from before that mutation.
+        homeCards = nil
         if changed { statisticsRevision += 1 }
         let interval = PerformanceProbe.begin("Store.refreshStudy")
         defer { PerformanceProbe.end(interval) }
@@ -149,6 +151,7 @@ final class StudyStore {
                 dataRevision += 1
             }
             reviewRefreshFailed = false
+            homeCards = (ObjectIdentifier(repository), repository.mutationRevision, cards)
             applyHomeSnapshot(snapshot)
             publishWidget(snapshot, force: forceWidget, cards: cards, logs: logs)
             if changed { scheduleNotifications(cards: cards) }
@@ -171,20 +174,25 @@ final class StudyStore {
         do {
             repository.calendar = .current
             let now = clock()
+            let cards: [QueueCard]
+            if let cached = homeCards, cached.repository == ObjectIdentifier(repository),
+               cached.revision == repository.mutationRevision, !repository.context.hasChanges {
+                cards = cached.cards
+            } else { cards = try repository.queueCards() }
             // A waiting session only writes when a next card becomes available.
-            if try repository.advanceWaitingSession(now: now) {
+            if try repository.advanceWaitingSession(now: now, cards: cards) {
                 review = try repository.presentation(now: now)
             }
 
-            let cards = try repository.queueCards()
             let logs = try repository.todayQueueLogs(cards: cards, settings: settings, now: now)
             let snapshot = try repository.homeSnapshot(now: now, cards: cards, logs: logs)
             let changed = homeDayStart != snapshot.dayStart || homeTimeZone != repository.calendar.timeZone.identifier
                 || globalCounts.due != snapshot.globalCounts.due
+            homeCards = (ObjectIdentifier(repository), repository.mutationRevision, cards)
             applyHomeSnapshot(snapshot)
             publishWidget(snapshot, force: false, cards: cards, logs: logs)
             if reconcileNotifications || changed { scheduleNotifications(cards: cards) }
-        } catch { homeFailure = error.localizedDescription }
+        } catch { homeCards = nil; homeFailure = error.localizedDescription }
     }
     private func publishWidget(_ snapshot: HomeSnapshot, force: Bool, cards: [QueueCard]? = nil, logs: [QueueLog]? = nil) {
         widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force, cards: cards, logs: logs) { [weak self] message in
@@ -258,8 +266,20 @@ final class StudyStore {
         snapshotWorking = true
         defer { snapshotWorking = false }
         let now = clock(), manager = localSnapshots
-        let bytes = try await BackupService.export(repository: repository, now: now,
-            appVersion: Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0", pruneExpiredAnswers: false)
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let bytes: Data
+        if kind == .automatic {
+            let source = repository
+            let revision = source.mutationRevision
+            let displayRevision = dataRevision
+            bytes = try await BackupService.exportCommitted(container: repository.context.container,
+                mediaStore: repository.mediaStore, now: now, appVersion: version)
+            // Discard a read spanning a save or store replacement. The next due check retries.
+            guard repository === source, source.mutationRevision == revision, dataRevision == displayRevision else { throw CancellationError() }
+        } else {
+            bytes = try await BackupService.export(repository: repository, now: now,
+                appVersion: version, pruneExpiredAnswers: false)
+        }
         try Task.checkCancellation()
         let job = Task.detached(priority: .utility) { try manager.save(bytes, kind: kind, reason: reason, now: now) }
         _ = try await withTaskCancellationHandler { try await job.value } onCancel: { job.cancel() }
@@ -279,6 +299,8 @@ final class StudyStore {
                 try repository.setSessionActive(active && showingReview, now: clock())
             }
             if active {
+                // Shortcuts can save through another context while the app is absent.
+                homeCards = nil
                 automaticSnapshotIfDue()
                 refreshHome(reconcileNotifications: true)
                 if selectedTab == 2 { refreshStatistics() }

@@ -40,6 +40,8 @@ final class StudyRepository {
     private(set) var fullHistoryFetchCount = 0
     private(set) var historyRowsFetched = 0
     #endif
+    private(set) var mutationRevision = 0
+
     // These value snapshots live only during one synchronous Store operation.
     // Never retain managed models or reuse them across edits/imports/restores.
     private var reusingStudyQueue = false
@@ -89,6 +91,8 @@ final class StudyRepository {
     func transaction<T>(_ body: () throws -> T) throws -> T {
         // A second transaction in an operation must not see earlier snapshots.
         clearOperationQueue()
+        // Failed transactions also invalidate material read before rollback.
+        defer { mutationRevision += 1 }
         do {
             let result = try body()
             try save(context)
@@ -562,18 +566,18 @@ final class StudyRepository {
     }
     // Home refresh is read-only until this session actually has a next card.
     @discardableResult
-    func advanceWaitingSession(now: Date) throws -> Bool {
+    func advanceWaitingSession(now: Date, cards: [QueueCard]? = nil) throws -> Bool {
         guard let draft = try session(), draft.cardID == nil,
-              let id = try nextCardIDs(draft: draft, now: now).first else { return false }
+              let id = try nextCardIDs(draft: draft, now: now, cards: cards).first else { return false }
         try transaction {
             try selectCard(id, draft: draft, now: now)
             draft.activeSince = nil
         }
         return true
     }
-    private func nextCardIDs(draft: SessionDraft, now: Date) throws -> [UUID] {
+    private func nextCardIDs(draft: SessionDraft, now: Date, cards: [QueueCard]? = nil) throws -> [UUID] {
         if let progress = try sessionProgress(), progress.isComplete { return [] }
-        let cards = try queueCards(), settings = try settings()
+        let cards = try cards ?? queueCards(), settings = try settings()
         return try ReviewQueueBuilder(calendar: calendar).queue(
             cards: responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
             mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
