@@ -1463,6 +1463,48 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertTrue(try repo.notes().isEmpty)
         XCTAssertTrue(try repo.cards().isEmpty)
     }
+    func testMemoryAnalysisReadsReviewBeforeStateAndPreservesData() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: root, now: now)
+        let tag = UUID()
+        let noteID = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A"), now: now)
+        let note = try XCTUnwrap(repo.notes().first)
+        let card = try XCTUnwrap(repo.cards().first)
+        let scheduler = try ReviewScheduler()
+        let learned = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now).after
+        XCTAssertEqual(try scheduler.summary(learned).state, "review")
+        let transition = try scheduler.review(learned, grade: .again, now: now.addingTimeInterval(86400))
+        let before = try JSONEncoder().encode(learned), after = try JSONEncoder().encode(transition.after)
+        try repo.transaction {
+            note.tagIDs = [tag]
+            card.fsrsPayload = before
+            repo.context.insert(StudyReviewLog(card: card, transition: transition, before: before, after: after,
+                                               mode: .mental, durationMs: 1000, wasNew: false, sequence: 1))
+        }
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: root, retention: 0.95))
+        let reader = StatisticsReader(container: container), date = now.addingTimeInterval(86401)
+        let report = try await reader.load(now: date, calendar: repo.calendar, startHour: 4,
+                                          scope: LearningScope(deckID: root, tagIDs: [tag]))
+        XCTAssertEqual(report.memory?.distributions[0].count, 1)
+        XCTAssertEqual(report.memory?.retention[1].trials, 1)
+        XCTAssertEqual(report.memory?.retention[1].successes, 0)
+        XCTAssertEqual(report.memory?.targets, [0.95])
+        XCTAssertEqual(try repo.card(card.id)?.fsrsPayload, before)
+        XCTAssertEqual(try repo.logs().count, 1)
+        try repo.transaction { card.isSuspended = true }
+        let stopped = try await reader.load(now: date, calendar: repo.calendar, startHour: 4, scope: LearningScope())
+        XCTAssertEqual(stopped.memory?.distributions[0].count, 0)
+        XCTAssertEqual(stopped.memory?.retention[1].trials, 1)
+        try repo.deleteNote(id: noteID)
+        let deleted = try await reader.load(now: date, calendar: repo.calendar, startHour: 4, scope: LearningScope())
+        XCTAssertEqual(deleted.memory?.retention[1].trials, 1)
+        let scoped = try await reader.load(now: date, calendar: repo.calendar, startHour: 4, scope: LearningScope(deckID: root))
+        XCTAssertEqual(scoped.memory?.retention[1].trials, 0)
+    }
+
     func testBackgroundStatisticsReaderKeepsDeletedHistoryAndRespectsDeckScope() async throws {
         let container = try PersistenceController.makeStudyContainer(inMemory: true)
         let repo = StudyRepository(container: container)

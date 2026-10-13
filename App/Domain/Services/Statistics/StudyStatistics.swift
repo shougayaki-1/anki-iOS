@@ -7,6 +7,8 @@ struct StatisticLog {
     let date: Date
     let grade: ReviewGrade
     let durationMs: Int
+    var beforeState: String? = nil
+    var sequence = 0
     var wasNew = false
     var deckID: UUID? = nil
     var tagIDs: [UUID] = []
@@ -59,6 +61,7 @@ private struct StatisticsAccumulator {
 struct StudyStatistics {
     // days are newest-first to preserve the legacy summary API; trends may be
     // reversed in the chart to present time from left to right.
+    var memory: MemoryAnalysis? = nil
     let days: [DailyStatistics]
     let weeks: [StatisticsBucket]
     let months: [StatisticsBucket]
@@ -201,4 +204,93 @@ struct WeakPracticeSession: Identifiable {
     mutating func reveal() { if current != nil { revealed = true } }
     mutating func next() { guard current != nil, revealed else { return }; index += 1; revealed = false }
     mutating func previous() { guard index > 0 else { return }; index -= 1; revealed = false }
+}
+
+// Value-only analytics. No scheduler or persistence mutations.
+struct MemoryCard: Identifiable {
+    let id: UUID
+    let title: String
+    let stability: Double
+    let difficulty: Double
+    let retrievability: Double
+}
+
+struct MemoryDistribution: Identifiable {
+    let id: String
+    let explanation: String
+    let unit: String
+    let buckets: [Bucket]
+    let median: Double?
+    let minimum: Double?
+    let maximum: Double?
+    var count: Int { buckets.reduce(0) { $0 + $1.cards.count } }
+    struct Bucket: Identifiable {
+        var id: String { label }
+        let label: String
+        let cards: [MemoryCard]
+    }
+    static func make(id: String, explanation: String, unit: String, cards: [MemoryCard],
+                     edges: [Double], labels: [String], value: (MemoryCard) -> Double) -> Self {
+        let valid = cards.filter { value($0).isFinite && value($0) >= edges[0] && value($0) <= edges.last! }
+        let sorted = valid.map(value).sorted()
+        let middle = sorted.count / 2
+        let median = sorted.isEmpty ? nil : (sorted.count.isMultiple(of: 2)
+            ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle])
+        let buckets = labels.indices.map { index in
+            Bucket(label: labels[index], cards: valid.filter {
+                value($0) >= edges[index] && (value($0) < edges[index + 1]
+                    || (index == labels.count - 1 && value($0) == edges[index + 1]))
+            })
+        }
+        return Self(id: id, explanation: explanation, unit: unit, buckets: buckets,
+                    median: median, minimum: sorted.first, maximum: sorted.last)
+    }
+}
+
+struct ObservedRetention {
+    let days: Int
+    let start: Date
+    let end: Date
+    let successes: Int
+    let trials: Int
+    let cardIDs: [UUID]
+    var rate: Double? { trials == 0 ? nil : Double(successes) / Double(trials) }
+    static func calculate(logs: [StatisticLog], days: Int, now: Date,
+                          calendar: Calendar, startHour: Int) -> Self {
+        let studyDay = StudyDay(calendar: calendar, startHour: startHour)
+        let today = studyDay.interval(containing: now).start
+        let start = calendar.date(byAdding: .day, value: -(days - 1), to: today)!
+        struct Trial: Hashable { let cardID: UUID; let day: Date }
+        var seen = Set<Trial>(), successes = 0, ids = Set<UUID>()
+        for log in logs.filter({ $0.date >= start && $0.date <= now && $0.beforeState == "review" })
+            .sorted(by: { $0.date == $1.date ? $0.sequence < $1.sequence : $0.date < $1.date }) {
+            let key = Trial(cardID: log.cardID, day: studyDay.interval(containing: log.date).start)
+            if seen.insert(key).inserted {
+                if log.grade != .again { successes += 1 }
+                ids.insert(log.cardID)
+            }
+        }
+        return Self(days: days, start: start, end: now, successes: successes, trials: seen.count,
+                    cardIDs: ids.sorted { $0.uuidString < $1.uuidString })
+    }
+}
+
+struct MemoryAnalysis {
+    let generatedAt: Date
+    let distributions: [MemoryDistribution]
+    let retention: [ObservedRetention]
+    let targets: [Double]
+    var estimatedRemembered: Double { distributions.last!.buckets.flatMap(\.cards).reduce(0) { $0 + $1.retrievability } }
+    static func calculate(cards: [MemoryCard], logs: [StatisticLog], targets: [Double],
+                          now: Date, calendar: Calendar, startHour: Int) -> Self {
+        Self(generatedAt: now, distributions: [
+            .make(id: "記憶の安定度（推定）", explanation: "想起確率が90%まで下がる時間尺度です。将来の保持を保証しません。", unit: "日", cards: cards,
+                  edges: [0, 1, 7, 30, 90, .infinity], labels: ["0–1日", "1–7日", "7–30日", "30–90日", "90日以上"], value: { $0.stability }),
+            .make(id: "覚えにくさ（推定）", explanation: "FSRSモデルの難易度は1〜10です。主観的な難しさや正答率ではありません。", unit: "／10", cards: cards,
+                  edges: [1, 3, 5, 7, 9, 10], labels: ["1–3", "3–5", "5–7", "7–9", "9–10"], value: { $0.difficulty }),
+            .make(id: "思い出せる可能性（推定）", explanation: "集計時点のFSRS-6想起確率です。実際に思い出せた割合とは異なります。", unit: "", cards: cards,
+                  edges: [0, 0.2, 0.4, 0.6, 0.8, 1], labels: ["0–20%", "20–40%", "40–60%", "60–80%", "80–100%"], value: { $0.retrievability })
+        ], retention: [7, 30, 90].map { .calculate(logs: logs, days: $0, now: now, calendar: calendar, startHour: startHour) },
+             targets: Array(Set(targets)).sorted())
+    }
 }

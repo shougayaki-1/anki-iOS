@@ -190,6 +190,8 @@ struct StatisticsView: View {
                                        value: "\(stats.durationMs / 60_000)分")
                     }
                     Section("現在の定着状況（推定）") {
+                        NavigationLink("記憶の状態を詳しく見る") { MemoryAnalysisView(store: store) }
+                            .accessibilityIdentifier("openMemoryAnalysis")
                         if let retention = stats.meanRetrievability {
                             LabeledContent("FSRS予測保持率",
                                            value: retention.formatted(.percent.precision(.fractionLength(1))))
@@ -316,5 +318,156 @@ struct TypedAnswerHistoryView: View {
         .alert("履歴を読み込めませんでした", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("閉じる", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
+    }
+}
+
+struct MemoryAnalysisView: View {
+    @Bindable var store: StudyStore
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var days = 30
+    private var scopeLabel: String {
+        let deck = store.decks.first { $0.id == store.statisticsScope.deckID }?.name ?? "すべてのデッキ"
+        let tags = store.tags.filter { store.statisticsScope.tagIDs.contains($0.id) }.map(\.name)
+        return deck + (tags.isEmpty ? "" : " · " + tags.joined(separator: "、"))
+    }
+    var body: some View {
+        List {
+            Section("対象") {
+                Text(scopeLabel)
+                Text("記録タブのデッキ（子孫を含む）・タグ条件を使用します。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button("最新の状態に更新", systemImage: "arrow.clockwise") { store.refreshStatistics() }
+                    .disabled(store.statisticsLoading)
+            }
+            if store.statisticsLoading {
+                Section { ProgressView("記憶の状態を集計しています…") }
+            } else if let error = store.statisticsError {
+                Section { Text(error); Button("再試行") { store.refreshStatistics() } }
+            } else if let report = store.statistics?.memory {
+                Section("現在のカード（FSRS推定）") {
+                    Text("集計日時: " + report.generatedAt.formatted(date: .abbreviated, time: .shortened))
+                    Text("現在残っている学習済みカードが対象です。停止中・未学習・削除済みカードを除き、学習中・再学習中は含みます。過去の期間別状態ではありません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    LabeledContent("推定記憶済み枚数", value: report.estimatedRemembered.formatted(.number.precision(.fractionLength(1))) + "枚")
+                    Text("各カードの想起確率の和を小数第1位に丸めます。必ず覚えている枚数ではありません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                ForEach(report.distributions) { distribution in
+                    Section(distribution.id) {
+                        MemoryDistributionView(store: store, distribution: distribution)
+                    }
+                }
+                Section("実際の保持率（実測）") {
+                    Picker("対象期間", selection: $days) {
+                        Text("7日").tag(7); Text("30日").tag(30); Text("90日").tag(90)
+                    }.pickerStyle(.segmented)
+                    if let observed = report.retention.first(where: { $0.days == days }) {
+                        LabeledContent("実測保持率", value: observed.rate.map { $0.formatted(.percent.precision(.fractionLength(1))) } ?? "—")
+                        LabeledContent("成功数 / 対象試行", value: "\(observed.successes) / \(observed.trials)")
+                        Text(observed.start.formatted(date: .abbreviated, time: .shortened) + " 〜 " + observed.end.formatted(date: .abbreviated, time: .shortened))
+                            .font(.caption)
+                        if observed.trials == 0 { Text("この期間に長期Review状態からの対象評価がありません。") }
+                        else if observed.trials < 20 { Text("試行が20件未満のため、期間比較や優劣の判断には使いません。") }
+                        if observed.trials > 0 {
+                            Chart {
+                                BarMark(x: .value("評価", "成功"), y: .value("試行", observed.successes))
+                                BarMark(x: .value("評価", "Again"), y: .value("試行", observed.trials - observed.successes))
+                            }.frame(height: 120).accessibilityHidden(true)
+                            LabeledContent("Again（失敗）", value: "\(observed.trials - observed.successes)試行")
+                        }
+                        NavigationLink("根拠のカード（\(observed.cardIDs.count)枚）") {
+                            MemoryEvidenceCardsView(store: store, ids: observed.cardIDs)
+                        }
+                    }
+                    LabeledContent("現在の目標保持率", value: report.targets.isEmpty ? "—（対象カードなし）" : report.targets.map { $0.formatted(.percent.precision(.fractionLength(1))) }.joined(separator: "、"))
+                    Text("目標は現在の設定値です。複数の目標がある対象では全値を表示し、平均しません。過去の回答時の目標ではありません。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("評価前が長期Reviewのカードについて、カード×学習日の最初の対象評価を1試行とします。Againは失敗、Hard・Good・Easyは成功です。短期学習・再学習は除外します。学習日は\(store.settings.dayStartHour)時に切り替わります。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("Undoで取り消した履歴は含みません。削除済みカードの履歴は全デッキに残りますが、現在の所属を特定できないためデッキ・タグ別には含みません。停止中カードの過去の対象評価は含みます。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .navigationTitle("記憶の状態")
+        .onAppear { store.refreshStatistics() }
+        .onChange(of: scenePhase) { _, value in if value == .active { store.refreshStatistics() } }
+        .task {
+            var day = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
+            var zone = TimeZone.current.identifier
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled else { return }
+                let next = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
+                if next != day || zone != TimeZone.current.identifier {
+                    day = next; zone = TimeZone.current.identifier; store.refreshStatistics()
+                }
+            }
+        }
+    }
+}
+
+private struct MemoryDistributionView: View {
+    let store: StudyStore
+    let distribution: MemoryDistribution
+    @State private var selected: String?
+    private func number(_ value: Double) -> String {
+        distribution.unit.isEmpty ? value.formatted(.percent.precision(.fractionLength(1)))
+            : value.formatted(.number.precision(.fractionLength(1))) + distribution.unit
+    }
+    var body: some View {
+        Text(distribution.explanation).font(.footnote).foregroundStyle(.secondary)
+        LabeledContent("対象", value: "\(distribution.count)枚")
+        if let median = distribution.median, let minimum = distribution.minimum, let maximum = distribution.maximum {
+            LabeledContent("中央値", value: number(median))
+            LabeledContent("範囲", value: number(minimum) + " 〜 " + number(maximum))
+            Chart(distribution.buckets) { bucket in
+                BarMark(x: .value("区間", bucket.label), y: .value("カード", bucket.cards.count))
+                    .foregroundStyle(bucket.label == selected ? Color.orange : Color.accentColor)
+            }
+            .frame(height: 160)
+            .chartXSelection(value: $selected)
+            .accessibilityHidden(true)
+            if let bucket = distribution.buckets.first(where: { $0.label == selected }) {
+                Text("選択中: \(bucket.label) · \(bucket.cards.count)枚").font(.subheadline)
+                NavigationLink("選択した区間のカードを見る") {
+                    MemoryEvidenceCardsView(store: store, ids: bucket.cards.map(\.id), cards: bucket.cards)
+                }
+            }
+        } else { Text("対象となるカードがありません。") }
+        ForEach(distribution.buckets) { bucket in
+            NavigationLink {
+                MemoryEvidenceCardsView(store: store, ids: bucket.cards.map(\.id), cards: bucket.cards)
+            } label: { LabeledContent(bucket.label, value: "\(bucket.cards.count)枚") }
+            .accessibilityIdentifier("memoryBucket-" + distribution.id + "-" + bucket.label)
+        }
+        Text("区間は下端を含み、上端を含みません。最終区間は上端も含みます。非有限・範囲外の値は除外し、数値は小数第1位に丸めます。")
+            .font(.footnote).foregroundStyle(.secondary)
+    }
+}
+
+private struct MemoryEvidenceCardsView: View {
+    let store: StudyStore
+    let ids: [UUID]
+    var cards: [MemoryCard] = []
+    var body: some View {
+        let titles = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0.title) })
+        List {
+            Section {
+                Text("\(ids.count)枚。カードを開くと現在の内容を確認できます。削除されたカードの過去評価は残りますが、内容は開けません。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if ids.isEmpty { ContentUnavailableView("該当するカードがありません", systemImage: "rectangle.stack") }
+            ForEach(ids, id: \.self) { id in
+                NavigationLink {
+                    NoteDetailView(store: store, cardID: id)
+                } label: {
+                    VStack(alignment: .leading) {
+                        Text(titles[id] ?? "評価対象カード")
+                        Text(id.uuidString).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }.navigationTitle("根拠のカード")
     }
 }

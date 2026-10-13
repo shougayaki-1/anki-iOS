@@ -204,7 +204,7 @@ final class StudyStore {
         statisticsError = nil
         let reader = statisticsReader
         let now = clock()
-        let calendar = repository.calendar
+        let calendar = Calendar.current
         let startHour = settings.dayStartHour
         let scope = statisticsScope
         let revision = statisticsRevision
