@@ -2,6 +2,48 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testMemoryDistributionsExcludeInvalidValuesAndIncludeUpperBound() {
+        let cards = [MemoryCard(id: UUID(), title: "A", stability: 1, difficulty: 3, retrievability: 0.2),
+                     MemoryCard(id: UUID(), title: "B", stability: 90, difficulty: 10, retrievability: 1),
+                     MemoryCard(id: UUID(), title: "Invalid", stability: .nan, difficulty: 0, retrievability: 2)]
+        let report = MemoryAnalysis.calculate(cards: cards, logs: [], targets: [0.9, 0.9, 0.95],
+                                              now: Date(), calendar: .current, startHour: 4)
+        XCTAssertEqual(report.distributions.map(\.count), [2, 2, 2])
+        XCTAssertEqual(report.distributions[0].median, 45.5)
+        XCTAssertEqual(report.distributions[0].buckets[1].cards.count, 1)
+        XCTAssertEqual(report.distributions[1].buckets.last?.cards.count, 1)
+        XCTAssertEqual(report.estimatedRemembered, 1.2, accuracy: 0.0001)
+        XCTAssertEqual(report.targets, [0.9, 0.95])
+        let empty = MemoryAnalysis.calculate(cards: [], logs: [], targets: [], now: Date(), calendar: .current, startHour: 4)
+        XCTAssertNil(empty.distributions[0].median)
+        XCTAssertNil(empty.retention[0].rate)
+    }
+
+    func testObservedRetentionDeduplicatesReviewTrialsAtStudyDayBoundaryAndReevaluatesUndo() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        func date(_ day: Int, _ hour: Int) -> Date { calendar.date(from: DateComponents(year: 2026, month: 10, day: day, hour: hour))! }
+        let id = UUID(), other = UUID()
+        let logs = [
+            StatisticLog(cardID: id, date: date(8, 3), grade: .again, durationMs: 0, beforeState: "review", sequence: 1),
+            StatisticLog(cardID: id, date: date(8, 3), grade: .good, durationMs: 0, beforeState: "review", sequence: 2),
+            StatisticLog(cardID: id, date: date(8, 4), grade: .hard, durationMs: 0, beforeState: "review"),
+            StatisticLog(cardID: other, date: date(8, 5), grade: .easy, durationMs: 0, beforeState: "learning"),
+            StatisticLog(cardID: other, date: date(8, 6), grade: .good, durationMs: 0, beforeState: "relearning"),
+            StatisticLog(cardID: other, date: date(9, 5), grade: .good, durationMs: 0, beforeState: "review")]
+        let now = date(8, 10)
+        let report = ObservedRetention.calculate(logs: logs.reversed(), days: 7, now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(report.trials, 2); XCTAssertEqual(report.successes, 1)
+        XCTAssertEqual(report.cardIDs, [id]); XCTAssertEqual(report.rate, 0.5)
+        let today = ObservedRetention.calculate(logs: logs, days: 1, now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(today.trials, 1); XCTAssertEqual(today.rate, 1)
+        let undone = ObservedRetention.calculate(logs: Array(logs.dropFirst()), days: 7, now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(undone.rate, 1)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let shifted = ObservedRetention.calculate(logs: logs, days: 7, now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(shifted.trials, 1); XCTAssertEqual(shifted.rate, 0)
+    }
+
     func testEmptyWeakPracticeNeverReportsCompletion() {
         var session = WeakPracticeSession(cards: [])
         XCTAssertEqual(session.phase, .empty)
