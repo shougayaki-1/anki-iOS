@@ -165,26 +165,27 @@ struct ReviewView: View {
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 if let review = store.review, let progress = review.sessionProgress {
+                    let total = review.visibleAnswerTotal ?? progress.limit
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
                             Text(progress.limit == 0 ? "今回回答済み \(progress.answered)問" :
                                  progress.isComplete ? "今回の\(progress.limit)問を完了" :
                                  review.card == nil ? "回答済み \(progress.answered)問" :
-                                 "残り\(progress.remaining ?? 0)問")
+                                 "残り\(max(0, total - progress.answered))問")
                                 .font(.headline)
                                 .accessibilityIdentifier("remainingQuestions")
                             Spacer(minLength: 8)
                             if progress.limit > 0 {
-                                Text("今回 \(progress.answered) / \(progress.limit)問")
+                                Text("今回 \(progress.answered) / \(total)問")
                                     .font(.subheadline).foregroundStyle(.secondary)
                                     .accessibilityIdentifier("sessionProgress")
                             }
                         }
                         if progress.limit > 0 {
-                            ProgressView(value: Double(min(progress.answered, progress.limit)), total: Double(progress.limit))
+                            ProgressView(value: Double(min(progress.answered, total)), total: Double(total))
                                 .accessibilityIdentifier("sessionProgressBar")
                                 .accessibilityLabel("今回の学習進捗")
-                                .accessibilityValue("\(progress.answered)問回答済み、残り\(progress.remaining ?? 0)問")
+                                .accessibilityValue("\(progress.answered)問回答済み、現時点の出題分は残り\(max(0, total - progress.answered))問")
                         }
                     }
                     .padding(.horizontal, 24).padding(.vertical, 12)
