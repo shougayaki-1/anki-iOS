@@ -307,12 +307,15 @@ struct ImportView: View {
             defer { saving = false; operationPhase = nil }
             do {
                 await ImportOperationPhase.allowDisplay()
+                let prepared = try await Task.detached(priority: .userInitiated) {
+                    try PreparedTextImport.make(rows, deckID: deckID, kind: kind,
+                                                tagNames: tagText.components(separatedBy: ","))
+                }.value
                 try await store.createRestorePoint("テキスト・CSVの取り込み")
                 operationPhase = .saving
                 await ImportOperationPhase.allowDisplay()
-                let saved = try store.repository.importRows(rows, deckID: deckID, kind: kind,
-                                                        tagNames: tagText.components(separatedBy: ","), action: action,
-                                                        resetHistory: resetHistory, source: source, now: store.clock())
+                let saved = try store.repository.importPreparedRows(prepared, action: action,
+                                                                resetHistory: resetHistory, source: source, now: store.clock())
                 operationPhase = .refreshing
                 await ImportOperationPhase.allowDisplay()
                 do { try store.reload() }

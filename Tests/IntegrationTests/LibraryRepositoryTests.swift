@@ -437,6 +437,37 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.logs().count, 1)
     }
 
+    func testPreparedImportRechecksDestinationAndRollsBack() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        var excluded = ImportRow(line: 3, question: "excluded", answer: "A")
+        excluded.included = false
+        let rows = [ImportRow(line: 1, question: "{{c1::one}} {{c2::two}}", answer: ""),
+                    ImportRow(line: 2, question: "invalid cloze", answer: ""), excluded]
+        let prepared = try await Task.detached {
+            try PreparedTextImport.make(rows, deckID: deck, kind: .cloze, tagNames: ["newTag"])
+        }.value
+        XCTAssertTrue(try repo.notes().isEmpty)
+        XCTAssertEqual(prepared.rows.count, 1)
+        XCTAssertEqual(prepared.errors.count, 1)
+        XCTAssertEqual(prepared.excluded, 1)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importPreparedRows(prepared, action: .add, source: "csv", now: now))
+        XCTAssertTrue(try repo.notes().isEmpty)
+        XCTAssertTrue(try repo.cards().isEmpty)
+        XCTAssertTrue(try repo.tags().isEmpty)
+        XCTAssertTrue(try repo.context.fetch(FetchDescriptor<ImportBatch>()).isEmpty)
+        repo.save = { try $0.save() }
+        let result = try repo.importPreparedRows(prepared, action: .add, source: "csv", now: now)
+        XCTAssertEqual(result.createdNotes, 1)
+        XCTAssertEqual(result.createdCards, 2)
+        XCTAssertEqual(result.skipped, 1)
+        XCTAssertEqual(result.errors.count, 1)
+        try repo.deleteDeck(id: deck, moveNotesTo: nil, now: now)
+        XCTAssertThrowsError(try repo.importPreparedRows(prepared, action: .add, source: "csv", now: now))
+        XCTAssertTrue(try repo.notes().isEmpty)
+        XCTAssertTrue(try repo.cards().isEmpty)
+    }
+
     func testFailedImportLeavesNoNotesCardsTagsOrBatch() throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         repo.save = { _ in throw Failure.save }
