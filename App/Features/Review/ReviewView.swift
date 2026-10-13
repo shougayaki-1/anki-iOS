@@ -30,6 +30,7 @@ struct ReviewView: View {
     @State private var confirmingEdit = false
     @State private var autoSpeechPaused = false
     @State private var swipeGate = ReviewSwipeGate()
+    @State private var swipePanelExpanded = false
     @State private var swipePadFrame = CGRect.zero
     @GestureState private var swiping = false
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -149,9 +150,6 @@ struct ReviewView: View {
                                 Text("誤答にはAgain。Hardは思い出せたが難しかったときに使います。")
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
-                            if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
-                                swipePad(review, item: item)
-                            }
                         } else {
                             ReviewEmptyStateView(state: store.reviewRefreshFailed ? nil : store.review?.emptyState, nextShortDue: store.review?.nextShortDue,
                                                  canFinish: store.review != nil, store: store)
@@ -195,21 +193,47 @@ struct ReviewView: View {
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let review = store.review, let item = review.card {
-                    ReviewActionBar(
-                        answerRevealed: review.answerRevealed,
-                        isEnabled: imageAvailable(item),
-                        onReveal: {
-                            speechPlayer.stop()
-                            typingFocused = false
-                            store.draft(revealed: true)
-                        },
-                        onGrade: { grade in
-                            pronunciation.discard()
-                            speechPlayer.stop()
-                            typingFocused = false
-                            store.grade(grade)
+                    VStack(spacing: 8) {
+                        if store.settings.reviewAppearance.gesturesEnabled && !voiceOver {
+                            Button {
+                                typingFocused = false
+                                swipeGate.invalidate()
+                                swipePanelExpanded.toggle()
+                            } label: {
+                                HStack {
+                                    Image(systemName: "hand.draw")
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(swipePanelExpanded ? "スワイプ操作を閉じる" : "スワイプ操作を開く")
+                                            .font(.subheadline.weight(.semibold))
+                                        Text(review.answerRevealed ? "← Again  ↓ Hard  → Good  ↑ Easy" : "→ 答えを表示")
+                                            .font(.caption)
+                                    }
+                                    Spacer(minLength: 4)
+                                    Image(systemName: swipePanelExpanded ? "chevron.down" : "chevron.up")
+                                }
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("reviewSwipeToggle")
+                            if swipePanelExpanded { swipePad(review, item: item) }
                         }
-                    )
+                        ReviewActionBar(
+                            answerRevealed: review.answerRevealed,
+                            isEnabled: imageAvailable(item),
+                            onReveal: {
+                                speechPlayer.stop()
+                                typingFocused = false
+                                store.draft(revealed: true)
+                            },
+                            onGrade: { grade in
+                                pronunciation.discard()
+                                speechPlayer.stop()
+                                typingFocused = false
+                                store.grade(grade)
+                            }
+                        )
+                    }
                     .frame(maxWidth: UIDevice.current.userInterfaceIdiom != .phone ? 760 : .infinity)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, 16)
@@ -234,6 +258,9 @@ struct ReviewView: View {
                 }
             }
             .scrollDisabled(swiping)
+            .onChange(of: typingFocused) { _, focused in
+                if focused { swipePanelExpanded = false; swipeGate.invalidate() }
+            }
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
             .onAppear { speechEventChanged(speechEvent) }
