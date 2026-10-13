@@ -53,9 +53,11 @@ struct ReviewForecast: Equatable, Sendable {
         let holds = Dictionary(uniqueKeysWithValues: (options.cardMarks ?? []).compactMap { mark in mark.hiddenUntil.map { (mark.cardID, $0) } })
         var cards: [LiveCard] = []
         let baseScheduler = try ReviewScheduler(parameters: options.fsrsOptimization?.activeParameters)
+        let paused = DeckStudyEligibility.pausedIDs(data.decks.map { ($0.id, $0.parentID, $0.isStudyPaused ?? false) })
         for (index, card) in data.cards.enumerated() where !card.isSuspended {
             if index % 64 == 0 { try Task.checkCancellation() }
             guard let note = notes[card.noteID] else { throw StudyError.missingRecord }
+            guard !paused.contains(note.deckID) else { continue }
             let path = ancestorMap[note.deckID] ?? [note.deckID]
             let retention = path.compactMap { overrides[$0]?.retention }.first ?? preferences.desiredRetention
             let limits = Dictionary(uniqueKeysWithValues: path.compactMap { id in overrides[id]?.newLimit.map { (id, $0) } })

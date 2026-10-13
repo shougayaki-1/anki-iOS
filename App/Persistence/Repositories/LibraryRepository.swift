@@ -75,6 +75,7 @@ extension StudyRepository {
                 try setDeckLearningInTransaction(learning)
             }
             deck.name = normalized; deck.parentID = parentID; deck.updatedAt = now
+            try pauseSessionIfNeeded(now: now)
         }
     }
     // Caller confirms deletion and chooses either moving content or deleting it.
@@ -187,7 +188,8 @@ extension StudyRepository {
         return HomeSnapshot(scope: selected, counts: counts, globalCounts: global,
                             newSlotsRemaining: max(0, settings.dailyNewLimit - used), nextShortDue: next,
                             hasCards: !all.isEmpty, dayStart: start,
-                            nextRefresh: min(end, all.filter { !$0.suspended && !$0.isHidden(at: now) && $0.state != "new" && $0.due > now }.map(\.due).min() ?? end))
+                            nextRefresh: min(end, all.filter { !$0.suspended && !$0.isHidden(at: now) && $0.state != "new" && $0.due > now }.map(\.due).min() ?? end),
+                            studyPaused: !scoped.isEmpty && scoped.allSatisfy(\.studyPaused))
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)

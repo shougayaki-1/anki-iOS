@@ -107,6 +107,18 @@ final class StudyStore {
 
     func reload() throws { try refreshStudy(metadata: true) }
 
+    var sessionStudyPaused = false
+    var homeStudyPaused = false
+    func toggleStudyPaused(_ id: UUID) {
+        guard flushTypedDraft(), let deck = decks.first(where: { $0.id == id }) else { return }
+        do { try repository.setStudyPaused(deckID: id, paused: !deck.isStudyPaused, now: clock()) }
+        catch { failure = "休止設定を保存できませんでした。\n" + error.localizedDescription; return }
+        noteSaveNotice = NoteSaveNotice(message: deck.isStudyPaused ? "学習を再開しました。元の期限を過ぎたカードは復習対象になります。" : "学習を休止しました。カードと履歴、回答下書きとUndoは保持しています。")
+        do { try reload() }
+        catch { failure = "休止設定は保存済みですが、画面更新に失敗しました。\n" + error.localizedDescription }
+    }
+
+
     private func refreshStudy(metadata: Bool = false, changed: Bool = true, forceWidget: Bool = false) throws {
         // Invalidate even if post-save display reads fail. A successful mutation
         // must never reuse the material from before that mutation.
@@ -124,7 +136,13 @@ final class StudyStore {
             if metadata {
                 let deckModels = try repository.decks()
                 let paths = LibraryIndex.deckPaths(deckModels)
-                let decks = deckModels.map { DeckItem(id: $0.id, name: paths[$0.id] ?? $0.name, shortName: $0.name, parentID: $0.parentID) }
+                let paused = DeckStudyEligibility.pausedIDs(deckModels.map { ($0.id, $0.parentID, $0.isStudyPaused) })
+                let decks = deckModels.map { model in
+                    var item = DeckItem(id: model.id, name: paths[model.id] ?? model.name, shortName: model.name, parentID: model.parentID)
+                    item.isStudyPaused = model.isStudyPaused
+                    item.isEffectivelyStudyPaused = paused.contains(model.id)
+                    return item
+                }
                 let tags = try repository.tags().map { TagItem(id: $0.id, name: $0.name) }
                 let settings = try repository.settings()
                 let answerLimit = try repository.options().sessionAnswerLimit ?? 20
@@ -136,6 +154,7 @@ final class StudyStore {
                 self.sessionResponseMode = try repository.options().sessionResponseMode ?? .cardDefault
                 self.settings = settings; self.sessionAnswerLimit = answerLimit; self.review = review
             } else { review = try repository.presentation(now: now, cards: cards) }
+            sessionStudyPaused = try repository.session()?.cardID.map { id in cards.first(where: { $0.id == id })?.studyPaused == true } ?? false
             applyPendingTypedDraft()
             if changed {
                 statisticsTask?.cancel()
@@ -158,6 +177,7 @@ final class StudyStore {
         } catch { homeFailure = error.localizedDescription; throw error }
     }
     private func applyHomeSnapshot(_ snapshot: HomeSnapshot) {
+        homeStudyPaused = snapshot.studyPaused
         if scope != snapshot.scope { scope = snapshot.scope }
         if counts != snapshot.counts { counts = snapshot.counts }
         if globalCounts != snapshot.globalCounts { globalCounts = snapshot.globalCounts }
@@ -367,6 +387,7 @@ final class StudyStore {
 
     var homePrimaryAction: HomePrimaryAction {
         guard homeFailure == nil else { return .unavailable }
+        if sessionStudyPaused { return .unavailable }
         if let review {
             if review.card != nil { return .resume(review.mode) }
             if review.sessionProgress?.isComplete == true { return .complete }

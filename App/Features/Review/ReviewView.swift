@@ -153,8 +153,9 @@ struct ReviewView: View {
                                     .font(.footnote).foregroundStyle(.secondary)
                             }
                         } else {
-                            ReviewEmptyStateView(state: store.reviewRefreshFailed ? nil : store.review?.emptyState, nextShortDue: store.review?.nextShortDue,
-                                                 canFinish: store.review != nil, store: store)
+                            if store.sessionStudyPaused { Text(StudyError.deckStudyPaused.localizedDescription).padding() }
+                            else { ReviewEmptyStateView(state: store.reviewRefreshFailed ? nil : store.review?.emptyState, nextShortDue: store.review?.nextShortDue,
+                                                 canFinish: store.review != nil, store: store) }
                         }
                     }.padding()
                         .frame(maxWidth: UIDevice.current.userInterfaceIdiom != .phone ? 760 : .infinity)
@@ -245,8 +246,8 @@ struct ReviewView: View {
                     .background { ReviewFixedAreaGestureShield() }
                     .overlay(alignment: .top) { Divider() }
                 } else if let review = store.review, review.card == nil {
-                    Button { invalidateSwipe(); store.completeSession() } label: {
-                        Text(review.emptyState?.reason == .waiting || review.sessionProgress.map { $0.limit > 0 && !$0.isComplete } == true ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
+                    Button { invalidateSwipe(); if store.sessionStudyPaused { store.pause() } else { store.completeSession() } } label: {
+                        Text(store.sessionStudyPaused ? "下書きを保持してホームへ戻る" : review.emptyState?.reason == .waiting || review.sessionProgress.map { $0.limit > 0 && !$0.isComplete } == true ? "今回はここまで・ホームへ戻る" : "完了してホームへ")
                             .font(.headline).multilineTextAlignment(.center)
                             .padding(.vertical, 8)
                             .frame(maxWidth: .infinity, minHeight: 56)

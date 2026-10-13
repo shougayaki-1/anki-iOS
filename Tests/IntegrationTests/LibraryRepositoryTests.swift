@@ -517,7 +517,7 @@ final class LibraryRepositoryTests: XCTestCase {
         let schema = Schema(versionedSchema: StudySchema.self)
         let container = try ModelContainer(for: schema, configurations: [ModelConfiguration("Study", schema: schema, url: url, cloudKitDatabase: .none)])
         let context = ModelContext(container)
-        let deck = Deck(name: "old", now: now)
+        let deck = StudySchema.Deck(name: "old", now: now)
         let input = NoteInput(deckID: deck.id, question: "Q", answer: "A")
         let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: "Q", answer: "A", explanation: "")), now: now)
         let scheduler = try ReviewScheduler(), snapshot = try scheduler.newCard(now: now)

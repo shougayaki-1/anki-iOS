@@ -6,6 +6,7 @@ extension BackupDeck {
     @MainActor func insert(into context: ModelContext) throws {
         let model = Deck(name: name, now: createdAt)
         model.id = id
+        model.isStudyPaused = isStudyPaused ?? false
         model.name = name
         model.parentID = parentID
         model.sortOrder = sortOrder

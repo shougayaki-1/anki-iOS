@@ -226,24 +226,7 @@ final class OrderingRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.cards().first?.id, expected.0)
     }
     private func makeV3(_ url: URL) throws -> (UUID, Data, UUID) {
-        let schema = Schema(versionedSchema: StudySchemaV3.self)
-        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration("Study", schema: schema, url: url, cloudKitDatabase: .none)])
-        let repo = StudyRepository(container: container); try repo.initialize(now: now)
-        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Legacy", answer: "I walk to school."), now: now)
-        let card = try XCTUnwrap(repo.cards().first)
-        let before = card.fsrsPayload
-        let transition = try ReviewScheduler().review(repo.snapshot(card), grade: .good, now: now)
-        let after = try JSONEncoder().encode(transition.after)
-        let log = StudyReviewLog(card: card, transition: transition, before: before, after: after,
-                                 mode: .typing, durationMs: 2000, wasNew: true, sequence: 1)
-        try repo.transaction {
-            repo.context.insert(log); card.fsrsPayload = after
-            card.dueDate = try ReviewScheduler().summary(transition.after).dueDate
-            let draft = SessionDraft(mode: .new, now: now)
-            draft.cardID = card.id; draft.answerMode = "typing"; draft.typedDraft = "Legacy typing"
-            repo.context.insert(draft)
-        }
-        return (card.id, card.fsrsPayload, log.id)
+        try LegacyStudyFixture.write(url: url, schema: Schema(versionedSchema: StudySchemaV3.self), now: now, draftText: "Legacy typing")
     }
 }
 
@@ -263,14 +246,6 @@ extension OrderingRepositoryTests {
         XCTAssertTrue(try repo.savedTypedAnswers(now: now).isEmpty)
     }
     private func makeTypedHistoryV4(_ url: URL) throws -> (UUID, Data, UUID) {
-        let schema = Schema(versionedSchema: StudySchemaV4.self)
-        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration("Study", schema: schema, url: url, cloudKitDatabase: .none)])
-        let repo = StudyRepository(container: container); try repo.initialize(now: now)
-        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Legacy", answer: "Answer", responseMode: .typing), now: now)
-        try repo.start(mode: .new, now: now); try repo.updateDraft(text: "Old evaluation", revealed: true, now: now)
-        try repo.grade(.good, now: now)
-        let card = try XCTUnwrap(repo.cards().first), log = try XCTUnwrap(repo.logs().first)
-        try repo.transaction { try repo.session()?.typedDraft = "Legacy private draft" }
-        return (card.id, card.fsrsPayload, log.id)
+        try LegacyStudyFixture.write(url: url, schema: Schema(versionedSchema: StudySchemaV4.self), now: now, draftText: "Legacy private draft")
     }
 }

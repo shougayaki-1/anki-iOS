@@ -1791,3 +1791,194 @@ extension StudyRepositoryTests {
         XCTAssertThrowsError(try ReviewForecast.calculate(data: data, deckID: UUID(), days: 7, now: date, calendar: calendar))
     }
 }
+
+// Frozen schemas require their original Deck type, rather than the current alias.
+@MainActor enum LegacyStudyFixture {
+    static func write(url: URL, schema: Schema, now: Date, draftText: String) throws -> (UUID, Data, UUID) {
+        let container = try ModelContainer(for: schema, configurations: [ModelConfiguration("Study", schema: schema, url: url, cloudKitDatabase: .none)])
+        let context = ModelContext(container)
+        let deck = StudySchema.Deck(name: "Legacy", now: now)
+        let input = NoteInput(deckID: deck.id, question: "Legacy", answer: "I walk to school.", responseMode: .typing)
+        let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: "")), now: now)
+        let scheduler = try ReviewScheduler(), snapshot = try scheduler.newCard(now: now)
+        let before = try JSONEncoder().encode(snapshot)
+        let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: before, now: now)
+        let transition = try scheduler.review(snapshot, grade: .good, now: now)
+        let after = try JSONEncoder().encode(transition.after)
+        let log = StudyReviewLog(card: card, transition: transition, before: before, after: after, mode: .typing, durationMs: 2000, wasNew: true, sequence: 1)
+        card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+        let draft = SessionDraft(mode: .review, now: now)
+        draft.cardID = card.id; draft.answerMode = "typing"; draft.typedDraft = draftText
+        context.insert(deck); context.insert(note); context.insert(card); context.insert(log)
+        context.insert(draft); context.insert(StudyPreferences()); try context.save()
+        return (card.id, after, log.id)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testDeckPauseHierarchyQueuesCountsAndPreservesCards() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        let sibling = try repo.createDeck(name: "Sibling", parentID: parent, now: now)
+        for id in [parent, child, sibling] { try repo.createNote(NoteInput(deckID: id, question: "Q", answer: "A"), now: now) }
+        let original = try BackupData.capture(repo)
+        try repo.setStudyPaused(deckID: child, paused: true, now: now)
+        XCTAssertEqual(try repo.pausedDeckIDs(), [child])
+        try repo.setStudyPaused(deckID: parent, paused: true, now: now)
+        XCTAssertEqual(try repo.pausedDeckIDs(), [parent, child, sibling])
+        let cards = try repo.queueCards(), settings = try repo.settings()
+        let builder = ReviewQueueBuilder(calendar: repo.calendar)
+        for mode in [StudyMode.review, .new, .mixed] {
+            XCTAssertTrue(builder.queue(cards: cards, logs: [], settings: settings, mode: mode, touched: [], reviewStreak: 0, now: now).isEmpty)
+        }
+        XCTAssertEqual(try repo.homeSnapshot(now: now).counts.newRemaining, 0)
+        XCTAssertTrue(NotificationPlanner(calendar: repo.calendar).plan(cards: cards, options: NotificationOptions(enabled: true), authorized: true, delivered: [], now: now).isEmpty)
+        let widget = try WidgetProjection.make(cards: cards, logs: [], settings: WidgetProjectionSettings(settings), now: now, calendar: repo.calendar)
+        XCTAssertTrue(widget.points.allSatisfy { $0.due == 0 && $0.newAvailable == 0 })
+        let backup = try BackupData.capture(repo)
+        XCTAssertEqual(backup.cards, original.cards); XCTAssertEqual(backup.notes, original.notes); XCTAssertEqual(backup.logs, original.logs)
+        let forecast = try ReviewForecast.calculate(data: backup, deckID: nil, days: 7, now: now, calendar: repo.calendar)
+        XCTAssertTrue(forecast.days.allSatisfy { $0.newCards == 0 && $0.reviews == 0 })
+        try repo.setStudyPaused(deckID: parent, paused: false, now: now)
+        XCTAssertEqual(try repo.pausedDeckIDs(), [child])
+        XCTAssertEqual(try repo.counts(now: now).newRemaining, 2)
+        try repo.moveDeck(id: child, name: "Moved", parentID: nil, learning: nil, now: now)
+        XCTAssertEqual(try repo.pausedDeckIDs(), [child])
+        try repo.setStudyPaused(deckID: child, paused: false, now: now)
+        XCTAssertEqual(try repo.counts(now: now).newRemaining, 3)
+    }
+
+    func testDeckPauseKeepsDraftUndoAndRollsBackFailedSave() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A", responseMode: .typing), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(text: "my draft", revealed: true, now: now)
+        let id = try XCTUnwrap(repo.session()?.cardID)
+        try repo.setStudyPaused(deckID: deck, paused: true, now: now)
+        XCTAssertEqual(try repo.session()?.typedDraft, "my draft")
+        XCTAssertNil(try repo.presentation(now: now)?.card)
+        XCTAssertThrowsError(try repo.grade(.good, now: now))
+        XCTAssertThrowsError(try repo.resume(now: now))
+        XCTAssertEqual(try repo.session()?.cardID, id)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.setStudyPaused(deckID: deck, paused: false, now: now))
+        XCTAssertTrue(try repo.decks()[0].isStudyPaused)
+        repo.save = { try $0.save() }
+        try repo.setStudyPaused(deckID: deck, paused: false, now: now)
+        try repo.resume(now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.typedDraft, "my draft")
+        try repo.grade(.good, now: now)
+        try repo.setStudyPaused(deckID: deck, paused: true, now: now)
+        try repo.undo(now: now)
+        XCTAssertNil(try repo.presentation(now: now)?.card)
+        XCTAssertEqual(try repo.session()?.cardID, id)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        XCTAssertEqual(try repo.queueCards()[0].state, "new")
+        try repo.setStudyPaused(deckID: deck, paused: false, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.card?.cardID, id)
+    }
+
+    func testV5MigrationPauseReopenAndBackupCompatibility() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("Study.store")
+        let old = try LegacyStudyFixture.write(url: url, schema: Schema(versionedSchema: StudySchemaV5.self), now: now, draftText: "pending")
+        var deckID: UUID!
+        do {
+            let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+            try repo.initialize(now: now)
+            XCTAssertEqual(try repo.cards()[0].id, old.0); XCTAssertEqual(try repo.cards()[0].fsrsPayload, old.1)
+            XCTAssertEqual(try repo.logs()[0].id, old.2); XCTAssertEqual(try repo.session()?.typedDraft, "pending")
+            XCTAssertFalse(try repo.decks()[0].isStudyPaused)
+            deckID = try repo.decks()[0].id
+            try repo.setStudyPaused(deckID: deckID, paused: true, now: now)
+        }
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: url))
+        XCTAssertTrue(try repo.decks()[0].isStudyPaused)
+        XCTAssertEqual(try repo.cards()[0].fsrsPayload, old.1)
+        let backup = try BackupData.capture(repo)
+        let bytes = try BackupArchive.create(data: backup, media: [:], now: now, appVersion: "test")
+        let decoded = try BackupArchive.decode(bytes)
+        let restoreLocation = StudyStorageLocation(canonicalStore: dir.appendingPathComponent("restore/Study.store"))
+        let restored = StudyRepository(container: try BackupService.restore(decoded, location: restoreLocation, mediaStore: MediaStore(root: dir.appendingPathComponent("Media")), now: now))
+        XCTAssertTrue(try restored.decks()[0].isStudyPaused)
+        XCTAssertEqual(try restored.cards()[0].id, old.0)
+        var legacy = backup; legacy.decks[0].isStudyPaused = nil
+        let json = try JSONEncoder().encode(legacy)
+        XCTAssertNil(try JSONDecoder().decode(BackupData.self, from: json).decks[0].isStudyPaused)
+        let oldBackup = try BackupArchive.decode(BackupArchive.create(data: legacy, media: [:], now: now, appVersion: "legacy"))
+        let oldLocation = StudyStorageLocation(canonicalStore: dir.appendingPathComponent("old-restore/Study.store"))
+        let fresh = StudyRepository(container: try BackupService.restore(oldBackup, location: oldLocation, mediaStore: MediaStore(root: dir.appendingPathComponent("OldMedia")), now: now))
+        XCTAssertFalse(try fresh.decks()[0].isStudyPaused)
+    }
+
+    func testDeckPauseResumesOverdueAndKeepsSuspensionImportsAndHomeDraft() throws {
+        let repo = try fixture(), parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        for id in [parent, child] { try repo.createNote(NoteInput(deckID: id, question: "Q", answer: "A"), now: now) }
+        let cards = try repo.cards(), scheduler = try ReviewScheduler()
+        try repo.transaction {
+            for card in cards {
+                let transition = try scheduler.review(repo.snapshot(card), grade: .good, now: now.addingTimeInterval(-86400 * 10))
+                card.fsrsPayload = try JSONEncoder().encode(transition.after)
+                card.dueDate = try scheduler.summary(transition.after).dueDate
+            }
+            cards[1].isSuspended = true
+        }
+        let original = try BackupData.capture(repo)
+        XCTAssertEqual(try repo.counts(now: now).due, 1)
+        try repo.setStudyPaused(deckID: parent, paused: true, now: now)
+        XCTAssertEqual(try repo.counts(now: now).due, 0)
+        let forecast = try ReviewForecast.calculate(data: BackupData.capture(repo), deckID: nil, days: 7, now: now, calendar: repo.calendar)
+        XCTAssertTrue(forecast.days.allSatisfy { $0.scheduled == 0 })
+        try repo.setStudyPaused(deckID: parent, paused: false, now: now)
+        XCTAssertEqual(try BackupData.capture(repo).cards, original.cards)
+        XCTAssertEqual(try repo.counts(now: now).due, 1)
+        XCTAssertTrue(try repo.cards().contains(where: \.isSuspended))
+        try repo.setStudyPaused(deckID: child, paused: true, now: now)
+        _ = try repo.importRows([ImportRow(line: 1, question: "Import", answer: "Answer")], deckID: child, kind: .basic, tagNames: [], action: .skip, source: "test", now: now)
+        XCTAssertTrue(try repo.decks().first(where: { $0.id == child })!.isStudyPaused)
+        XCTAssertEqual(try repo.counts(now: now).newRemaining, 0)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        try store.repository.applyHomeScope(LearningScope(deckID: child)); try store.reload()
+        XCTAssertTrue(store.homeStudyPaused)
+        try store.repository.applyHomeScope(LearningScope()); try store.reload()
+        store.start(.review)
+        store.toggleStudyPaused(parent)
+        XCTAssertTrue(store.sessionStudyPaused)
+        if case .unavailable = store.homePrimaryAction {} else { XCTFail("Paused draft must not appear complete") }
+        XCTAssertNotNil(try store.repository.session()?.cardID)
+        store.toggleStudyPaused(parent)
+        XCTAssertFalse(store.sessionStudyPaused)
+    }
+
+    func testDeckPauseThreeThousandCardsReusesProjectionAndHandlesCycles() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let scheduler = try ReviewScheduler(), payload = try JSONEncoder().encode(scheduler.newCard(now: now))
+        try repo.transaction {
+            for index in 0..<3000 {
+                let input = NoteInput(deckID: root, question: "Q\(index)", answer: "A")
+                let note = Note(input: input, content: try StudyRepository.encodeContent(input), now: now)
+                repo.context.insert(note)
+                repo.context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now))
+            }
+        }
+        _ = try repo.queueCards()
+        let decodes = repo.queueStateDecodeCount
+        try repo.setStudyPaused(deckID: root, paused: true, now: now)
+        let started = Date()
+        try repo.withStudyQueueReuse {
+            let projections = repo.queueProjectionCount
+            XCTAssertTrue(try repo.queueCards().allSatisfy(\.suspended))
+            _ = try repo.queueCards()
+            XCTAssertEqual(repo.queueProjectionCount, projections + 1)
+        }
+        XCTAssertEqual(repo.queueStateDecodeCount, decodes)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        let a = UUID(), b = UUID(), c = UUID()
+        XCTAssertEqual(DeckStudyEligibility.pausedIDs([(a, b, false), (b, a, true), (c, a, false)]), [a, b, c])
+        XCTAssertTrue(DeckStudyEligibility.pausedIDs([(a, b, false), (b, a, false), (c, UUID(), false)]).isEmpty)
+    }
+}

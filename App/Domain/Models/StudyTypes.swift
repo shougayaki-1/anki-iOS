@@ -128,6 +128,8 @@ enum NumericSettingsInput {
 struct DeckItem: Identifiable {
     let id: UUID
     let name: String              // Full path used by pickers and scope selection.
+    var isStudyPaused = false
+    var isEffectivelyStudyPaused = false
     let shortName: String         // Local deck name used by the management tree.
     let parentID: UUID?
 
@@ -177,6 +179,7 @@ struct HomeSnapshot: Equatable {
     let hasCards: Bool
     let dayStart: Date
     let nextRefresh: Date
+    var studyPaused = false
 }
 
 struct ReviewPresentation {
@@ -282,9 +285,10 @@ enum HomeStudyPresentation {
 }
 
 enum StudyError: LocalizedError {
-    case reviewEditStructure, invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards, noOrderingCards
+    case deckStudyPaused, reviewEditStructure, invalidContent, missingRecord, unsupportedContent, newLimitReached, cannotUndo, noSession, noAvailableCards, noOrderingCards
     var errorDescription: String? {
         switch self {
+        case .deckStudyPaused: return "このデッキは学習を休止しています。回答下書きとUndoは保持しています。デッキ管理で学習を再開してください。"
         case .reviewEditStructure: return "学習中はカード形式・生成枚数・穴埋め番号・マスクIDを変更できません。構造の変更は学習を中断してライブラリで行ってください。"
         case .invalidContent: return "問題文と解答を入力してください。"
         case .missingRecord: return "対象のカードまたはデッキが見つかりません。"

@@ -197,6 +197,7 @@ struct HomeView: View {
     @State private var adding = false
     @State private var showingHelp = false
     @State private var editingSessionAnswerLimit = false
+    @State private var managingPausedDecks = false
     @Environment(\.scenePhase) private var scenePhase
 
     private func start(_ mode: StudyMode) {
@@ -211,6 +212,13 @@ struct HomeView: View {
             List {
                 Section {
                     LearningScopeSelector(store: store) { editingScope = true }
+                    if store.sessionStudyPaused || store.homeStudyPaused || store.decks.first(where: { $0.id == store.scope.deckID })?.isEffectivelyStudyPaused == true {
+                        Label("このデッキは学習を休止しています", systemImage: "pause.circle")
+                        Text("データと回答下書きは保持しています。親デッキが休止中の場合は親を再開してください。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Button("デッキ管理で学習を再開") { managingPausedDecks = true }
+                    }
+
                     Button { editingSessionAnswerLimit = true } label: {
                         HStack {
                             Text("学習設定")
@@ -254,6 +262,7 @@ struct HomeView: View {
                     }
                 }
             }
+            .sheet(isPresented: $managingPausedDecks) { DeckManagerView(store: store) }
             .navigationTitle("ホーム")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {

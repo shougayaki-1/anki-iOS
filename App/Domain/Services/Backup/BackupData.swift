@@ -21,6 +21,7 @@ struct BackupData: Codable, Equatable, Sendable {
 }
 
 struct BackupDeck: Codable, Equatable, Sendable {
+    var isStudyPaused: Bool? = nil
     var id: UUID
     var name: String
     var parentID: UUID?
@@ -30,6 +31,7 @@ struct BackupDeck: Codable, Equatable, Sendable {
 }
 extension BackupDeck {
     init(_ model: Deck) {
+        isStudyPaused = model.isStudyPaused
         id = model.id
         name = model.name
         parentID = model.parentID
