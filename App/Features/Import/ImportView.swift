@@ -12,7 +12,11 @@ struct ImportView: View {
     @State private var fileGeneration = UUID()
     @State private var readingFile = false
     @State private var dropTarget = false
-    @State private var pendingFile: (url: URL, text: String)?
+    @State private var pendingFile: (url: URL, contents: LocalFileInput.ImportContents)?
+    @State private var deckPackage: ValidatedDeckPackage?
+    @State private var ankiPackage: AnkiImportPreview?
+    @State private var packageIdentity = UUID()
+    @State private var childWorking = false
     @State private var replaceInput = false
     @State private var imagePackage: ImageImportPackage?
     @State private var source = "貼り付け"
@@ -37,24 +41,36 @@ struct ImportView: View {
     @State private var reloadWarning: String?
     @State private var saving = false
     @State private var operationPhase: ImportOperationPhase?
+    private let initialImportDeckID: UUID?
 
-    init(store: StudyStore, initialText: String = "", sourceName: String = "貼り付け") {
+    init(store: StudyStore, initialText: String = "", sourceName: String = "貼り付け", initialDeckID: UUID? = nil) {
         self.store = store
+        initialImportDeckID = initialDeckID
         _text = State(initialValue: initialText)
         _source = State(initialValue: sourceName)
-        _deckID = State(initialValue: store.decks.first?.id ?? UUID())
+        _deckID = State(initialValue: initialDeckID ?? store.decks.first?.id ?? UUID())
     }
 
     var body: some View {
         NavigationStack {
             Group {
-                if let result {
+                if let deckPackage {
+                    DeckPackagePreviewView(store: store, package: deckPackage, anki: ankiPackage,
+                        initialDeckID: initialImportDeckID, chooseFile: { filePicker = true },
+                        continueImport: resetInput, busyChanged: { childWorking = $0 })
+                        .id(packageIdentity)
+                } else if let imagePackage {
+                    ImageZIPImportView(store: store, package: imagePackage, deckID: deckID,
+                        chooseFile: { filePicker = true }, continueImport: resetInput,
+                        busyChanged: { childWorking = $0 })
+                        .id(packageIdentity)
+                } else if let result {
                     ImportCompletionView(store: store, result: result, warning: reloadWarning,
                                          resultIdentifier: "importResult", closeIdentifier: "closeImport", retryImport: { self.result = nil }, continueImport: resetInput, close: { dismiss() })
                 } else {
                     Form {
                     Section {
-                        Button("CSV / TSV / TXT / 画像ZIPを選択") { filePicker = true }.accessibilityIdentifier("selectImportFile")
+                        ImportFileSelectionButton { filePicker = true }
                         #if targetEnvironment(macCatalyst)
                         Text("FinderからCSV / TSV / TXTをこの画面へドロップできます。保存前にプレビューと確定が必要です。")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -155,41 +171,37 @@ struct ImportView: View {
                 }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if result == nil && !rows.isEmpty {
-                    VStack(spacing: 8) {
+                if result == nil && deckPackage == nil && imagePackage == nil && !rows.isEmpty {
+                    VStack(spacing: 0) {
                         Text("選択 \(rows.filter(\.included).count)件 / 全\(rows.count)行")
                             .font(.subheadline).foregroundStyle(.secondary)
-                        Button { focused = false; confirming = true } label: {
-                            Text("取り込みを確定").font(.headline)
-                                .frame(maxWidth: .infinity, minHeight: 48)
+                        ImportConfirmationButton(identifier: "confirmImport", disabled: saving || readingFile ||
+                            !rows.contains(where: { $0.included && !incomplete($0) })) {
+                            focused = false; confirming = true
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
-                        .accessibilityIdentifier("confirmImport")
-                        .disabled(saving || !rows.contains(where: \.included))
                     }
-                    .padding(.horizontal).padding(.vertical, 10)
                     .background(.regularMaterial)
                 }
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: text) { _, _ in refreshColumnCount() }
             .onChange(of: format) { _, _ in refreshColumnCount() }
-            .disabled(saving || readingFile)
-            .interactiveDismissDisabled(saving || readingFile)
-            .navigationTitle("一括登録")
+            .disabled(saving || readingFile || childWorking)
+            .interactiveDismissDisabled(saving || readingFile || childWorking)
+            .navigationBarBackButtonHidden(saving || readingFile || childWorking)
+            .navigationTitle("インポート")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving || readingFile).accessibilityIdentifier("closeImport") } }
+                ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving || readingFile || childWorking).accessibilityIdentifier("closeImport") } }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focused = false } }
             }
-            .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText, .zip]) { result in
+            .fileImporter(isPresented: $filePicker, allowedContentTypes: [.commaSeparatedText, .tabSeparatedText, .plainText, .zip, .studyDeck, .ankiPackage, .data]) { result in
                 do { readFile(try result.get()) }
-                catch { failure = error.localizedDescription }
+                catch { if (error as NSError).code != NSUserCancelledError { failure = error.localizedDescription } }
             }
             .onDrop(of: [UTType.fileURL.identifier], isTargeted: $dropTarget) { providers in
                 guard providers.count == 1 else { failure = "ファイルは1件ずつ選択してください。"; return false }
-                LocalFileInput.load(providers[0], extensions: ["csv", "tsv", "txt"], maximumBytes: 10_000_000) { result in
-                    guard acceptingFiles, self.result == nil, !saving else { return }
+                LocalFileInput.load(providers[0], extensions: ["csv", "tsv", "txt", "zip", "studydeck", "apkg", "studybackup"], maximumBytes: 200_000_000) { result in
+                    guard acceptingFiles, self.result == nil, !saving, !childWorking else { return }
                     switch result {
                     case let .success((url, data)): acceptFile(url, data: data)
                     case let .failure(error): failure = error.localizedDescription
@@ -207,11 +219,10 @@ struct ImportView: View {
                 }
             }
             .overlay { if dropTarget { RoundedRectangle(cornerRadius: 12).stroke(Color.accentColor, lineWidth: 2).allowsHitTesting(false) } }
-            .confirmationDialog("入力中の内容をファイルで置き換えますか？", isPresented: $replaceInput, titleVisibility: .visible) {
-                Button("ファイルの内容に置き換える") { applyPendingFile() }
+            .alert("入力中の内容をファイルで置き換えますか？", isPresented: $replaceInput) {
+                Button("ファイルの内容に置き換える", role: .destructive) { applyPendingFile() }
                 Button("キャンセル", role: .cancel) { pendingFile = nil }
             } message: { Text("現在の入力とプレビューを置き換えます。登録済みカードは変更しません。") }
-            .sheet(item: $imagePackage) { package in ImageZIPImportView(store: store, package: package, deckID: deckID) }
             .confirmationDialog("\(rows.filter(\.included).count)件の取り込みを確定しますか？", isPresented: $confirming, titleVisibility: .visible) {
                 Button("確定して保存") { commit() }.accessibilityIdentifier("commitImport")
             } message: { Text("重複は「\(action.title)」。\(resetHistory && action == .update ? "更新対象の復習予定を初期化します。" : "既存の学習履歴を保持します。")") }
@@ -221,26 +232,30 @@ struct ImportView: View {
         }
     }
     private func acceptFile(_ url: URL, data: Data) {
-        fileOperation?.cancel(); fileGeneration = UUID(); readingFile = false
-        guard let value = String(data: data, encoding: .utf8) else { failure = LibraryError.invalidUTF8.localizedDescription; return }
-        pendingFile = (url, value.hasPrefix("\u{feff}") ? String(value.dropFirst()) : value)
-        if !text.isEmpty || !rows.isEmpty { replaceInput = true } else { applyPendingFile() }
+        readFile(url, suppliedData: data)
     }
-    private func readFile(_ url: URL) {
+    private func stageFile(_ url: URL, contents: LocalFileInput.ImportContents) {
+        pendingFile = (url, contents)
+        if !text.isEmpty || !rows.isEmpty || imagePackage != nil || deckPackage != nil { replaceInput = true }
+        else { applyPendingFile() }
+    }
+    private func readFile(_ url: URL, suppliedData: Data? = nil) {
+        guard !saving, !childWorking else { return }
         fileOperation?.cancel()
         let generation = UUID(); fileGeneration = generation; readingFile = true
         fileOperation = Task {
             defer { if fileGeneration == generation { readingFile = false; fileOperation = nil } }
             do {
-                let contents = try await LocalFileInput.readImport(url)
+                let contents: LocalFileInput.ImportContents
+                if let suppliedData {
+                    let task = Task.detached(priority: .utility) {
+                        try LocalFileInput.decodeImport(suppliedData, extension: url.pathExtension)
+                    }
+                    contents = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                } else { contents = try await LocalFileInput.readImport(url) }
                 guard !Task.isCancelled, acceptingFiles, fileGeneration == generation, result == nil, !saving else { return }
                 readingFile = false
-                switch contents {
-                case .images(let package): imagePackage = package
-                case .text(let text):
-                    pendingFile = (url, text)
-                    if !self.text.isEmpty || !rows.isEmpty { replaceInput = true } else { applyPendingFile() }
-                }
+                stageFile(url, contents: contents)
             } catch is CancellationError {
             } catch {
                 guard !Task.isCancelled, acceptingFiles, fileGeneration == generation else { return }
@@ -250,10 +265,18 @@ struct ImportView: View {
     }
     private func applyPendingFile() {
         guard let file = pendingFile else { return }
-        text = file.text; source = file.url.pathExtension.lowercased()
-        format = source == "csv" ? "CSV" : source == "tsv" ? "TSV" : "Q/A"
-        rows = []; previewPage = 0; result = nil; pendingFile = nil
-        refreshColumnCount()
+        resetInput()
+        source = file.url.pathExtension.lowercased()
+        packageIdentity = UUID()
+        switch file.contents {
+        case .text(let value):
+            text = value
+            format = source == "csv" ? "CSV" : source == "tsv" ? "TSV" : "Q/A"
+            refreshColumnCount()
+        case .images(let package): imagePackage = package
+        case .deck(let package): deckPackage = package
+        case .anki(let package): deckPackage = package.deck; ankiPackage = package
+        }
     }
     private var pageCount: Int { max(1, (rows.count + pageSize - 1) / pageSize) }
     private var currentPage: Int { min(max(0, previewPage), pageCount - 1) }
@@ -296,6 +319,7 @@ struct ImportView: View {
     private func resetInput() {
         result = nil; reloadWarning = nil; rows = []; text = ""; previewPage = 0
         source = "貼り付け"; pendingFile = nil; failure = nil
+        deckPackage = nil; ankiPackage = nil; imagePackage = nil; childWorking = false
     }
     private func commit() {
         guard !saving, result == nil else { return }
@@ -330,6 +354,9 @@ struct ImageZIPImportView: View {
     @State var package: ImageImportPackage
     @State var deckID: UUID
     @Environment(\.dismiss) private var dismiss
+    var chooseFile: (() -> Void)? = nil
+    var continueImport: (() -> Void)? = nil
+    var busyChanged: (Bool) -> Void = { _ in }
     @State private var page = 0
     @State private var imageDisplayNamespace = UUID()
     @State private var duplicates = Set<UUID>()
@@ -341,13 +368,14 @@ struct ImageZIPImportView: View {
     @State private var saving = false
     @State private var operationPhase: ImportOperationPhase?
     var body: some View {
-        NavigationStack {
+        Group {
             Group {
                 if let result {
                     ImportCompletionView(store: store, result: result, warning: reloadWarning,
-                                         resultIdentifier: "imageImportResult", closeIdentifier: "closeImageImport", retryImport: { self.result = nil }, continueImport: { dismiss() }, close: { dismiss() })
+                                         resultIdentifier: "imageImportResult", closeIdentifier: "closeImageImport", retryImport: { self.result = nil }, continueImport: { if let continueImport { continueImport() } else { dismiss() } }, close: { dismiss() })
                 } else {
                     Form {
+                    if let chooseFile { Section { ImportFileSelectionButton(action: chooseFile) } }
                     Section("画像ZIP") {
                         Text("\(package.rows.count)行 / 重複 \(duplicates.count)行 / エラー \(package.rows.filter { $0.error != nil }.count)行。確定するまで保存されません。")
                         Text("問題が空欄の行には「画像を見て答えてください」を補います。プレビューで変更できます。")
@@ -386,21 +414,19 @@ struct ImageZIPImportView: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if result == nil {
-                    Button("確認して取り込む") { confirming = true }
-                        .buttonStyle(.borderedProminent).frame(maxWidth: .infinity).padding()
-                        .background(.bar)
-                        .disabled(saving || !package.rows.contains { $0.included && $0.error == nil })
-                        .accessibilityIdentifier("confirmImageImport")
+                    ImportConfirmationButton(identifier: "confirmImageImport", disabled: saving ||
+                        !package.rows.contains { $0.included && $0.error == nil }) { confirming = true }
                 }
             }
             .onAppear { refreshDuplicates() }
+            .onChange(of: saving) { _, value in busyChanged(value) }
             .onChange(of: deckID) { refreshDuplicates() }
             .onChange(of: package.rows.map { $0.question + "\u{1f}" + $0.answer }) { refreshDuplicates() }
             .disabled(saving)
             .interactiveDismissDisabled(saving)
             .overlay { if let operationPhase { ImportProcessingOverlay(phase: operationPhase) } }
-            .navigationTitle("画像ZIPの取り込み")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { if result == nil { Button("閉じる") { dismiss() }.disabled(saving).accessibilityIdentifier("closeImageImport") } } }
+            .navigationTitle("インポート")
+
             .confirmationDialog("選択した行を保存しますか？", isPresented: $confirming, titleVisibility: .visible) {
                 Button("確定して保存", action: commit)
             }
@@ -633,5 +659,36 @@ struct ImportProcessingOverlay: View {
     }
     private func announce() {
         UIAccessibility.post(notification: .announcement, argument: phase.title + "。" + phase.message)
+    }
+}
+
+
+struct ImportFileSelectionButton: View {
+    let action: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button(action: action) {
+                Label("ファイルを選択", systemImage: "doc.badge.plus")
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+            .accessibilityIdentifier("selectImportFile")
+            Text("CSV / TSV / TXT / 画像ZIP / .studydeck / .apkg")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+}
+
+struct ImportConfirmationButton: View {
+    let identifier: String
+    let disabled: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text("取り込みを確定").font(.headline).frame(maxWidth: .infinity, minHeight: 48)
+        }
+        .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
+        .accessibilityIdentifier(identifier).disabled(disabled)
+        .padding(.horizontal).padding(.vertical, 10).background(.regularMaterial)
     }
 }
