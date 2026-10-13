@@ -159,3 +159,15 @@ CloseしたIssueは0。Draft PRは測定ヘルパー/資料のみで、性能改
 - 実SQLはSelectedCardFetchScalingだけ別実行でtest host引数へ`-com.apple.CoreData.SQLDebug 1`を追加。SQLDebug有効時の時間を通常値に混ぜない。
 - Debug実機ビルド成功。測定10件×3実行=30成功、データ保全/無効化/原子性の関連14件成功、主要UI1件成功（A/B各3巡）、全件スクロール1件成功（3巡、ヘルパー失敗後再実行）、SQL確認1件成功、通知診断/片付け1件成功。通知UI1件は失敗。全テスト・Releaseビルドは今回実行していない。
 - 生ログ、xcresult、traceはローカル`/private/tmp/anki-performance-20261012/`。`device-baseline.trace`と`device-scroll-memory.trace`を保持。他プロセス情報や個人情報を含み得るためGitHubへuploadしない。PRにはこの資料・CSVの計測値だけを掲載。CSVのA2は`instruments_interference`として保持し、評価から除外。
+
+### #121 検索結果公開後の行更新（2026-10-13）
+
+`LibraryTreeRowView.equatable()`でデッキ名・件数・開閉、カード本文・フラグ、選択状態、代表カード/兄弟ID、階層が同じ行のbody評価を省く。操作は現在のBindingを参照する。Listの安定ID・1要素1行、Actorの投影/展開、本文キャッシュ制限は維持し、保存形式・学習履歴は変更しない。
+
+隔離fixtureの`-study-performance`で、既存の`Library.projection` / `Library.rows` / `Library.contents`に加え、`Library.preparePublish`（options取得・選択ID整理）、`Library.publish`（状態公開）、`Library.listBody` / `Library.rowBody`（View値の構築）を採取できる。body区間は描画完了時間やFPSではない。Time Profiler/Hangs/SwiftUIと同じプロセス・時刻で照合する。通常起動・Releaseでは追加計測を無効にする既存ガードを使用。
+
+関連テストは更新判定1件、Actorの検索/階層・編集反映2件、既存UIの階層/検索/再起動・選択/取消2件に限定。3,000件実機の停止解消、SwiftUI実描画/FPS、同条件RAM前後比較は別に判断し、未確認の受け入れ条件が残る間は#121をOpenに保つ。
+
+変更後のiPhone 15 Pro / iOS 27.0.1 / Debug -Ononeを専用Bundle ID `dev.shoug.AnkiIOS.Issue121Audit`・UUID別fixtureで確認。関連単体3件、3,000 basicノート/カードの検索と8ジェスチャー×3巡は成功。計測接続の初回PID照合が失敗したため、インストール先とPIDを照合してUI計測のみ1回再試行し成功。本番アプリ・学習データは変更していない。測定用コピーのみApp Group entitlementを空にしており、Widget検証ではない。
+
+対象アプリへ検索前にattachした60秒のTime Profiler + os_signpostでは温度はNominal。検索のActor区間は74.86ms（本文取得66.11msを内包）、投影3.20ms、可視行展開0.66ms、公開準備1.40ms、状態公開0.05ms。検索・スクロールを含む採取範囲で行body127回（合計8.08ms、最大0.79ms）、List body6回（合計1.28ms）。330.70msのpotential hangが1回残るが、開始12.462秒・終了12.793秒で、Actor検索開始13.830秒・状態公開13.910秒より前。停止中のMain ThreadサンプルはUIKitのkeyboard focus/input view経路を含み、List更新の停止とは判定できない。入力開始時のキーボード準備が候補という推論に留める。公開後の250ms以上停止はこの1採取では検出されなかったが、既存の複数回測定と同条件の前後比較ではなく、停止解消・改善率を確定しない。RAM/FPSは未測定。生trace・ログ・xcresultは`/private/tmp/anki-issue121-device/`に保持しGitHubへ掲載しない。
