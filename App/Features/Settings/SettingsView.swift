@@ -109,7 +109,7 @@ struct SettingsView: View {
                     Picker("フィードバック", selection: Binding(get: { store.settings.hapticsMode }, set: { value in update { $0.hapticsMode = value } })) {
                         ForEach(HapticsMode.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
-                    Text("答え表示・評価・Undo・目標達成で控えめに反応します。「豊か」は対応実機の目標達成時にカスタムパターンを使います。")
+                    Text("答え表示・評価・Undo・保存完了などで控えめに反応します。「豊か」は対応実機で今回の最大回答回数に達したときだけカスタムパターンを使います。日次目標の達成では鳴りません。「オフ」はアプリ独自の触覚を止めます。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 } header: { Text("触覚").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
                 Section {

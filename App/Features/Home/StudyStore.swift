@@ -434,7 +434,7 @@ final class StudyStore {
             catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
             let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
             if finishedSet || !swipePrepared {
-                haptics.play(finishedSet ? .goal : .grade, mode: settings.hapticsMode)
+                haptics.play(finishedSet ? .sessionCompleted : .grade, mode: settings.hapticsMode)
             }
         }
     }
@@ -520,11 +520,14 @@ final class StudyStore {
             return false
         }
     }
-    func ordering(_ action: OrderingAction) {
-        guard flushTypedDraft() else { return }
+    // Acknowledges a saved and displayed change for view feedback and announcements.
+    @discardableResult
+    func ordering(_ action: OrderingAction) -> Bool {
+        guard flushTypedDraft() else { return false }
         do {
             let before = review?.answerRevealed == true
-            let previousAttempts = review?.ordering?.attempts ?? 0
+            let previousDraft = review?.ordering
+            let previousAttempts = previousDraft?.attempts ?? 0
             try repository.updateOrdering(action, now: clock())
             review = try repository.presentation(now: clock())
             if case .check = action, let state = review?.ordering,
@@ -535,7 +538,11 @@ final class StudyStore {
             } else if !before && review?.answerRevealed == true {
                 haptics.play(.reveal, mode: settings.hapticsMode)
             }
-        } catch { failure = error.localizedDescription }
+            return review?.ordering != previousDraft
+        } catch {
+            failure = error.localizedDescription
+            return false
+        }
     }
     func pause() {
         if perform(metadata: false, changed: false, { try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
