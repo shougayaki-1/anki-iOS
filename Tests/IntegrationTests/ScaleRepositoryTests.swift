@@ -329,9 +329,11 @@ final class ScaleRepositoryTests: XCTestCase {
         reportAttachment.lifetime = .keepAlways
         add(reportAttachment)
         XCTAssertEqual(store.counts.due, 3000)
+        let homeProjections = repo.queueProjectionCount
         let pollStart = Date()
         for _ in 0..<5 { store.refreshHome() }
         let pollTime = Date().timeIntervalSince(pollStart) / 5
+        XCTAssertEqual(repo.queueProjectionCount, homeProjections)
         XCTAssertNil(store.homeFailure); XCTAssertEqual(store.counts.due, 3000)
         // Empty sessions with 3000 future cards must not write on repeated home reads.
         store.clock = { now }
@@ -341,9 +343,11 @@ final class ScaleRepositoryTests: XCTestCase {
         try store.reload()
         var homeSaves = 0
         store.repository.save = { context in homeSaves += 1; try context.save() }
+        let waitingProjections = repo.queueProjectionCount
         let waitingStart = Date()
         for _ in 0..<5 { store.refreshHome() }
         let waitingTime = Date().timeIntervalSince(waitingStart) / 5
+        XCTAssertEqual(repo.queueProjectionCount, waitingProjections)
         XCTAssertEqual(homeSaves, 0)
         XCTAssertNil(store.homeFailure)
         XCTAssertLessThan(waitingTime, max(1, pollTime * 3))

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-// Value snapshots keep SwiftData objects on the main actor while ZIP and hash work can run elsewhere.
+// Value snapshots keep SwiftData objects in their owning context; only values cross actors.
 struct BackupData: Codable, Equatable, Sendable {
     var schemaVersion = 1
     var decks: [BackupDeck] = []
@@ -29,7 +29,7 @@ struct BackupDeck: Codable, Equatable, Sendable {
     var updatedAt: Date
 }
 extension BackupDeck {
-    @MainActor init(_ model: Deck) {
+    init(_ model: Deck) {
         id = model.id
         name = model.name
         parentID = model.parentID
@@ -50,7 +50,7 @@ struct BackupNote: Codable, Equatable, Sendable {
     var updatedAt: Date
 }
 extension BackupNote {
-    @MainActor init(_ model: Note) {
+    init(_ model: Note) {
         id = model.id
         deckID = model.deckID
         type = model.type
@@ -74,7 +74,7 @@ struct BackupStudyCard: Codable, Equatable, Sendable {
     var updatedAt: Date
 }
 extension BackupStudyCard {
-    @MainActor init(_ model: StudyCard) {
+    init(_ model: StudyCard) {
         id = model.id
         identityKey = model.identityKey
         noteID = model.noteID
@@ -103,7 +103,7 @@ struct BackupStudyReviewLog: Codable, Equatable, Sendable {
     var previousUpdatedAt: Date
 }
 extension BackupStudyReviewLog {
-    @MainActor init(_ model: StudyReviewLog) {
+    init(_ model: StudyReviewLog) {
         id = model.id
         cardID = model.cardID
         reviewedAt = model.reviewedAt
@@ -135,7 +135,7 @@ struct BackupSessionDraft: Codable, Equatable, Sendable {
     var updatedAt: Date
 }
 extension BackupSessionDraft {
-    @MainActor init(_ model: SessionDraft) {
+    init(_ model: SessionDraft) {
         key = model.key
         mode = model.mode
         cardID = model.cardID
@@ -159,7 +159,7 @@ struct BackupStudyPreferences: Codable, Equatable, Sendable {
     var dayStartHour: Int
 }
 extension BackupStudyPreferences {
-    @MainActor init(_ model: StudyPreferences) {
+    init(_ model: StudyPreferences) {
         key = model.key
         desiredRetention = model.desiredRetention
         dailyNewLimit = model.dailyNewLimit
@@ -174,7 +174,7 @@ struct BackupTag: Codable, Equatable, Sendable {
     var normalizedName: String
 }
 extension BackupTag {
-    @MainActor init(_ model: Tag) {
+    init(_ model: Tag) {
         id = model.id
         name = model.name
         normalizedName = model.normalizedName
@@ -192,7 +192,7 @@ struct BackupImportBatch: Codable, Equatable, Sendable {
     var errorSummary: String
 }
 extension BackupImportBatch {
-    @MainActor init(_ model: ImportBatch) {
+    init(_ model: ImportBatch) {
         id = model.id
         sourceType = model.sourceType
         createdAt = model.createdAt
@@ -209,7 +209,7 @@ struct BackupSessionScope: Codable, Equatable, Sendable {
     var payload: Data
 }
 extension BackupSessionScope {
-    @MainActor init(_ model: SessionScope) {
+    init(_ model: SessionScope) {
         key = model.key
         payload = model.payload
     }
@@ -220,7 +220,7 @@ struct BackupExtraPreferences: Codable, Equatable, Sendable {
     var payload: Data
 }
 extension BackupExtraPreferences {
-    @MainActor init(_ model: ExtraPreferences) {
+    init(_ model: ExtraPreferences) {
         key = model.key
         payload = model.payload
     }
@@ -236,7 +236,7 @@ struct BackupMediaAsset: Codable, Equatable, Sendable {
     var createdAt: Date
 }
 extension BackupMediaAsset {
-    @MainActor init(_ model: MediaAsset) {
+    init(_ model: MediaAsset) {
         id = model.id
         relativePath = model.relativePath
         mediaType = model.mediaType
@@ -253,7 +253,7 @@ struct BackupEditorDraft: Codable, Equatable, Sendable {
     var updatedAt: Date
 }
 extension BackupEditorDraft {
-    @MainActor init(_ model: EditorDraft) {
+    init(_ model: EditorDraft) {
         key = model.key
         payload = model.payload
         updatedAt = model.updatedAt
@@ -267,23 +267,27 @@ struct BackupOrderingDraft: Codable, Equatable, Sendable {
 
 extension BackupData {
     @MainActor static func capture(_ repository: StudyRepository) throws -> Self {
+        try capture(context: repository.context)
+    }
+    // The caller owns this context and must stay on its executor throughout capture.
+    static func capture(context: ModelContext) throws -> Self {
         var result = Self()
-        result.decks = try repository.decks().map(BackupDeck.init)
-        result.notes = try repository.notes().map(BackupNote.init)
-        result.cards = try repository.cards().map(BackupStudyCard.init)
-        result.logs = try repository.logs().map(BackupStudyReviewLog.init)
-        result.sessions = try repository.context.fetch(FetchDescriptor<SessionDraft>()).map(BackupSessionDraft.init)
-        let ordering = try repository.context.fetch(FetchDescriptor<OrderingDraftRecord>())
+        result.decks = try context.fetch(FetchDescriptor<Deck>(sortBy: [SortDescriptor(\.sortOrder), SortDescriptor(\.createdAt)])).map(BackupDeck.init)
+        result.notes = try context.fetch(FetchDescriptor<Note>()).map(BackupNote.init)
+        result.cards = try context.fetch(FetchDescriptor<StudyCard>()).map(BackupStudyCard.init)
+        result.logs = try context.fetch(FetchDescriptor<StudyReviewLog>(sortBy: [SortDescriptor(\.sequence)])).map(BackupStudyReviewLog.init)
+        result.sessions = try context.fetch(FetchDescriptor<SessionDraft>()).map(BackupSessionDraft.init)
+        let ordering = try context.fetch(FetchDescriptor<OrderingDraftRecord>())
         result.orderingDrafts = ordering.isEmpty ? nil : ordering.map { BackupOrderingDraft(key: $0.key, payload: $0.payload) }
-        let answers = try repository.savedTypedAnswerModels().map { try JSONDecoder().decode(TypedAnswerRecord.self, from: $0.payload) }
+        let answers = try context.fetch(FetchDescriptor<SavedTypedAnswer>(sortBy: [SortDescriptor(\.reviewedAt, order: .reverse)])).map { try JSONDecoder().decode(TypedAnswerRecord.self, from: $0.payload) }
         result.typedAnswers = answers.isEmpty ? nil : answers
-        result.preferences = try repository.context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
-        result.tags = try repository.tags().map(BackupTag.init)
-        result.imports = try repository.context.fetch(FetchDescriptor<ImportBatch>()).map(BackupImportBatch.init)
-        result.scopes = try repository.context.fetch(FetchDescriptor<SessionScope>()).map(BackupSessionScope.init)
-        result.options = try repository.context.fetch(FetchDescriptor<ExtraPreferences>()).map(BackupExtraPreferences.init)
-        result.media = try repository.assets().map(BackupMediaAsset.init)
-        result.editorDrafts = try repository.context.fetch(FetchDescriptor<EditorDraft>()).map(BackupEditorDraft.init)
+        result.preferences = try context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
+        result.tags = try context.fetch(FetchDescriptor<Tag>(sortBy: [SortDescriptor(\.normalizedName)])).map(BackupTag.init)
+        result.imports = try context.fetch(FetchDescriptor<ImportBatch>()).map(BackupImportBatch.init)
+        result.scopes = try context.fetch(FetchDescriptor<SessionScope>()).map(BackupSessionScope.init)
+        result.options = try context.fetch(FetchDescriptor<ExtraPreferences>()).map(BackupExtraPreferences.init)
+        result.media = try context.fetch(FetchDescriptor<MediaAsset>()).map(BackupMediaAsset.init)
+        result.editorDrafts = try context.fetch(FetchDescriptor<EditorDraft>()).map(BackupEditorDraft.init)
         return result
     }
 }
