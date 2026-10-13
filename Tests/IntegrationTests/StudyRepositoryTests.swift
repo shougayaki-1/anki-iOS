@@ -298,9 +298,16 @@ final class StudyRepositoryTests: XCTestCase {
         repo.save = { try $0.save() }
         let store = try StudyStore(container: repo.context.container, clock: { self.now })
         let start = store.repository.queueProjectionCount
+        let noteFetches = store.repository.queueNoteFetchCount
+        let noteRows = store.repository.queueNoteRowsFetched
+        let cardRows = store.repository.queueCardRowsFetched
         store.start(.new)
         XCTAssertNil(store.failure)
         XCTAssertEqual(store.repository.queueProjectionCount - start, 1)
+        XCTAssertEqual(store.repository.queueNoteFetchCount - noteFetches, 1)
+        XCTAssertEqual(store.repository.queueNoteRowsFetched - noteRows, 2)
+        XCTAssertEqual(store.repository.queueCardRowsFetched - cardRows, 2)
+        XCTAssertNotNil(store.review?.card)
         store.draft(revealed: true)
         let grade = store.repository.queueProjectionCount
         store.grade(.good)
