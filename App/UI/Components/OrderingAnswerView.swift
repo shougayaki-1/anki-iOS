@@ -54,7 +54,7 @@ struct OrderingAnswerView: View {
             if let result = draft.result {
                 Label(result == .correct ? "正解" : "不正解 — 語句を取り消すか、最初からやり直せます。",
                       systemImage: result == .correct ? "checkmark.circle" : "xmark.circle")
-                    .foregroundStyle(result == .correct ? Color("GradeGood") : Color("GradeAgain"))
+                    .foregroundStyle(result == .correct ? ReviewGrade.good.color : ReviewGrade.again.color)
                     .accessibilityIdentifier("orderingResult")
                 Text(draft.evaluationGuidance).font(.footnote).foregroundStyle(.secondary)
             }
@@ -136,7 +136,7 @@ struct OrderingAnswerView: View {
                     }
             }
         }
-        .buttonStyle(.bordered).tint(Color("PrimaryAction"))
+        .buttonStyle(.bordered).tint(Color("AccentColor"))
         .frame(maxWidth: .infinity, alignment: .leading)
         // Keep a single chip's accessibility frame separate from the full-width
         // drop target, just as when several chips are present.

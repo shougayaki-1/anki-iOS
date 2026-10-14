@@ -3,6 +3,7 @@ import SwiftUI
 /// Screen-level actions only. Navigation bars, menus and List rows use system controls.
 struct PrimaryActionStyle: ButtonStyle {
     var color: Color = Color("PrimaryAction")
+    var foreground: Color = .white
     var capsule = false
     @Environment(\.isEnabled) private var isEnabled
 
@@ -13,10 +14,17 @@ struct PrimaryActionStyle: ButtonStyle {
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, minHeight: 56)
-            .foregroundStyle(.white)
-            .background(color.opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.35),
-                        in: RoundedRectangle(cornerRadius: capsule ? 28 : 14))
+            .foregroundStyle(foreground)
+            .background {
+                RoundedRectangle(cornerRadius: capsule ? 28 : 14)
+                    .fill(color)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: capsule ? 28 : 14)
+                            .fill(.black.opacity(configuration.isPressed ? 0.15 : 0))
+                    }
+            }
             .contentShape(RoundedRectangle(cornerRadius: capsule ? 28 : 14))
+            .opacity(isEnabled ? 1 : 0.35)
     }
 }
 
@@ -46,5 +54,17 @@ struct BottomActionArea<Content: View>: View {
             .frame(maxWidth: .infinity)
             .background(.regularMaterial)
             .overlay(alignment: .top) { Divider() }
+    }
+}
+
+/// Grade assets are the source of truth for buttons, swipe feedback and result labels.
+extension ReviewGrade {
+    var color: Color {
+        switch self {
+        case .again: return Color("GradeAgain")
+        case .hard: return Color("GradeHard")
+        case .good: return Color("GradeGood")
+        case .easy: return Color("GradeEasy")
+        }
     }
 }

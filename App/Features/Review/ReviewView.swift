@@ -614,7 +614,7 @@ struct ReviewView: View {
         if review.responseMode == .ordering, let draft = review.ordering {
             if let result = draft.result {
                 Label(result == .correct ? "正解" : "不正解", systemImage: result == .correct ? "checkmark.circle" : "xmark.circle")
-                    .foregroundStyle(result == .correct ? Color("GradeGood") : Color("GradeAgain"))
+                    .foregroundStyle(result == .correct ? ReviewGrade.good.color : ReviewGrade.again.color)
                     .accessibilityIdentifier("orderingResult")
             } else { Label("模範解答を確認しました", systemImage: "eye") }
             Text(draft.evaluationGuidance).font(.footnote).foregroundStyle(.secondary)
@@ -683,10 +683,7 @@ struct ReviewView: View {
 
     private func swipeColor(_ action: ReviewSwipeAction) -> Color {
         switch action {
-        case .grade(.again): return .red
-        case .grade(.hard): return .orange
-        case .grade(.good): return .green
-        case .grade(.easy): return .blue
+        case .grade(let grade): return grade.color
         case .reveal: return .accentColor
         }
     }
@@ -880,7 +877,7 @@ private struct ReviewActionBar: View {
                 .fixedSize(horizontal: compact, vertical: true)
                 .frame(maxWidth: .infinity)
         }
-        .buttonStyle(PrimaryActionStyle(color: gradeColor(grade)))
+        .buttonStyle(PrimaryActionStyle(color: grade.color, foreground: Color("GradeForeground")))
         .foregroundStyle(.white)
         .frame(minWidth: compact ? 72 : 0)
         .accessibilityLabel(gradeTitle(grade))
@@ -917,14 +914,7 @@ private struct ReviewActionBar: View {
         }
     }
 
-    private func gradeColor(_ grade: ReviewGrade) -> Color {
-        switch grade {
-        case .again: return Color("GradeAgain")
-        case .hard: return Color("GradeHard")
-        case .good: return Color("GradeGood")
-        case .easy: return Color("GradeEasy")
-        }
-    }
+
 }
 
 private struct ReviewEmptyStateView: View {

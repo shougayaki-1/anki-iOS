@@ -165,7 +165,7 @@ struct CelebrationView: View {
                     Text(canContinue ? "学習を続ける" : "ホームへ").font(.headline)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, minHeight: 56)
-                }.buttonStyle(PrimaryActionStyle(color: color, capsule: true))
+                }.buttonStyle(PrimaryActionStyle(capsule: true))
                     .accessibilityIdentifier("celebrationPrimary")
                 Button("記録を見る") { action(.records) }.font(.body.weight(.semibold))
                     .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("celebrationRecords")
