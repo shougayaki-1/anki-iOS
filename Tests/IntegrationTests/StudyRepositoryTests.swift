@@ -31,6 +31,57 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(store.review?.card?.cardID, id)
     }
 
+    func testPauseResumeReusesQueueNotesAndKeepsDraftOnSaveFailure() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        let repo = store.repository
+        try create(repo)
+        try store.reload()
+        store.startRecommended()
+        store.draft(mode: .typing, text: "keep")
+        let id = try XCTUnwrap(store.review?.card?.cardID)
+        let payload = try XCTUnwrap(repo.card(id)?.fsrsPayload)
+        let beforePause = repo.queueNoteFetchCount
+        store.pause()
+        XCTAssertEqual(repo.queueNoteFetchCount - beforePause, 1)
+        XCTAssertFalse(store.showingReview)
+        XCTAssertEqual(try repo.session()?.typedDraft, "keep")
+        let beforeResume = repo.queueNoteFetchCount
+        store.resume()
+        XCTAssertEqual(repo.queueNoteFetchCount - beforeResume, 1)
+        XCTAssertTrue(store.showingReview)
+        XCTAssertEqual(store.review?.card?.cardID, id)
+        XCTAssertEqual(store.review?.typedDraft, "keep")
+
+        repo.save = { _ in throw Failure.save }
+        store.pause()
+        XCTAssertTrue(store.showingReview)
+        XCTAssertEqual(try repo.session()?.cardID, id)
+        XCTAssertEqual(try repo.session()?.typedDraft, "keep")
+        XCTAssertEqual(try repo.card(id)?.fsrsPayload, payload)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        repo.save = { try $0.save() }
+        store.pause()
+        repo.save = { _ in throw Failure.save }
+        store.resume()
+        XCTAssertFalse(store.showingReview)
+        XCTAssertEqual(try repo.session()?.cardID, id)
+        XCTAssertEqual(try repo.session()?.typedDraft, "keep")
+        XCTAssertEqual(try repo.card(id)?.fsrsPayload, payload)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        repo.save = { try $0.save() }
+        let card = try XCTUnwrap(repo.card(id))
+        let deck = try XCTUnwrap(repo.note(card.noteID)?.deckID)
+        try repo.setStudyPaused(deckID: deck, paused: true, now: now)
+        store.resume()
+        XCTAssertFalse(store.showingReview)
+        XCTAssertEqual(try repo.session()?.typedDraft, "keep")
+        try repo.setStudyPaused(deckID: deck, paused: false, now: now)
+        store.resume()
+        XCTAssertTrue(store.showingReview)
+        XCTAssertEqual(store.review?.card?.cardID, id)
+        XCTAssertEqual(store.review?.typedDraft, "keep")
+    }
+
     func testRecommendationUsesRiskOnlyForBacklogAndRechecksSettings() throws {
         func reviewStore() throws -> StudyStore {
             let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
