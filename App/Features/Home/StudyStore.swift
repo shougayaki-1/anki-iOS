@@ -50,6 +50,7 @@ final class StudyStore {
     var newSlotsRemaining = 0
     var homeFailure: String?
     var hasCards = false
+    var homeMedianAnswerSeconds: Double?
     @ObservationIgnored private var homeCards: (repository: ObjectIdentifier, revision: Int, cards: [QueueCard])?
     @ObservationIgnored private var homeDayStart: Date?
     @ObservationIgnored private var homeTimeZone: String?
@@ -178,6 +179,7 @@ final class StudyStore {
     }
     private func applyHomeSnapshot(_ snapshot: HomeSnapshot) {
         homeStudyPaused = snapshot.studyPaused
+        homeMedianAnswerSeconds = snapshot.medianAnswerSeconds
         if scope != snapshot.scope { scope = snapshot.scope }
         if counts != snapshot.counts { counts = snapshot.counts }
         if globalCounts != snapshot.globalCounts { globalCounts = snapshot.globalCounts }
@@ -188,12 +190,12 @@ final class StudyStore {
         homeDayStart = snapshot.dayStart; homeTimeZone = repository.calendar.timeZone.identifier
         homeFailure = nil
     }
-    func refreshHome(reconcileNotifications: Bool = false) {
+    func refreshHome(reconcileNotifications: Bool = false, at referenceDate: Date? = nil) {
         let interval = PerformanceProbe.begin("Store.refreshHome")
         defer { PerformanceProbe.end(interval) }
         do {
             repository.calendar = .current
-            let now = clock()
+            let now = referenceDate ?? clock()
             let cards: [QueueCard]
             if let cached = homeCards, cached.repository == ObjectIdentifier(repository),
                cached.revision == repository.mutationRevision, !repository.context.hasChanges {
@@ -399,6 +401,29 @@ final class StudyStore {
         if counts.newRemaining > 0 { return .start(.new, counts.newRemaining) }
         return .unavailable
     }
+    var homeRecommendation: HomeRecommendation? {
+        guard case let .start(mode, count) = homePrimaryAction else { return nil }
+        return HomeRecommendation(mode: mode, cardCount: count, answerLimit: sessionAnswerLimit, medianAnswerSeconds: homeMedianAnswerSeconds, scope: scope, responseMode: sessionResponseMode)
+    }
+    func startRecommended() {
+        let previous = homeRecommendation
+        let referenceDate = clock()
+        refreshHome(at: referenceDate)
+        do {
+            let options = try repository.options()
+            sessionAnswerLimit = options.sessionAnswerLimit ?? 20
+            sessionResponseMode = options.sessionResponseMode ?? .cardDefault
+        } catch { failure = error.localizedDescription; return }
+        // Re-read the persisted draft before starting: never replace an interrupted session.
+        do { guard try repository.session() == nil else { resume(); return } }
+        catch { failure = error.localizedDescription; return }
+        guard let current = homeRecommendation else { return }
+        guard previous == current else {
+            noteSaveNotice = NoteSaveNotice(message: "学習対象が更新されました。おすすめの内容を確認して開始してください。")
+            return
+        }
+        start(current.mode, policy: current.policy, at: referenceDate)
+    }
     func completeSession(destination: Int = 0) {
         guard flushTypedDraft() else { return }
         do { try repository.completeSession(now: clock()) }
@@ -455,11 +480,11 @@ final class StudyStore {
     func applyScope(_ value: LearningScope) -> Bool {
         perform(metadata: false, changed: false) { try repository.applyHomeScope(value) }
     }
-    func start(_ mode: StudyMode, policy: ReviewOrderPolicy = .traditional) {
+    func start(_ mode: StudyMode, policy: ReviewOrderPolicy = .traditional, at referenceDate: Date? = nil) {
         repository.withStudyQueueReuse {
             let interval = PerformanceProbe.begin("Store.start")
             defer { PerformanceProbe.end(interval) }
-            if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, policy: policy, now: clock()) }) { showingReview = true }
+            if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, policy: policy, now: referenceDate ?? clock()) }) { showingReview = true }
         }
     }
     func resume() {

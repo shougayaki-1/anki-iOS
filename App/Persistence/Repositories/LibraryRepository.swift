@@ -189,7 +189,8 @@ extension StudyRepository {
                             newSlotsRemaining: max(0, settings.dailyNewLimit - used), nextShortDue: next,
                             hasCards: !all.isEmpty, dayStart: start,
                             nextRefresh: min(end, all.filter { !$0.suspended && !$0.isHidden(at: now) && $0.state != "new" && $0.due > now }.map(\.due).min() ?? end),
-                            studyPaused: !scoped.isEmpty && scoped.allSatisfy(\.studyPaused))
+                            studyPaused: !scoped.isEmpty && scoped.allSatisfy(\.studyPaused),
+                            medianAnswerSeconds: try homeAnswerMedian(cardIDs: Set(scoped.filter { !$0.suspended && !$0.isHidden(at: now) }.map(\.id)), responseMode: options().sessionResponseMode ?? .cardDefault, now: now, day: start))
     }
     func duplicate(of input: NoteInput) throws -> Note? {
         let question = ImportParser.normalized(input.question), answer = ImportParser.normalized(input.answer)

@@ -210,6 +210,35 @@ struct HomeView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let error = store.homeFailure {
+                    Section {
+                        Label("学習情報を読み込めません", systemImage: "exclamationmark.triangle")
+                        Text(error).font(.footnote)
+                        Button("再試行") { store.perform { } }.accessibilityIdentifier("retryHome")
+                    }
+                } else {
+                    ReviewHeroSection(store: store) {
+                        switch store.homePrimaryAction {
+                        case .resume: store.resume()
+                        case .start: store.startRecommended()
+                        case .addCards: adding = true
+                        case .complete: store.completeSession()
+                        case .waiting, .unavailable: break
+                        }
+                    }
+                }
+                if store.homeFailure == nil {
+                    DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
+                }
+                if store.homeFailure == nil {
+                    OtherStudyModesSection(store: store, start: start)
+                }
+                if store.homeFailure == nil && store.hasCards && !store.canStart(.mixed) {
+                    Section {
+                        Text(store.sessionResponseMode == .ordering ? "今は並び替えで学習できるカードがありません。英文の一問一答・記述式が対象です。学習設定で回答形式を変更できます。" : "今はこの条件で学習できるカードがありません。")
+                        Button("学習対象を変更") { editingScope = true }
+                    }
+                }
                 Section {
                     LearningScopeSelector(store: store) { editingScope = true }
                     if store.sessionStudyPaused || store.homeStudyPaused || store.decks.first(where: { $0.id == store.scope.deckID })?.isEffectivelyStudyPaused == true {
@@ -231,35 +260,6 @@ struct HomeView: View {
                     }
                     .accessibilityIdentifier("openSessionAnswerLimit")
                     .accessibilityHint("次の学習セッションの回答形式と回答数を選びます")
-                }
-                if store.homeFailure == nil {
-                    DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
-                }
-                if let error = store.homeFailure {
-                    Section {
-                        Label("学習情報を読み込めません", systemImage: "exclamationmark.triangle")
-                        Text(error).font(.footnote)
-                        Button("再試行") { store.perform { } }.accessibilityIdentifier("retryHome")
-                    }
-                } else {
-                    ReviewHeroSection(store: store) {
-                        switch store.homePrimaryAction {
-                        case .resume: store.resume()
-                        case let .start(mode, _): store.start(mode)
-                        case .addCards: adding = true
-                        case .complete: store.completeSession()
-                        case .waiting, .unavailable: break
-                        }
-                    }
-                }
-                if store.homeFailure == nil {
-                    OtherStudyModesSection(store: store, start: start)
-                }
-                if store.homeFailure == nil && store.hasCards && !store.canStart(.mixed) {
-                    Section {
-                        Text(store.sessionResponseMode == .ordering ? "今は並び替えで学習できるカードがありません。英文の一問一答・記述式が対象です。学習設定で回答形式を変更できます。" : "今はこの条件で学習できるカードがありません。")
-                        Button("学習対象を変更") { editingScope = true }
-                    }
                 }
             }
             .sheet(isPresented: $managingPausedDecks) { DeckManagerView(store: store) }
@@ -290,7 +290,7 @@ struct HomeView: View {
                                 store.changeSessionAnswerLimit(count)
                             } label: {
                                 HStack {
-                                    Text(count == 0 ? "すべて（上限なし）" : "\(count)問")
+                                    Text(count == 0 ? "回答上限なし" : "最大\(count)回答")
                                     Spacer()
                                     if store.sessionAnswerLimit == count {
                                         Image(systemName: "checkmark")
@@ -402,11 +402,23 @@ struct ReviewHeroSection: View {
                 case .complete:
                     Text("今回の出題は完了しました").font(.headline)
                     Text("確定済みの学習履歴と次回の予定を保存して、今回の学習を完了します。")
-                case let .start(mode, count):
-                    Text(mode == .review ? "復習できるカード" : "新しく学べるカード").font(.headline)
-                    Text("\(count)枚").font(.largeTitle.bold())
-                        .accessibilityIdentifier(mode == .review ? "dueCount" : "newCount")
-                        .accessibilityLabel(HomeStudyPresentation.cardPool(mode: mode, count: count))
+                case let .start(mode, _):
+                    if let recommendation = store.homeRecommendation {
+                        Text("今日のおすすめ学習").font(.headline)
+                        Text(recommendation.poolText).font(.title2.bold())
+                            .accessibilityIdentifier(mode == .review ? "dueCount" : "newCount")
+                        HStack {
+                            Text(recommendation.limitText)
+                            Spacer()
+                            Text("推定：" + recommendation.timeText)
+                        }.font(.subheadline)
+                        Text(recommendation.reason).font(.footnote).foregroundStyle(.secondary)
+                        DisclosureGroup("おすすめの詳細") {
+                            Text(HomeStudyPresentation.explanation(answerLimit: recommendation.answerLimit))
+                            Text(recommendation.estimateExplanation)
+                            Text("今回の初回回答の目安：\(recommendation.estimatedAnswers)回答。今日の学習実績とは別です。")
+                        }.font(.footnote).foregroundStyle(.secondary)
+                    }
                 case .addCards:
                     Text("最初のカードを登録しましょう。").font(.headline)
                 case .unavailable:
@@ -419,12 +431,12 @@ struct ReviewHeroSection: View {
                 }
                 if executable {
                     Button(action: execute) {
-                        Text(action.title).font(.headline)
+                        Text(store.homeRecommendation?.title ?? action.title).font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, minHeight: 56)
                     }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
-                        .accessibilityIdentifier(action.identifier)
-                        .accessibilityLabel(action.accessibilityLabel(answerLimit: store.sessionAnswerLimit))
+                        .accessibilityIdentifier(store.homeRecommendation == nil ? action.identifier : "startRecommended")
+                        .accessibilityLabel(store.homeRecommendation.map { $0.title + "。" + $0.poolText + "。" + $0.limitText + "。推定：" + $0.timeText } ?? action.accessibilityLabel(answerLimit: store.sessionAnswerLimit))
                 }
             }.fixedSize(horizontal: false, vertical: true).padding(.vertical, 4)
         }
@@ -436,10 +448,7 @@ struct OtherStudyModesSection: View {
     let start: (StudyMode) -> Void
     var body: some View {
         Section {
-            ForEach(StudyMode.allCases.filter { mode in
-                if case let .start(primary, _) = store.homePrimaryAction { return mode != primary }
-                return true
-            }) { mode in
+            ForEach(StudyMode.allCases) { mode in
                 Button { start(mode) } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack {

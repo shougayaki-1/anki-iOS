@@ -12,6 +12,106 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         return repo
     }
+    func testRecommendationStartRevalidatesAndPreservesDraftAndUndo() throws {
+        let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        try create(store.repository)
+        try store.reload()
+        XCTAssertEqual(store.homeRecommendation?.mode, .new)
+        store.startRecommended()
+        let id = try XCTUnwrap(store.review?.card?.cardID)
+        store.draft(text: "keep", revealed: true)
+        store.startRecommended()
+        XCTAssertEqual(store.review?.card?.cardID, id)
+        XCTAssertEqual(store.review?.typedDraft, "keep")
+        store.grade(.good)
+        let logCount = try store.repository.context.fetchCount(FetchDescriptor<StudyReviewLog>())
+        store.startRecommended()
+        XCTAssertEqual(try store.repository.context.fetchCount(FetchDescriptor<StudyReviewLog>()), logCount)
+        store.undo()
+        XCTAssertEqual(store.review?.card?.cardID, id)
+    }
+
+    func testRecommendationUsesRiskOnlyForBacklogAndRechecksSettings() throws {
+        func reviewStore() throws -> StudyStore {
+            let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+            let repo = store.repository, deck = try repo.decks()[0].id
+            for index in 0..<21 { try repo.createNote(NoteInput(deckID: deck, question: "Q\(index)", answer: "A"), now: now) }
+            let scheduler = try ReviewScheduler()
+            let past = now.addingTimeInterval(-864000)
+            let transition = try scheduler.review(scheduler.newCard(now: past), grade: .easy, now: past)
+            try repo.transaction {
+                for card in try repo.cards() { card.fsrsPayload = try JSONEncoder().encode(transition.after); card.dueDate = now }
+            }
+            try store.reload()
+            return store
+        }
+        let store = try reviewStore(), repo = store.repository
+        XCTAssertEqual(store.homeRecommendation?.policy, .forgettingRisk)
+        store.startRecommended()
+        XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrderPolicy, .forgettingRisk)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.initialEligibleCount, 21)
+        let manual = try reviewStore()
+        manual.start(.review)
+        XCTAssertEqual(try manual.repository.options().activeSessionProgress?.reviewOrderPolicy, .traditional)
+        let changed = try reviewStore()
+        var options = try changed.repository.options(); options.sessionAnswerLimit = 0
+        try changed.repository.updateOptions(options)
+        changed.startRecommended()
+        XCTAssertNil(try changed.repository.session())
+        XCTAssertNotNil(changed.noteSaveNotice)
+        XCTAssertEqual(changed.homeRecommendation?.policy, .traditional)
+        changed.startRecommended()
+        XCTAssertEqual(try changed.repository.sessionProgress()?.limit, 0)
+        XCTAssertEqual(try changed.repository.options().activeSessionProgress?.reviewOrderPolicy, .traditional)
+    }
+
+    func testRecommendationTimeCacheScopeAndThreeThousandCardHome() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let scheduler = try ReviewScheduler()
+        let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
+        let payload = try JSONEncoder().encode(transition.after)
+        let due = try scheduler.summary(transition.after).dueDate
+        try repo.transaction {
+            for index in 0..<3000 {
+                let input = NoteInput(deckID: deck, question: "Q\(index)", answer: "A")
+                let note = Note(input: input, content: try StudyRepository.encodeContent(input), now: now)
+                repo.context.insert(note)
+                let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: now)
+                card.dueDate = due; repo.context.insert(card)
+                if index == 0 {
+                    for sequence in 1...10000 {
+                        let row = StudyReviewLog(card: card, transition: transition, before: payload, after: payload,
+                            mode: .mental, durationMs: sequence <= 5 ? 24000 : 0, wasNew: false, sequence: sequence)
+                        row.reviewedAt = due
+                        repo.context.insert(row)
+                    }
+                }
+            }
+        }
+        let date = due.addingTimeInterval(86400), cards = try repo.queueCards()
+        let logs = try repo.todayQueueLogs(cards: cards, settings: repo.settings(), now: date)
+        let before = repo.fullHistoryFetchCount, decodes = repo.queueStateDecodeCount
+        let cold = Date(), snapshot = try repo.homeSnapshot(now: date, cards: cards, logs: logs)
+        let coldSeconds = Date().timeIntervalSince(cold)
+        XCTAssertEqual(snapshot.counts.due, 3000)
+        XCTAssertEqual(snapshot.medianAnswerSeconds, 24)
+        let fetches = repo.homeAnswerTimeFetchCount, warm = Date()
+        for _ in 0..<5 { XCTAssertEqual(try repo.homeSnapshot(now: date, cards: cards, logs: logs), snapshot) }
+        let warmSeconds = Date().timeIntervalSince(warm) / 5
+        XCTAssertEqual(repo.homeAnswerTimeFetchCount, fetches)
+        XCTAssertEqual(repo.fullHistoryFetchCount, before)
+        XCTAssertEqual(repo.queueStateDecodeCount, decodes)
+        let scoped = try repo.homeAnswerMedian(cardIDs: [], now: date, day: snapshot.dayStart)
+        XCTAssertNil(scoped)
+        XCTAssertNil(try repo.homeAnswerMedian(cardIDs: Set(cards.map(\.id)), responseMode: .typing, now: date, day: snapshot.dayStart))
+        _ = try repo.homeSnapshot(now: date.addingTimeInterval(86400), cards: cards, logs: [])
+        XCTAssertEqual(repo.homeAnswerTimeFetchCount, fetches + 1)
+        repo.calendar.timeZone = TimeZone(secondsFromGMT: 3600)!
+        _ = try repo.homeSnapshot(now: date.addingTimeInterval(86400), cards: cards, logs: [])
+        XCTAssertEqual(repo.homeAnswerTimeFetchCount, fetches + 2)
+        print("Issue187 3000 cards / 10000 logs cold=\(coldSeconds)s warm=\(warmSeconds)s historyFetches=0 extraDecodes=0")
+    }
+
     func testTodayQueueLogsMatchLegacyQuotaFallbackAndExcludeOldHistory() throws {
         let repo = try fixture(), parent = try repo.decks()[0].id
         let child = try repo.createDeck(name: "Child", parentID: parent, now: now)

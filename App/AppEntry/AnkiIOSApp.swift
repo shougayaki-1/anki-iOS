@@ -107,6 +107,7 @@ struct AppRootView: View {
         do {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-study-test-accessibility") { UITestFixtures.configureAccessibilityScene() }
+            else if ProcessInfo.processInfo.arguments.contains("-study-test-dark") { UITestFixtures.configureAccessibilityScene(largeText: false) }
             #endif
             // Each UI test gets its own on-disk store, reused across process restarts.
             var storeURL: URL?
@@ -144,6 +145,9 @@ struct AppRootView: View {
                 recoveryMediaStore = mediaStore
                 store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || ProcessInfo.processInfo.arguments.contains("-study-test-widget")) ? WidgetSnapshotPublisher(file: .shared()) : nil)
                 #if DEBUG
+                if studyURL != nil, let index = args.firstIndex(of: "-study-test-recommendation"), args.count > index + 1, let store {
+                    try UITestFixtures.populateHomeRecommendation(store, scenario: args[index + 1])
+                }
                 if studyURL != nil, args.contains("-study-test-widget"), let store {
                     try UITestFixtures.populateDueNotification(store.repository, now: store.clock())
                     try store.reload()
