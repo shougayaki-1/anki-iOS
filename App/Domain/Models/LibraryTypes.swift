@@ -739,3 +739,27 @@ struct LibrarySearchPreferences: Codable, Equatable {
 enum LibrarySearchState: String, Codable, CaseIterable {
     case all, new, learning, relearning, review, suspended
 }
+
+// Initial intent is permanent for this touch sequence, including scroll/bounce.
+struct ReviewSwipeIntent {
+    enum Axis { case horizontal, vertical, rejected }
+    private(set) var axis: Axis?
+    mutating func update(x: Double, y: Double, scrollable: Bool) -> Bool {
+        if axis == nil {
+            guard max(abs(x), abs(y)) >= 12 else { return false }
+            switch ReviewSwipeAction.candidate(x: x, y: y, revealed: true) {
+            case .grade(.again), .grade(.good): axis = .horizontal
+            case .grade(.easy), .grade(.hard): axis = scrollable ? .rejected : .vertical
+            default: axis = .rejected
+            }
+        }
+        return axis == .horizontal || axis == .vertical
+    }
+    func accepts(x: Double, y: Double) -> Bool {
+        switch ReviewSwipeAction.candidate(x: x, y: y, revealed: true) {
+        case .grade(.again), .grade(.good): return axis == .horizontal
+        case .grade(.easy), .grade(.hard): return axis == .vertical
+        default: return false
+        }
+    }
+}

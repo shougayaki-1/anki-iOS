@@ -1093,57 +1093,116 @@ final class StudyUITests: XCTestCase {
 
     func testReviewGesturesDefaultOffDirectionsUndoAndRestart() {
         let app = app()
-        create(app, question: "Swipe question", answer: "Swipe answer")
+        createSwipeCard(app, question: "Swipe question", answer: "Swipe answer")
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 5))
-        XCTAssertFalse(app.otherElements["reviewSwipePad"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["reviewSwipeHandle"].exists)
         app.buttons["pauseStudy"].tap()
+        enableReviewSwipes(app)
+        app.terminate(); app.launch()
+        app.buttons["resumeStudy"].tap()
+        let answer = app.staticTexts["modelAnswer"]
+        // Before reveal the card cannot grade or expose an answer via dragging.
+        dragReview(app.staticTexts["reviewQuestion"], dx: 130, dy: 0)
+        XCTAssertFalse(answer.exists)
+        app.buttons["revealAnswer"].tap()
+        XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["reviewSwipeHandle"].exists, "Short content allows all axes directly")
+        attach(app, "Issue204-short-before")
+        for (index, delta) in [(130.0, 0.0), (-130, 0), (0, -130), (0, 130)].enumerated() {
+            dragReview(answer, dx: delta.0, dy: delta.1)
+            XCTAssertTrue(app.buttons["undoReview"].isEnabled, "Direction \(index) must grade")
+            attach(app, "Issue204-short-after-\(index)")
+            app.buttons["undoReview"].tap()
+            XCTAssertFalse(answer.exists)
+            app.buttons["revealAnswer"].tap()
+            XCTAssertTrue(answer.waitForExistence(timeout: 5))
+        }
+        dragReview(answer, dx: 35, dy: 0)
+        XCTAssertFalse(app.buttons["undoReview"].isEnabled)
+        dragReview(answer, dx: 110, dy: 110)
+        XCTAssertFalse(app.buttons["undoReview"].isEnabled)
+        let selectionStart = answer.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
+        selectionStart.press(forDuration: 0.7, thenDragTo: selectionStart.withOffset(CGVector(dx: 0, dy: -130)))
+        XCTAssertFalse(app.buttons["undoReview"].isEnabled, "Long press/selection must never grade")
+        XCTAssertTrue(answer.exists)
+        app.buttons["grade-4"].tap()
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+        app.buttons["undoReview"].tap()
+        app.buttons["pauseStudy"].tap(); app.tabBars.buttons["記録"].tap()
+        app.buttons["openStatisticsDetails"].tap()
+        scrollTo(app.descendants(matching: .any)["todayAnswerCount"], app: app)
+        XCTAssertTrue(app.descendants(matching: .any)["todayAnswerCount"].label.contains("0回"))
+    }
+
+    private func createSwipeCard(_ app: XCUIApplication, question: String, answer: String) {
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["addNote"].tap()
+        let q = app.descendants(matching: .any)["questionInput"]
+        scrollTo(q, app: app)
+        XCTAssertTrue(q.waitForExistence(timeout: 5)); q.tap(); q.typeText(question)
+        let done = app.buttons.matching(NSPredicate(format: "label == %@", "完了")).firstMatch
+        if done.exists { done.tap() }
+        let a = app.descendants(matching: .any)["answerInput"]
+        scrollTo(a, app: app)
+        a.tap(); a.typeText(answer)
+        if done.exists { done.tap() }
+        app.buttons["saveNote"].tap()
+        XCTAssertTrue(app.buttons["addNote"].waitForExistence(timeout: 5))
+    }
+
+    private func enableReviewSwipes(_ app: XCUIApplication) {
         app.tabBars.buttons["設定"].tap()
         let toggle = app.switches["reviewGesturesToggle"]
-        scrollTo(toggle, app: app); toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+        scrollTo(toggle, app: app)
+        toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
         XCTAssertEqual(toggle.value as? String, "1")
-        let animations = app.switches["reviewAnimationsToggle"]
-        scrollTo(animations, app: app); animations.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
-        XCTAssertEqual(animations.value as? String, "0")
-        app.terminate(); app.launch()
-        app.tabBars.buttons["ホーム"].tap(); app.buttons["resumeStudy"].tap()
-        let pad = app.otherElements["reviewSwipePad"]
-        let swipeToggle = app.buttons["reviewSwipeToggle"]
-        XCTAssertTrue(swipeToggle.isHittable)
-        XCTAssertFalse(pad.exists)
-        swipeToggle.tap()
-        func visiblePad() {
-            XCTAssertTrue(pad.isHittable)
-            let footer = app.buttons["grade-1"].exists ? app.buttons["grade-1"] : app.buttons["revealAnswer"]
-            XCTAssertGreaterThanOrEqual(pad.frame.minY, app.navigationBars.firstMatch.frame.maxY)
-            XCTAssertLessThanOrEqual(pad.frame.maxY, footer.frame.minY)
-            // From the center, every direction must allow the unchanged 96pt threshold.
-            XCTAssertGreaterThanOrEqual(pad.frame.height / 2, 120)
-            XCTAssertGreaterThanOrEqual(pad.frame.width / 2, 120)
-        }
-        func swipe(_ x: CGFloat, _ y: CGFloat) {
-            visiblePad()
-            pad.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
-                .press(forDuration: 0.05, thenDragTo: pad.coordinate(withNormalizedOffset: CGVector(dx: x, dy: y)))
-        }
-        swipe(0.6, 0.5) // Short movements must not reveal.
-        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
-        swipe(0.03, 0.5) // Wrong direction before the answer.
-        XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
-        swipe(0.97, 0.5)
-        guard app.staticTexts["modelAnswer"].waitForExistence(timeout: 5) else { attach(app, "swipe-reveal-failed"); XCTFail("Swipe reveal failed"); return }
-        for (x, y) in [(CGFloat(0.03), CGFloat(0.5)), (0.5, 0.97), (0.97, 0.5), (0.5, 0.03)] {
-            swipe(x, y)
+        app.tabBars.buttons["ホーム"].tap()
+    }
+    private func dragReview(_ element: XCUIElement, dx: Double, dy: Double) {
+        // Short answer text has a narrow intrinsic AX frame. Keep the complete
+        // drag on-screen while starting on its card row (never a footer button).
+        let center = element.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let start = center.withOffset(CGVector(dx: max(0, 150 - element.frame.midX), dy: 0))
+        start.press(forDuration: 0.01, thenDragTo: start.withOffset(CGVector(dx: dx, dy: dy)))
+    }
+
+    func testLongCardScrollHorizontalAndCompactVerticalGrades() {
+        let app = app()
+        let answer = (1...18).map { "Line \($0): Read this explanation before grading." }.joined(separator: "\n")
+        createSwipeCard(app, question: "Long swipe question", answer: answer)
+        enableReviewSwipes(app)
+        app.buttons["start-new"].tap(); app.buttons["revealAnswer"].tap()
+        let handle = app.descendants(matching: .any)["reviewSwipeHandle"]
+        XCTAssertTrue(handle.waitForExistence(timeout: 5))
+        XCTAssertEqual(handle.frame.height, 52, accuracy: 1)
+        let fixedFrame = handle.frame
+        attach(app, "Issue204-long-before-scroll")
+        let surface = app.scrollViews.firstMatch
+        for _ in 0..<4 { surface.swipeUp() }
+        XCTAssertFalse(app.buttons["undoReview"].isEnabled)
+        XCTAssertEqual(handle.frame.minY, fixedFrame.minY, accuracy: 1)
+        attach(app, "Issue204-long-bottom-after-scroll")
+        for _ in 0..<4 { surface.swipeDown() }
+        XCTAssertFalse(app.buttons["undoReview"].isEnabled)
+        attach(app, "Issue204-long-top-after-scroll")
+        for (dx, dy) in [(0.0, -140.0), (0, 120)] {
+            dragReview(handle, dx: dx, dy: dy)
             XCTAssertTrue(app.buttons["undoReview"].isEnabled)
-            app.buttons["undoReview"].tap()
-            XCTAssertEqual(app.staticTexts["reviewQuestion"].label, "Swipe question")
-            XCTAssertFalse(app.staticTexts["modelAnswer"].exists)
-            swipe(0.97, 0.5)
-            XCTAssertTrue(app.staticTexts["modelAnswer"].waitForExistence(timeout: 5))
+            app.buttons["undoReview"].tap(); app.buttons["revealAnswer"].tap()
+            XCTAssertTrue(handle.waitForExistence(timeout: 5))
         }
-        app.buttons["pauseStudy"].tap()
-        app.tabBars.buttons["記録"].tap()
-        XCTAssertTrue(app.staticTexts["todayAnswerCount"].label.contains("0回"))
+        for dx in [-130.0, 130] {
+            dragReview(app.staticTexts["reviewQuestion"], dx: dx, dy: 0)
+            XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+            app.buttons["undoReview"].tap(); app.buttons["revealAnswer"].tap()
+        }
+        // Dragging a grade button must never become a swipe grade.
+        dragReview(app.buttons["grade-3"], dx: 0, dy: -140)
+        XCTAssertFalse(app.buttons["undoReview"].isEnabled)
+        app.buttons["pauseStudy"].tap(); app.tabBars.buttons["記録"].tap()
+        app.buttons["openStatisticsDetails"].tap()
+        scrollTo(app.descendants(matching: .any)["todayAnswerCount"], app: app)
+        XCTAssertTrue(app.descendants(matching: .any)["todayAnswerCount"].label.contains("0回"))
     }
 
     func testNewLongTermDueShowsModeGuidanceAndKeepsUndo() {
