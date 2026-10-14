@@ -231,7 +231,7 @@ struct DeckPackagePreviewView: View {
         .confirmationDialog("追加・更新を確定しますか？", isPresented: $confirmation, titleVisibility: .visible) {
             Button("取り込む") {
                 guard !working, completion == nil, let selected else { return }
-                run(phase: .preparing) {
+                run(phase: .restorePoint) {
                     try Task.checkCancellation()
                     try await store.createRestorePoint("デッキ・APKGの取り込み")
                     try Task.checkCancellation()
