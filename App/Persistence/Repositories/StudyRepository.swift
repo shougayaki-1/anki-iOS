@@ -79,7 +79,7 @@ final class StudyRepository {
     private var operationCards: [QueueCard]?
     private var operationScopes: [(LearningScope, Set<UUID>)] = []
 
-    // Use only for start/grade/Undo plus their post-save screen refresh:
+    // Use for start/grade/Undo/pause/resume plus their post-save screen refresh:
     // start changes session state after reading; grade/Undo read after restoring
     // or updating cards. Do not mutate queue inputs after the first projection
     // within a transaction. Each new transaction and rollback invalidates it.

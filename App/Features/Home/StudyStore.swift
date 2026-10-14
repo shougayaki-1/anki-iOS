@@ -488,7 +488,9 @@ final class StudyStore {
         }
     }
     func resume() {
-        if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
+        repository.withStudyQueueReuse {
+            if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
+        }
     }
     func grade(_ grade: ReviewGrade, swipePrepared: Bool = false) {
         repository.withStudyQueueReuse {
@@ -613,7 +615,9 @@ final class StudyStore {
         }
     }
     func pause() {
-        if perform(metadata: false, changed: false, { try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
+        repository.withStudyQueueReuse {
+            if perform(metadata: false, changed: false, { try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
+        }
     }
     @discardableResult
     func restoreBackup(_ backup: ValidatedBackup) throws -> BackupRestoreOutcome {
