@@ -37,6 +37,7 @@ struct FSRSOptimizationView: View {
                     Button("計算をキャンセル", role: .cancel) { cancelCalculation() }
                 } else {
                     Button("履歴から計算・比較") { calculate() }
+                        .buttonStyle(SecondaryActionStyle())
                         .disabled(presentation.state == nil)
                         .accessibilityIdentifier("computeFSRSParameters")
                 }
@@ -62,6 +63,7 @@ struct FSRSOptimizationView: View {
                             .accessibilityIdentifier("optimizationDecision")
                     }
                     Button("この結果を適用") { confirmingApply = true }
+                        .buttonStyle(PrimaryActionStyle())
                         .disabled(!presentation.canApply(report, computing: worker != nil))
                         .accessibilityIdentifier("applyFSRSParameters")
                     DisclosureGroup("21個のパラメータ") {

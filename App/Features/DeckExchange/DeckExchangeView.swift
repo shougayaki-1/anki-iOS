@@ -311,6 +311,9 @@ enum DeckExchangeCompletion {
         case .exported: return true
         }
     }
+    var isExported: Bool {
+        if case .exported = self { return true }; return false
+    }
     var canRetry: Bool {
         if case .imported(let receipt, _) = self { return receipt.outcome == .empty }
         return false
@@ -349,30 +352,39 @@ private struct DeckExchangeCompletionView: View {
                     if !receipt.warnings.isEmpty {
                         reasons("本文・メディア変更の理由", items: receipt.warnings, page: $warningPage)
                     }
-                    if let deckID = receipt.rootDeckID, warning == nil {
-                        NavigationLink {
-                            ShortcutDeckContentsView(store: store, deckID: deckID)
-                        } label: { Text("取り込んだデッキを見る").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent).controlSize(.large)
-                        .accessibilityIdentifier("viewImportedDeck")
-                    }
-                    if completion.canRetry {
-                        Button("プレビューに戻って再試行", action: retry).buttonStyle(.borderedProminent)
-                            .accessibilityIdentifier("retryDeckImport")
-                    }
-                    Button("続けて取り込む", action: continueImport).buttonStyle(.bordered)
-                        .accessibilityIdentifier("continueDeckImport")
-                case .exported(let name, let url):
+                case .exported(let name, _):
                     Text(name).accessibilityIdentifier("deckExchangeResult")
                     Text("Filesへの保存が完了しました。相手への共有はまだ行っていません。")
                         .font(.footnote).foregroundStyle(.secondary)
-                    ShareLink(item: url) { Label("共有する", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("shareExportedDeck")
-                    Button("デッキファイルに戻る", action: continueImport).buttonStyle(.bordered)
                 }
-                Button("閉じる", action: close).accessibilityIdentifier("closeDeckCompletion")
             }
             .multilineTextAlignment(.center).padding(24).frame(maxWidth: .infinity)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomActionArea {
+                switch completion {
+                case .imported(let receipt, let warning):
+                    if completion.canRetry {
+                        Button("プレビューに戻って再試行", action: retry).buttonStyle(PrimaryActionStyle())
+                            .accessibilityIdentifier("retryDeckImport")
+                    } else if let deckID = receipt.rootDeckID, warning == nil {
+                        NavigationLink {
+                            ShortcutDeckContentsView(store: store, deckID: deckID)
+                        } label: { Text("取り込んだデッキを見る").frame(maxWidth: .infinity) }
+                        .buttonStyle(PrimaryActionStyle())
+                        .accessibilityIdentifier("viewImportedDeck")
+                    }
+                case .exported(_, let url):
+                    ShareLink(item: url) { Label("共有する", systemImage: "square.and.arrow.up").frame(maxWidth: .infinity) }
+                        .buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("shareExportedDeck")
+                }
+                HStack {
+                    Button(completion.isExported ? "デッキファイルに戻る" : "続けて取り込む", action: continueImport)
+                        .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("continueDeckImport")
+                    Button("閉じる", action: close).buttonStyle(SecondaryActionStyle())
+                        .accessibilityIdentifier("closeDeckCompletion")
+                }
+            }
         }
         .onAppear {
             guard !announced else { return }

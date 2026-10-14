@@ -253,8 +253,7 @@ struct ReviewView: View {
                             .frame(maxWidth: .infinity, minHeight: 56)
                             .contentShape(Rectangle())
                     }
-                    .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-                    .tint(Color("PrimaryAction")).foregroundStyle(Color.white)
+                    .buttonStyle(PrimaryActionStyle(capsule: true))
                     .accessibilityIdentifier("finishReview")
                     .padding(.horizontal, 24).padding(.vertical, 16)
                     .background(Color(uiColor: .systemBackground))
@@ -549,6 +548,7 @@ struct ReviewView: View {
                 Label("問題を再生", systemImage: "speaker.wave.2")
                     .fixedSize(horizontal: true, vertical: false)
             }
+            .buttonStyle(SecondaryActionStyle())
             .accessibilityIdentifier("speakQuestion")
             .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
@@ -557,6 +557,7 @@ struct ReviewView: View {
                 Label("解答を再生", systemImage: "speaker.wave.2")
                     .fixedSize(horizontal: true, vertical: false)
             }
+            .buttonStyle(SecondaryActionStyle())
             .accessibilityIdentifier("speakAnswer")
             .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
@@ -571,7 +572,7 @@ struct ReviewView: View {
                    SpeechReadout.text(kind: item.kind, displayed: item.content, side: .answer) != nil {
                     Button("解答の英文を読む") { playSpeech(.answer, item: item) }.accessibilityIdentifier("ttsAnswer")
                 }
-            }.accessibilityIdentifier("chooseTTS")
+            }.frame(minHeight: 44).accessibilityIdentifier("chooseTTS")
             .disabled(pronunciation.phase == .recording || pronunciation.phase == .requestingPermission)
         }
         if speechPlayer.playing {
@@ -579,6 +580,7 @@ struct ReviewView: View {
                 Label("停止", systemImage: "stop.fill")
                     .fixedSize(horizontal: true, vertical: false)
             }
+            .buttonStyle(SecondaryActionStyle())
             .accessibilityIdentifier("stopSpeech")
         }
     }
@@ -794,9 +796,7 @@ private struct ReviewActionBar: View {
                         .frame(maxWidth: .infinity, minHeight: 56)
                         .contentShape(Rectangle())
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Color("PrimaryAction"))
-                .foregroundStyle(.white)
+                .buttonStyle(PrimaryActionStyle())
                 .keyboardShortcut(.return, modifiers: .command)
                 .accessibilityIdentifier("revealAnswer")
                 .disabled(!isEnabled)
@@ -833,10 +833,9 @@ private struct ReviewActionBar: View {
                 .lineLimit(compact ? 1 : 2)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: compact, vertical: true)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(ReviewGradeButtonStyle(color: gradeColor(grade)))
+        .buttonStyle(PrimaryActionStyle(color: gradeColor(grade)))
         .foregroundStyle(.white)
         .frame(minWidth: compact ? 72 : 0)
         .accessibilityLabel(gradeTitle(grade))
@@ -880,19 +879,6 @@ private struct ReviewActionBar: View {
         case .good: return Color("GradeGood")
         case .easy: return Color("GradeEasy")
         }
-    }
-}
-
-// System prominent-button padding scales aggressively at accessibility sizes.
-// Explicit insets preserve full grade names and leave more space for the question.
-private struct ReviewGradeButtonStyle: ButtonStyle {
-    let color: Color
-    @Environment(\.isEnabled) private var isEnabled
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.horizontal, 6).padding(.vertical, 8)
-            .background(color.opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.45),
-                        in: RoundedRectangle(cornerRadius: 14))
     }
 }
 

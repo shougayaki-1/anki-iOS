@@ -29,8 +29,14 @@ struct OCRImportView: View {
                     TextEditor(text: $text).frame(minHeight: 240).accessibilityIdentifier("ocrText").disabled(working)
                     Button("認識結果を消去") { text = "" }.disabled(text.isEmpty || working).accessibilityIdentifier("clearOCRText")
                 }
-                Button("カード候補をプレビュー") { preview = true }.disabled(text.isEmpty || working).accessibilityIdentifier("ocrPreview")
             }.scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                BottomActionArea {
+                    Button("カード候補をプレビュー") { preview = true }
+                        .buttonStyle(PrimaryActionStyle()).disabled(text.isEmpty || working)
+                        .accessibilityIdentifier("ocrPreview")
+                }
+            }
             .navigationTitle("写真から文字を取り込む")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { dismiss() }.accessibilityIdentifier("closeOCR") }

@@ -177,7 +177,7 @@ struct BackupView: View {
                     .foregroundStyle(.secondary).multilineTextAlignment(.center)
                 if let warning = outcome.warning { Text(warning).font(.footnote).accessibilityIdentifier("backupCommittedWarning") }
                 Button("ホームへ戻る") { dismiss(); store.selectedTab = 0 }
-                    .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("backupReturnHome")
+                    .buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("backupReturnHome")
                 Button("ライブラリで確認") { dismiss(); store.selectedTab = 1 }
                     .accessibilityIdentifier("backupOpenLibrary")
             }.padding(32).frame(maxWidth: .infinity)
