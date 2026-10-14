@@ -347,3 +347,23 @@ extension OperationsUITests {
         print("CUSTOM_AUDIT_FINISHED")
     }
 }
+
+extension OperationsUITests {
+    func testExamPlanCreateEditAndEnd() {
+        let app = launch(); tab(app, "ホーム").tap()
+        app.buttons["openExamPlans"].tap()
+        XCTAssertTrue(app.buttons["createExamPlan"].waitForExistence(timeout: 5)); app.buttons["createExamPlan"].tap()
+        let name = app.textFields["examPlanName"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText("試験プラン")
+        app.buttons["saveExamPlan"].tap()
+        XCTAssertTrue(app.staticTexts["試験プラン"].waitForExistence(timeout: 5)); app.staticTexts["試験プラン"].tap()
+        let edit = app.buttons["editExamPlan"]; scrollTo(edit, in: app); edit.tap()
+        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText("更新")
+        app.buttons["saveExamPlan"].tap()
+        XCTAssertTrue(app.staticTexts["試験プラン更新"].waitForExistence(timeout: 5))
+        let end = app.buttons["endExamPlan"]; scrollTo(end, in: app); end.tap()
+        XCTAssertTrue(app.buttons["confirmEndExamPlan"].firstMatch.waitForExistence(timeout: 5)); app.buttons["confirmEndExamPlan"].firstMatch.tap()
+        scrollTo(app.staticTexts["終了した計画"], in: app)
+        XCTAssertTrue(app.staticTexts["終了した計画"].waitForExistence(timeout: 5))
+    }
+}

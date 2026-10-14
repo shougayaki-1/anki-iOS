@@ -170,6 +170,9 @@ struct BackupValidation {
                       Set(order).count == order.count, progress.answerLimit == order.count,
                       cap == 0 || order.count <= cap else { throw BackupError.invalidData }
             }
+            if let plans = options.examPlans {
+                guard Set(plans.map(\.id)).count == plans.count, plans.allSatisfy(\.valid) else { throw BackupError.invalidData }
+            }
             if let presets = options.customStudyPresets {
                 guard Set(presets.map(\.id)).count == presets.count,
                       presets.allSatisfy({ $0.condition.valid && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw BackupError.invalidData }

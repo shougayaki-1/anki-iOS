@@ -612,3 +612,31 @@ extension ScaleRepositoryTests {
         }
     }
 }
+
+extension ScaleRepositoryTests {
+    func testExamPlanThreeThousandCardsReadOnly() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, scheduler = try ReviewScheduler()
+        let content = try JSONEncoder().encode(TextContent(question: "Exam", answer: "A", explanation: ""))
+        let snapshot = try JSONEncoder().encode(scheduler.newCard(now: now))
+        try repo.transaction {
+            for _ in 0..<3000 {
+                let note = Note(input: NoteInput(deckID: deck, question: "Exam", answer: "A"), content: content, now: now)
+                repo.context.insert(note)
+                repo.context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: snapshot, now: now))
+            }
+        }
+        let before = try BackupData.capture(repo).canonical()
+        let date = Calendar.current.date(byAdding: .day, value: 30, to: now)!
+        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
+        let plan = ExamPlan(name: "試験", year: parts.year!, month: parts.month!, day: parts.day!, scope: LearningScope(deckID: deck))
+        let start = Date()
+        let report = try ExamPlanReport.calculate(plan: plan, data: before, homeScope: LearningScope(), now: now, calendar: .current)
+        print("Issue #190: 3000 cards / exam forecast: \(Date().timeIntervalSince(start))s")
+        XCTAssertEqual(report.total, 3000); XCTAssertEqual(report.newCards, 3000)
+        XCTAssertNotNil(report.forecast)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+    }
+}

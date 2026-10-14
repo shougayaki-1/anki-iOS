@@ -1161,3 +1161,29 @@ extension BackupRepositoryTests {
         XCTAssertEqual(try BackupData.capture(repo).cards.filter { $0.noteID != id }, failureBefore.cards.filter { $0.noteID != id })
     }
 }
+
+extension BackupRepositoryTests {
+    func testExamPlansOptionalBackupRestoreAndValidation() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try fixture(root.appendingPathComponent("source"))
+        let deck = try source.decks()[0].id
+        let legacy = try await BackupService.export(repository: source, now: now, appVersion: "test")
+        XCTAssertNil(try JSONDecoder().decode(StudyOptions.self, from: BackupArchive.decode(legacy).data.options[0].payload).examPlans)
+        let plan = ExamPlan(name: "試験", year: 2026, month: 10, day: 20, scope: LearningScope(deckID: deck))
+        try source.saveExamPlan(plan)
+        let decoded = try BackupArchive.decode(await BackupService.export(repository: source, now: now, appVersion: "test"))
+        let destination = try fixture(root.appendingPathComponent("destination"))
+        let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("destination/Study.store"))
+        _ = try BackupService.restore(decoded, location: location, mediaStore: destination.mediaStore, now: now)
+        let reopened = StudyRepository(container: try PersistenceController.makeStudyContainer(storeURL: location.canonicalStore), mediaStore: destination.mediaStore)
+        XCTAssertEqual(try reopened.options().examPlans, [plan])
+        XCTAssertEqual(try BackupData.capture(reopened).cards, decoded.data.cards)
+        var invalid = decoded.data, options = try source.options()
+        var bad = plan; bad.day = 32; options.examPlans = [bad]
+        invalid.options[0].payload = try JSONEncoder().encode(options)
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: decoded.media))
+        options.examPlans = [plan, plan]; invalid.options[0].payload = try JSONEncoder().encode(options)
+        XCTAssertThrowsError(try BackupValidation.validate(invalid, media: decoded.media))
+    }
+}

@@ -1085,3 +1085,15 @@ enum ImportCommitError: LocalizedError {
     case busy
     var errorDescription: String? { "保存処理中、または未保存の変更があります。保存後に再試行してください。" }
 }
+
+extension StudyRepository {
+    func saveExamPlan(_ plan: ExamPlan) throws {
+        guard plan.valid else { throw StudyError.invalidContent }
+        var saved = try options()
+        var plans = saved.examPlans ?? []
+        plans.removeAll { $0.id == plan.id }
+        plans.append(plan)
+        saved.examPlans = plans
+        try updateOptions(saved)
+    }
+}

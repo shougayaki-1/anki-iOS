@@ -3116,3 +3116,55 @@ extension StudyRepositoryTests {
         XCTAssertEqual(repo.customStudyIndexBuildCount, 2)
     }
 }
+
+extension StudyRepositoryTests {
+    func testExamPlanLifecyclePreservesCardsHistorySessionAndRollsBack() throws {
+        let repo = try fixture(); try create(repo)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now)
+        let before = try BackupData.capture(repo).canonical()
+        var plan = ExamPlan(name: "試験", year: 2026, month: 10, day: 20, scope: LearningScope(deckID: before.decks[0].id))
+        try repo.saveExamPlan(plan)
+        plan.name = "変更"; plan.day = 21; try repo.saveExamPlan(plan)
+        plan.isActive = false; try repo.saveExamPlan(plan)
+        let after = try BackupData.capture(repo).canonical()
+        XCTAssertEqual(before.cards, after.cards); XCTAssertEqual(before.logs, after.logs)
+        XCTAssertEqual(before.sessions, after.sessions); XCTAssertEqual(before.scopes, after.scopes)
+        XCTAssertEqual(try repo.options().examPlans, [plan])
+        repo.save = { _ in throw Failure.save }
+        plan.name = "保存失敗"
+        XCTAssertThrowsError(try repo.saveExamPlan(plan))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), after)
+    }
+
+    func testExamPlanScopeMissingPausedPastAndTimeZoneBoundaries() throws {
+        let repo = try fixture(), root = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "子", parentID: root, now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A", tagNames: ["対象"]), now: now)
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let clock = calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 3, minute: 59))!
+        var plan = ExamPlan(name: "試験", year: 2026, month: 10, day: 20, scope: LearningScope(deckID: root, tagIDs: try repo.tags().map(\.id)))
+        var data = try BackupData.capture(repo)
+        let report = try ExamPlanReport.calculate(plan: plan, data: data, homeScope: LearningScope(deckID: child), now: clock, calendar: calendar)
+        XCTAssertEqual(report.total, 1); XCTAssertEqual(report.newCards, 1); XCTAssertEqual(report.scope?.deckID, child)
+        XCTAssertEqual(report.forecastDays, 2); XCTAssertNil(report.recall)
+        XCTAssertEqual(report.forecast?.days.last?.end, calendar.date(from: DateComponents(year: 2026, month: 10, day: 21)))
+        let afterFour = try ExamPlanReport.calculate(plan: plan, data: data, homeScope: LearningScope(), now: clock.addingTimeInterval(60), calendar: calendar)
+        XCTAssertEqual(afterFour.forecastDays, 1); XCTAssertEqual(plan.daysRemaining(now: clock, calendar: calendar), 0)
+        var west = calendar; west.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        XCTAssertEqual(plan.daysRemaining(now: clock, calendar: west), 1)
+        plan.day = 19
+        XCTAssertNotNil(try ExamPlanReport.calculate(plan: plan, data: data, homeScope: LearningScope(), now: clock, calendar: calendar).notice)
+        plan.day = 20
+        data.decks[0].isStudyPaused = true
+        let paused = try ExamPlanReport.calculate(plan: plan, data: data, homeScope: LearningScope(), now: clock, calendar: calendar)
+        XCTAssertEqual(paused.pausedCards, 1); XCTAssertNil(paused.forecast)
+        data.decks.removeAll { $0.id == root }
+        let missing = try ExamPlanReport.calculate(plan: plan, data: data, homeScope: LearningScope(), now: clock, calendar: calendar)
+        XCTAssertNil(missing.scope); XCTAssertEqual(missing.total, 0); XCTAssertNotNil(missing.notice)
+        plan.scope = LearningScope(deckID: child, tagIDs: [UUID()])
+        XCTAssertNil(try ExamPlanReport.calculate(plan: plan, data: data, homeScope: LearningScope(), now: clock, calendar: calendar).scope)
+        plan.month = 2; plan.day = 30; XCTAssertFalse(plan.valid)
+    }
+}

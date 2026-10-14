@@ -22,6 +22,11 @@ struct CustomStudyView: View {
     @State private var hasPractice = false
     @State private var deleteTarget: CustomStudyPreset?
 
+    init(store: StudyStore, initialCondition: CustomStudyCondition = CustomStudyCondition()) {
+        self.store = store
+        _condition = State(initialValue: initialCondition)
+    }
+
     var body: some View {
         Form {
             if hasPractice {

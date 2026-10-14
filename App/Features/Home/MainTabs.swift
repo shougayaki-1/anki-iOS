@@ -257,6 +257,7 @@ struct HomeView: View {
                     }
                 }
                 if store.homeFailure == nil {
+                    ExamPlansHomeRow(store: store)
                     DailyProgressSection(count: store.counts.learnedToday, goal: store.settings.dailyGoal)
                 }
                 if store.homeFailure == nil {
@@ -294,6 +295,10 @@ struct HomeView: View {
             .sheet(isPresented: $managingPausedDecks) { DeckManagerView(store: store) }
             .navigationTitle("ホーム")
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { ExamPlansView(store: store) } label: { Label("試験・目標", systemImage: "calendar") }
+                        .accessibilityIdentifier("openExamPlans")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("学習モードの説明", systemImage: "questionmark.circle") { showingHelp = true }
                 }

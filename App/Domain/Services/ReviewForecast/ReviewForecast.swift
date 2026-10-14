@@ -36,13 +36,13 @@ struct ReviewForecast: Equatable, Sendable {
         var snapshot: SchedulerSnapshot
         var summary: ScheduleSummary
     }
-    static func calculate(data: BackupData, deckID: UUID?, days count: Int, now: Date, calendar: Calendar) throws -> Self {
-        guard [7, 30].contains(count), let preferences = data.preferences.first else { throw StudyError.invalidContent }
+    static func calculate(data: BackupData, deckID: UUID?, days count: Int, now: Date, calendar: Calendar, tagIDs: [UUID] = [], until: Date? = nil) throws -> Self {
+        guard (1...90).contains(count), let preferences = data.preferences.first else { throw StudyError.invalidContent }
         let options = try data.options.first.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) } ?? StudyOptions()
         let day = StudyDay(calendar: calendar, startHour: preferences.dayStartHour)
         var periods: [ForecastDay] = [], interval = day.interval(containing: now)
         for _ in 0..<count {
-            periods.append(ForecastDay(start: interval.start, end: interval.end))
+            periods.append(ForecastDay(start: interval.start, end: min(interval.end, until ?? interval.end)))
             interval = day.interval(containing: interval.end)
         }
         let notes = Dictionary(uniqueKeysWithValues: data.notes.map { ($0.id, $0) })
@@ -68,7 +68,7 @@ struct ReviewForecast: Equatable, Sendable {
             let limits = Dictionary(uniqueKeysWithValues: path.compactMap { id in overrides[id]?.newLimit.map { (id, $0) } })
             let snapshot = try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
             let summary = try baseScheduler.summary(snapshot)
-            let scoped = deckID.map { path.contains($0) } ?? true
+            let scoped = (deckID.map { path.contains($0) } ?? true) && Set(tagIDs).isSubset(of: Set(note.tagIDs))
             cards.append(LiveCard(source: card, noteID: card.noteID, scoped: scoped, limits: limits, quotaDecks: path,
                                   scheduler: try ReviewScheduler(desiredRetention: retention, parameters: options.fsrsOptimization?.activeParameters),
                                   snapshot: snapshot, summary: summary))
@@ -83,7 +83,8 @@ struct ReviewForecast: Equatable, Sendable {
         let since = calendar.date(byAdding: .day, value: -30, to: now)!
         let duration = data.logs.filter {
             $0.reviewedAt >= since && $0.reviewedAt <= now && (1...1_800_000).contains($0.durationMs) &&
-            (deckID == nil || pathByCard[$0.cardID]?.contains(deckID!) == true)
+            (deckID == nil || pathByCard[$0.cardID]?.contains(deckID!) == true) &&
+            (tagIDs.isEmpty || noteByCard[$0.cardID].flatMap { notes[$0] }.map { Set(tagIDs).isSubset(of: Set($0.tagIDs)) } == true)
         }.map(\.durationMs)
         let median = AnswerTimeEstimate.median(milliseconds: duration, validRange: 1...1_800_000, minimumSamples: 1)
         let freshOrder = cards.indices.sorted {
@@ -132,5 +133,95 @@ struct ReviewForecast: Equatable, Sendable {
         return ReviewForecast(days: periods, generatedAt: now,
                               remainingNew: cards.filter { $0.scoped && $0.summary.state == "new" }.count,
                               dailyGoal: preferences.dailyGoal, medianAnswerSeconds: median, overdue: overdue)
+    }
+}
+
+struct ExamPlanReport: Sendable {
+    var total = 0
+    var newCards = 0
+    var dueCards = 0
+    var pausedCards = 0
+    var recall: Double?
+    var recallSamples = 0
+    var recentNewPerDay = 0.0
+    var forecast: ReviewForecast?
+    var forecastDays = 0
+    var scope: LearningScope?
+    var notice: String?
+
+    static func calculate(plan: ExamPlan, data: BackupData, homeScope: LearningScope, now: Date, calendar: Calendar) throws -> Self {
+        var result = Self()
+        guard plan.valid else { throw StudyError.invalidContent }
+        let decks = Dictionary(uniqueKeysWithValues: data.decks.map { ($0.id, $0) })
+        let tags = Set(data.tags.map(\.id))
+        guard plan.scope.deckID.map({ decks[$0] != nil }) ?? true,
+              Set(plan.scope.tagIDs).isSubset(of: tags) else {
+            result.notice = "対象のデッキまたはタグが削除されています。範囲を編集してください。"
+            return result
+        }
+        func path(_ id: UUID) -> Set<UUID> {
+            var ids = Set<UUID>(), next: UUID? = id
+            while let id = next, ids.insert(id).inserted { next = decks[id]?.parentID }
+            return ids
+        }
+        let paths = Dictionary(uniqueKeysWithValues: data.decks.map { ($0.id, path($0.id)) })
+        var scope = plan.scope
+        if let home = homeScope.deckID {
+            if let selected = scope.deckID {
+                if paths[home]?.contains(selected) == true { scope.deckID = home }
+                else if paths[selected]?.contains(home) != true {
+                    result.notice = "ホームのデッキフィルターと対象範囲が重なりません。ホームで学習対象を変更してください。"
+                    return result
+                }
+            } else { scope.deckID = home }
+        }
+        scope.tagIDs = Array(Set(scope.tagIDs).union(homeScope.tagIDs))
+        result.scope = scope
+        let notes = Dictionary(uniqueKeysWithValues: data.notes.map { ($0.id, $0) })
+        let paused = DeckStudyEligibility.pausedIDs(data.decks.map { ($0.id, $0.parentID, $0.isStudyPaused ?? false) })
+        let options = try data.options.first.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) } ?? StudyOptions()
+        let scheduler = try ReviewScheduler(parameters: options.fsrsOptimization?.activeParameters)
+        let selectedTags = Set(scope.tagIDs)
+        var recallSum = 0.0, selectedIDs = Set<UUID>()
+        for (index, card) in data.cards.enumerated() where !card.isSuspended {
+            if index % 64 == 0 { try Task.checkCancellation() }
+            guard let note = notes[card.noteID], selectedTags.isSubset(of: Set(note.tagIDs)),
+                  scope.deckID.map({ paths[note.deckID]?.contains($0) == true }) ?? true else { continue }
+            result.total += 1
+            if paused.contains(note.deckID) { result.pausedCards += 1; continue }
+            selectedIDs.insert(card.id)
+            let snapshot = try JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)
+            let summary = try scheduler.summary(snapshot)
+            if summary.state == "new" { result.newCards += 1 }
+            else if card.dueDate <= now { result.dueCards += 1 }
+            let prediction = try scheduler.predictionState(snapshot)
+            if prediction.canRankReview {
+                let value = scheduler.retrievability(prediction, now: now)
+                if value.isFinite && (0...1).contains(value) { recallSum += value; result.recallSamples += 1 }
+            }
+        }
+        if result.recallSamples > 0 { result.recall = recallSum / Double(result.recallSamples) }
+        let studyDay = StudyDay(calendar: calendar, startHour: data.preferences.first?.dayStartHour ?? 4)
+        let today = studyDay.interval(containing: now).start
+        let since = calendar.date(byAdding: .day, value: -7, to: today)!
+        result.recentNewPerDay = Double(Set(data.logs.filter {
+            $0.wasNew && $0.reviewedAt >= since && $0.reviewedAt < today && selectedIDs.contains($0.cardID)
+        }.map(\.cardID)).count) / 7
+        let remaining = plan.daysRemaining(now: now, calendar: calendar)
+        guard plan.isActive, remaining >= 0 else {
+            result.notice = plan.isActive ? "試験日は過去です。日付を編集するか計画を終了できます。カードと学習履歴は保持します。" : "この計画は終了しています。学習データは保持しています。"
+            return result
+        }
+        if result.total == 0 { result.notice = "対象カードがありません。範囲とホームのフィルターを確認してください。"; return result }
+        if result.total == result.pausedCards { result.notice = "対象デッキは休止中です。デッキ管理で明示的に再開してください。"; return result }
+        // Include the exam calendar day, ending at midnight, never at its FSRS due date.
+        let end = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: plan.date(calendar: calendar)!))!
+        var interval = studyDay.interval(containing: now), count = 0
+        while interval.start < end && count < 90 {
+            count += 1; interval = studyDay.interval(containing: interval.end)
+        }
+        result.forecastDays = count
+        result.forecast = try ReviewForecast.calculate(data: data, deckID: scope.deckID, days: count, now: now, calendar: calendar, tagIDs: scope.tagIDs, until: end)
+        return result
     }
 }
