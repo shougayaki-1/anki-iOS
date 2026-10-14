@@ -126,7 +126,11 @@ final class StudyStore {
         homeCards = nil
         if changed { statisticsRevision += 1 }
         let interval = PerformanceProbe.begin("Store.refreshStudy")
-        defer { PerformanceProbe.end(interval) }
+        repository.recordPerformanceCounters("StudyRefresh.before")
+        defer {
+            repository.recordPerformanceCounters("StudyRefresh.after")
+            PerformanceProbe.end(interval)
+        }
         do {
             repository.calendar = .current
             let now = clock()
@@ -406,23 +410,32 @@ final class StudyStore {
         return HomeRecommendation(mode: mode, cardCount: count, answerLimit: sessionAnswerLimit, medianAnswerSeconds: homeMedianAnswerSeconds, scope: scope, responseMode: sessionResponseMode)
     }
     func startRecommended() {
+        let interval = PerformanceProbe.begin("Store.startRecommended")
+        defer { PerformanceProbe.end(interval) }
+        repository.recordPerformanceCounters("Recommended.beforeHome")
         let previous = homeRecommendation
         let referenceDate = clock()
         refreshHome(at: referenceDate)
+        repository.recordPerformanceCounters("Recommended.afterHome")
+        let hasSession: Bool
         do {
+            let checks = PerformanceProbe.begin("Store.recommendedChecks")
+            defer { PerformanceProbe.end(checks) }
             let options = try repository.options()
             sessionAnswerLimit = options.sessionAnswerLimit ?? 20
             sessionResponseMode = options.sessionResponseMode ?? .cardDefault
+            // Re-read the persisted draft before starting: never replace an interrupted session.
+            hasSession = try repository.session() != nil
         } catch { failure = error.localizedDescription; return }
-        // Re-read the persisted draft before starting: never replace an interrupted session.
-        do { guard try repository.session() == nil else { resume(); return } }
-        catch { failure = error.localizedDescription; return }
+        guard !hasSession else { resume(); return }
         guard let current = homeRecommendation else { return }
         guard previous == current else {
             noteSaveNotice = NoteSaveNotice(message: "学習対象が更新されました。おすすめの内容を確認して開始してください。")
             return
         }
+        repository.recordPerformanceCounters("Recommended.beforeStart")
         start(current.mode, policy: current.policy, at: referenceDate)
+        repository.recordPerformanceCounters("Recommended.afterStart")
     }
     func completeSession(destination: Int = 0) {
         guard flushTypedDraft() else { return }
@@ -484,7 +497,17 @@ final class StudyStore {
         repository.withStudyQueueReuse {
             let interval = PerformanceProbe.begin("Store.start")
             defer { PerformanceProbe.end(interval) }
-            if perform(metadata: false, changed: false, { try repository.start(mode: mode, scope: scope, policy: policy, now: referenceDate ?? clock()) }) { showingReview = true }
+            if perform(metadata: false, changed: false, {
+                repository.recordPerformanceCounters("Start.beforeRepository")
+                defer { repository.recordPerformanceCounters("Start.afterRepository") }
+                try repository.start(mode: mode, scope: scope, policy: policy, now: referenceDate ?? clock())
+            }) {
+                let publish = PerformanceProbe.begin("Store.showReview")
+                showingReview = true
+                PerformanceProbe.end(publish)
+                // This measures publication only. SwiftUI/AttributeGraph rendering
+                // happens later and must be inspected in the Main Thread trace.
+            }
         }
     }
     func resume() {

@@ -284,4 +284,10 @@ enum PerformanceProbe {
         if let interval { signposter.endInterval(interval.name, interval.state) }
         #endif
     }
+    static func counters(_ name: StaticString, projections: Int, notes: Int, cardRows: Int, history: Int, answerTimes: Int, decodes: Int) {
+        #if DEBUG
+        guard enabled else { return }
+        signposter.emitEvent(name, "projections=\(projections) noteFetches=\(notes) cardRows=\(cardRows) historyFetches=\(history) answerTimeFetches=\(answerTimes) fsrsDecodes=\(decodes)")
+        #endif
+    }
 }
