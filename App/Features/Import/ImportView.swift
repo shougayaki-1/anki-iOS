@@ -356,7 +356,7 @@ struct ImportView: View {
                 try await store.createRestorePoint("テキスト・CSVの取り込み")
                 operationPhase = .saving
                 await ImportOperationPhase.allowDisplay()
-                let saved = try store.repository.importPreparedRows(prepared, action: action,
+                let saved = try await store.repository.importPreparedRowsInBackground(prepared, action: action,
                                                                 resetHistory: resetHistory, source: source, now: store.clock())
                 operationPhase = .refreshing
                 await ImportOperationPhase.allowDisplay()

@@ -211,77 +211,9 @@ extension StudyRepository {
 
     func importPreparedRows(_ prepared: PreparedTextImport, action: DuplicateAction,
                             resetHistory: Bool = false, source: String, now: Date) throws -> ImportResult {
-        let interval = PerformanceProbe.begin("Import.CSV")
-        defer { PerformanceProbe.end(interval) }
-        try Task.checkCancellation()
-        let deckID = prepared.deckID, kind = prepared.kind, tagNames = prepared.tagNames
-        // Recheck the destination after asynchronous preparation, before any mutation.
-        guard try decks().contains(where: { $0.id == deckID }) else { throw StudyError.missingRecord }
-        let valid = prepared.rows, errors = prepared.errors, excluded = prepared.excluded
-        let type = kind.rawValue
-        let initialNotes = try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deckID == deckID && $0.type == type }))
-        let initialNoteIDs = Set(initialNotes.map(\.id))
-        var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
-        var duplicates = 0, skipped = excluded
-        let scheduler = try ReviewScheduler(desiredRetention: settings().desiredRetention)
-        let fresh = try JSONEncoder().encode(scheduler.newCard(now: now))
-        return try transaction {
-            var imported = 0
-            var duplicatesByText: [[String]: Note] = [:]
-            for note in initialNotes where !valid.isEmpty && note.deckID == deckID && note.type == kind.rawValue {
-                let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
-                let key = [ImportParser.normalized(content.question), ImportParser.normalized(content.answer)]
-                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
-            }
-            var importTagIDs: [UUID]?
-            @MainActor func tagsForImport() throws -> [UUID] {
-                if let importTagIDs { return importTagIDs }
-                let ids = try tagIDs(for: tagNames); importTagIDs = ids; return ids
-            }
-            for row in valid {
-                let input = row.input, content = row.content
-                try Task.checkCancellation()
-                let key = row.duplicateKey
-                if let existing = duplicatesByText[key] {
-                    if action == .skip { skipped += 1; duplicates += 1; continue }
-                    if action == .update {
-                        var merged = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
-                        merged.question = input.question; merged.answer = input.answer
-                        merged.explanation = input.explanation
-                        if let hint = input.hint { merged.hint = hint }
-                        if let value = input.questionLayout { merged.questionLayout = value }
-                        if let value = input.answerLayout { merged.answerLayout = value }
-                        existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
-                        if row.updatesMode { existing.defaultResponseMode = input.responseMode.rawValue }
-                        existing.tagIDs = try tagsForImport()
-                        let noteID = existing.id
-                        let existingCards = try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
-                        if initialNoteIDs.contains(existing.id) {
-                            updatedNoteIDs.insert(existing.id); maintainedCardIDs.formUnion(existingCards.map(\.id))
-                        }
-                        if resetHistory {
-                            for card in existingCards {
-                                card.fsrsPayload = fresh; card.dueDate = now; card.updatedAt = now
-                            }
-                        }
-                        imported += 1; continue
-                    }
-                }
-                let note = Note(input: input, content: content, now: now)
-                note.tagIDs = try tagsForImport(); context.insert(note); createdNoteIDs.insert(note.id)
-                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
-                for key in row.variants {
-                    let card = StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now)
-                    context.insert(card); createdCardIDs.insert(card.id)
-                }
-                imported += 1
-            }
-            context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))
-            return ImportResult(affectedCardIDs: createdCardIDs.union(maintainedCardIDs),
-                                    destinations: try importDestinations(noteIDs: createdNoteIDs.union(updatedNoteIDs)),
-                                    imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
-                                updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
-                                duplicateRows: duplicates, excludedRows: excluded)
+        try transaction {
+            try TextImportWriter(context: context).apply(prepared, action: action,
+                resetHistory: resetHistory, source: source, now: now, desiredRetention: try settings().desiredRetention)
         }
     }
 }
@@ -1006,4 +938,150 @@ private struct LibrarySearchSchedule {
     let summary: ScheduleSummary?
     let due: Date
     let suspended: Bool
+}
+
+
+// Created and used entirely on the detached worker. No managed models cross
+// the boundary. The synchronous API uses this same writer for parity.
+private struct TextImportWriter {
+    let context: ModelContext
+    func apply(_ prepared: PreparedTextImport, action: DuplicateAction,
+               resetHistory: Bool, source: String, now: Date, desiredRetention: Double) throws -> ImportResult {
+        let interval = PerformanceProbe.begin("Import.CSV")
+        defer { PerformanceProbe.end(interval) }
+        try Task.checkCancellation()
+        let deckID = prepared.deckID, kind = prepared.kind, tagNames = prepared.tagNames
+        // Recheck the destination after asynchronous preparation, before any mutation.
+        guard try context.fetch(FetchDescriptor<Deck>()).contains(where: { $0.id == deckID }) else { throw StudyError.missingRecord }
+        let valid = prepared.rows, errors = prepared.errors, excluded = prepared.excluded
+        let type = kind.rawValue
+        let initialNotes = try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.deckID == deckID && $0.type == type }))
+        let initialNoteIDs = Set(initialNotes.map(\.id))
+        var createdNoteIDs = Set<UUID>(), updatedNoteIDs = Set<UUID>(), createdCardIDs = Set<UUID>(), maintainedCardIDs = Set<UUID>()
+        var duplicates = 0, skipped = excluded
+        let scheduler = try ReviewScheduler(desiredRetention: desiredRetention)
+        let fresh = try JSONEncoder().encode(scheduler.newCard(now: now))
+        return try {
+            var imported = 0
+            var duplicatesByText: [[String]: Note] = [:]
+            for note in initialNotes where !valid.isEmpty && note.deckID == deckID && note.type == kind.rawValue {
+                let content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+                let key = [ImportParser.normalized(content.question), ImportParser.normalized(content.answer)]
+                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
+            }
+            var importTagIDs: [UUID]?
+            func tagsForImport() throws -> [UUID] {
+                if let importTagIDs { return importTagIDs }
+                let ids = try tagIDs(for: tagNames); importTagIDs = ids; return ids
+            }
+            for row in valid {
+                let input = row.input, content = row.content
+                try Task.checkCancellation()
+                let key = row.duplicateKey
+                if let existing = duplicatesByText[key] {
+                    if action == .skip { skipped += 1; duplicates += 1; continue }
+                    if action == .update {
+                        var merged = try JSONDecoder().decode(TextContent.self, from: existing.contentPayload)
+                        merged.question = input.question; merged.answer = input.answer
+                        merged.explanation = input.explanation
+                        if let hint = input.hint { merged.hint = hint }
+                        if let value = input.questionLayout { merged.questionLayout = value }
+                        if let value = input.answerLayout { merged.answerLayout = value }
+                        existing.contentPayload = try JSONEncoder().encode(merged); existing.updatedAt = now
+                        if row.updatesMode { existing.defaultResponseMode = input.responseMode.rawValue }
+                        existing.tagIDs = try tagsForImport()
+                        let noteID = existing.id
+                        let existingCards = try context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.noteID == noteID }))
+                        if initialNoteIDs.contains(existing.id) {
+                            updatedNoteIDs.insert(existing.id); maintainedCardIDs.formUnion(existingCards.map(\.id))
+                        }
+                        if resetHistory {
+                            for card in existingCards {
+                                card.fsrsPayload = fresh; card.dueDate = now; card.updatedAt = now
+                            }
+                        }
+                        imported += 1; continue
+                    }
+                }
+                let note = Note(input: input, content: content, now: now)
+                note.tagIDs = try tagsForImport(); context.insert(note); createdNoteIDs.insert(note.id)
+                if duplicatesByText[key] == nil { duplicatesByText[key] = note }
+                for key in row.variants {
+                    let card = StudyCard(noteID: note.id, variantKey: key, payload: fresh, now: now)
+                    context.insert(card); createdCardIDs.insert(card.id)
+                }
+                imported += 1
+            }
+            context.insert(ImportBatch(source: source, now: now, success: imported, skipped: skipped, errors: errors))
+            return ImportResult(affectedCardIDs: createdCardIDs.union(maintainedCardIDs),
+                                    destinations: imported > 0 ? [ImportDestination(id: deckID, name: try destinationPath(deckID))] : [],
+                                    imported: imported, skipped: skipped, errors: errors, createdNotes: createdNoteIDs.count,
+                                updatedNotes: updatedNoteIDs.count, createdCards: createdCardIDs.count, maintainedCards: maintainedCardIDs.count,
+                                duplicateRows: duplicates, excludedRows: excluded)
+        }()
+    }
+    private func tagIDs(for names: [String]) throws -> [UUID] {
+        var known = try context.fetch(FetchDescriptor<Tag>(sortBy: [SortDescriptor(\.normalizedName)]))
+        var ids: [UUID] = []
+        for name in names {
+            let clean = ImportParser.normalized(name)
+            if clean.isEmpty { continue }
+            let normalized = clean.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            let tag: Tag
+            if let existing = known.first(where: { $0.normalizedName == normalized }) { tag = existing }
+            else {
+                tag = Tag(name: clean, normalizedName: normalized); context.insert(tag); known.append(tag)
+            }
+            if !ids.contains(tag.id) { ids.append(tag.id) }
+        }
+        return ids
+    }
+    private func destinationPath(_ id: UUID) throws -> String {
+        let all = try context.fetch(FetchDescriptor<Deck>())
+        var names: [String] = [], current: UUID? = id, seen: Set<UUID> = []
+        while let value = current, !seen.contains(value), let deck = all.first(where: { $0.id == value }) {
+            names.insert(deck.name, at: 0); seen.insert(value); current = deck.parentID
+        }
+        return names.joined(separator: " / ")
+    }
+}
+
+extension StudyRepository {
+    // Preserve unsaved edits and serialize other repository mutations while the
+    // independent context commits. A single save remains the commit boundary.
+    func importPreparedRowsInBackground(_ prepared: PreparedTextImport, action: DuplicateAction,
+        resetHistory: Bool = false, source: String, now: Date,
+        save: @escaping @Sendable (ModelContext) throws -> Void = { try $0.save() }) async throws -> ImportResult {
+        guard !importCommitWorking, !context.hasChanges else { throw ImportCommitError.busy }
+        let retention = try settings().desiredRetention
+        importCommitWorking = true
+        defer { importCommitWorking = false }
+        let container = context.container
+        let worker = Task.detached(priority: .userInitiated) {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            do {
+                let result = try TextImportWriter(context: context).apply(prepared, action: action,
+                    resetHistory: resetHistory, source: source, now: now, desiredRetention: retention)
+                try Task.checkCancellation()
+                try save(context)
+                return result
+            } catch {
+                context.rollback()
+                throw error
+            }
+        }
+        let result = try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: { worker.cancel() }
+        // A fresh context avoids stale registered models after updates. Reset
+        // projections before the existing Store reload, even if reload fails.
+        refreshAfterImportCommit()
+        return result
+    }
+}
+
+enum ImportCommitError: LocalizedError {
+    case busy
+    var errorDescription: String? { "保存処理中、または未保存の変更があります。保存後に再試行してください。" }
 }

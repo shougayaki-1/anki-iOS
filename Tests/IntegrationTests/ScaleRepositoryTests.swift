@@ -7,6 +7,9 @@ import Darwin
 private final class ImportMemoryProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var peak: UInt64 = 0
+    private func sampledPeak() -> UInt64 {
+        lock.lock(); defer { lock.unlock() }; return peak
+    }
     static func footprint() -> UInt64 {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
@@ -27,10 +30,33 @@ private final class ImportMemoryProbe: @unchecked Sendable {
         timer.setEventHandler { probe.sample() }; timer.resume()
         defer { timer.cancel() }
         let result = try body()
-        probe.sample(); probe.lock.lock(); let peak = probe.peak; probe.lock.unlock()
+        probe.sample(); let peak = probe.sampledPeak()
         print("IMPORT_BUFFER stage=\(name) ms=\(Date().timeIntervalSince(start) * 1000) before_bytes=\(before) sampled_peak_bytes=\(peak) after_bytes=\(footprint())")
         return result
     }
+    @MainActor
+    static func responsive<T>(_ name: String, _ body: () async throws -> T) async rethrows -> T {
+        let probe = Self(), before = footprint(), start = Date()
+        probe.sample()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now(), repeating: .milliseconds(10))
+        timer.setEventHandler { probe.sample() }; timer.resume()
+        var last = Date(), longestGap = 0.0, ticks = 0
+        let heartbeat = Task { @MainActor in
+            while !Task.isCancelled {
+                do { try await Task.sleep(nanoseconds: 10_000_000) } catch { break }
+                let now = Date()
+                longestGap = max(longestGap, now.timeIntervalSince(last)); last = now; ticks += 1
+            }
+        }
+        defer { timer.cancel(); heartbeat.cancel() }
+        let result = try await body()
+        longestGap = max(longestGap, Date().timeIntervalSince(last))
+        probe.sample(); let peak = probe.sampledPeak()
+        print("IMPORT_RESPONSIVENESS stage=\(name) ms=\(Date().timeIntervalSince(start) * 1000) before_bytes=\(before) sampled_peak_bytes=\(peak) after_bytes=\(footprint()) main_actor_max_gap_ms=\(longestGap * 1000) ticks=\(ticks)")
+        return result
+    }
+
 }
 
 @MainActor
@@ -97,6 +123,27 @@ final class ScaleRepositoryTests: XCTestCase {
         XCTAssertEqual(try repo.context.fetch(FetchDescriptor<ImportBatch>()).count, 1)
     }
 
+    func testTextCommitMainActorResponsivenessMeasurements() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let rows = (0..<3000).map { ImportRow(line: $0 + 1, question: "Q \($0)", answer: String(repeating: "日本語", count: 80)) }
+        for background in [false, true] {
+            let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("\(background).store"))
+            let repo = StudyRepository(container: container)
+            try repo.initialize(now: now)
+            let prepared = try PreparedTextImport.make(rows, deckID: repo.decks()[0].id, kind: .basic, tagNames: [])
+            let result = try await ImportMemoryProbe.responsive(background ? "csv_worker_3000" : "csv_main_3000") {
+                if background { return try await repo.importPreparedRowsInBackground(prepared, action: .add, source: "csv", now: now) }
+                return try repo.importPreparedRows(prepared, action: .add, source: "csv", now: now)
+            }
+            XCTAssertEqual(result.createdCards, 3000)
+            XCTAssertEqual(try repo.cards().count, 3000)
+            _ = try ImportMemoryProbe.run(background ? "csv_worker_home" : "csv_main_home") { try StudyStore(container: container, clock: { now }) }
+        }
+    }
+
     func testImportBufferScaleMeasurements() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -138,6 +185,7 @@ final class ScaleRepositoryTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let writer = StudyRepository(container: container)
@@ -196,6 +244,7 @@ final class ScaleRepositoryTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
         let writer = StudyRepository(container: container)
         let now = Date(timeIntervalSince1970: 1_700_000_000)
