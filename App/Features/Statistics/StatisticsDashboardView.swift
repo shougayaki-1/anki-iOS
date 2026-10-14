@@ -67,7 +67,11 @@ struct StatisticsView: View {
                 Label("記録の対象", systemImage: "line.3.horizontal.decrease").font(.subheadline.weight(.semibold))
                 Spacer()
                 if store.statisticsScope.deckID != nil || !store.statisticsScope.tagIDs.isEmpty {
-                    Button("解除") { store.statisticsScope = LearningScope() }
+                    Button { store.statisticsScope = LearningScope() } label: {
+                        Text("解除").padding(.horizontal, 10).frame(minWidth: 44, minHeight: 44)
+                            .background(Color(.tertiarySystemFill), in: Capsule())
+                            .contentShape(Capsule())
+                    }
                 }
             }
             DeckSelectionField("デッキ", decks: store.decks, selection: $store.statisticsScope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
@@ -200,7 +204,7 @@ struct MemoryGrowthSection: View {
                         Text(total == 0 ? "—" : (Double(group.cards.count) / Double(total)).formatted(.percent.precision(.fractionLength(0))))
                             .font(.caption).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing).fixedSize()
                         Image(systemName: "chevron.right").font(.caption)
-                    }.font(.subheadline).padding(.vertical, 4)
+                    }.font(.subheadline).frame(minHeight: 44).contentShape(Rectangle())
                 }.accessibilityIdentifier("growth-" + group.id)
             }
             Text(total == 0 ? "対象のカードがありません。" : "停止・休止を除く\(total)枚。長期定着は永久記憶の保証ではありません。分類をタップすると定義と対象カードを確認できます。")
@@ -228,18 +232,22 @@ struct StudyCalendarSection: View {
     var body: some View {
         DashboardCard(title: "学習のカレンダー", subtitle: "日ごとの実績 · 選択中の対象 · 上の期間に依存しません") {
             HStack {
-                Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 36, height: 36) }.accessibilityLabel("前の月")
+                Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+                    .contentShape(RoundedRectangle(cornerRadius: 10)) }.accessibilityLabel("前の月")
                 Spacer()
                 Text(monthStart.formatted(.dateTime.year().month())).font(.headline)
                 Spacer()
-                Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 36, height: 36) }
+                Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44)
+                    .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
+                    .contentShape(RoundedRectangle(cornerRadius: 10)) }
                     .accessibilityLabel("次の月").disabled(calendar.isDate(monthStart, equalTo: today, toGranularity: .month))
             }
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 7), spacing: 6) {
                 ForEach(0..<7, id: \.self) { index in
                     Text(calendar.veryShortWeekdaySymbols[(index + calendar.firstWeekday - 1) % 7]).font(.caption).foregroundStyle(.secondary)
                 }
-                ForEach(0..<leading, id: \.self) { _ in Color.clear.frame(height: 32) }
+                ForEach(0..<leading, id: \.self) { _ in Color.clear.frame(height: 44) }
                 ForEach(dates, id: \.self) { date in
                     dayCell(date)
                 }
@@ -278,9 +286,10 @@ struct StudyCalendarSection: View {
         } label: {
             Text("\(calendar.component(.day, from: date))")
                 .font(.subheadline.weight(chosen ? .bold : .regular)).foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, minHeight: 34)
+                .frame(maxWidth: .infinity, minHeight: 44)
                 .background(answers == 0 ? Color(.tertiarySystemFill) : Color.teal.opacity(answers < 10 ? 0.18 : answers < 30 ? 0.38 : 0.65), in: RoundedRectangle(cornerRadius: 8))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(chosen ? Color.accentColor : .clear, lineWidth: 2))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
         }.buttonStyle(.plain).disabled(calendar.startOfDay(for: date) > calendar.startOfDay(for: today))
             .accessibilityLabel(date.formatted(.dateTime.year().month().day()) + "、\(answers)回答、\(entry?.cards ?? 0)枚")
             .accessibilityAddTraits(chosen ? [.isSelected] : [])
@@ -327,8 +336,9 @@ struct DashboardForecastSection: View {
                     ForEach(displayed) { day in
                         Button { selection = day.start } label: {
                             Text(day.start.formatted(.dateTime.month().day()) + " \(day.scheduled)枚")
-                                .font(.caption).padding(8)
+                                .font(.caption).padding(.horizontal, 12).frame(minHeight: 44)
                                 .background(chosen?.id == day.id ? Color.accentColor.opacity(0.15) : Color(.tertiarySystemFill), in: Capsule())
+                                .contentShape(Capsule())
                         }.accessibilityAddTraits(chosen?.id == day.id ? [.isSelected] : [])
                             .accessibilityIdentifier("forecastDay-\(displayed.firstIndex(where: { $0.id == day.id }) ?? 0)")
                     }
