@@ -2,6 +2,14 @@ import XCTest
 
 final class ImportUITests: XCTestCase {
     func testCSV3000ProgressAndSavedCount() {
+        csv3000Import(rapidConfirmation: false)
+    }
+
+    func testCSV3000RapidConfirmationPersistsOnce() {
+        csv3000Import(rapidConfirmation: true)
+    }
+
+    private func csv3000Import(rapidConfirmation: Bool) {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-import-3000"]
         app.launch()
@@ -11,13 +19,34 @@ final class ImportUITests: XCTestCase {
         for _ in 0..<8 where !preview.isHittable { app.swipeUp() }
         preview.tap()
         XCTAssertTrue(app.buttons["confirmImport"].waitForExistence(timeout: 10))
-        app.buttons["confirmImport"].tap(); app.buttons["commitImport"].firstMatch.tap()
+        app.buttons["confirmImport"].tap()
+        let commit = app.buttons["commitImport"].firstMatch
+        if rapidConfirmation { commit.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleTap() }
+        else { commit.tap() }
         let result = app.staticTexts["importResult"]
-        XCTAssertTrue(result.waitForExistence(timeout: 20))
-        XCTAssertTrue(result.label.contains("処理 3000行"))
-        XCTAssertTrue(result.label.contains("新規 3000ノート"))
-        XCTAssertTrue(result.label.contains("新規カード 3000枚"))
-        XCTAssertFalse(app.otherElements["importProcessingOverlay"].exists)
+        if !rapidConfirmation {
+            XCTAssertTrue(result.waitForExistence(timeout: 20))
+            XCTAssertTrue(result.label.contains("処理 3000行"))
+            XCTAssertTrue(result.label.contains("新規 3000ノート"))
+            XCTAssertTrue(result.label.contains("新規カード 3000枚"))
+            XCTAssertFalse(app.otherElements["importProcessingOverlay"].exists)
+            app.buttons["closeImport"].tap()
+        } else {
+            // The second coordinate tap may land on the completion's Close button
+            // after a fast commit. Check persisted counts whichever screen remains.
+            let finished = NSPredicate { _, _ in result.exists || app.buttons["openImport"].exists }
+            expectation(for: finished, evaluatedWith: app)
+            waitForExpectations(timeout: 20)
+            if result.exists { app.buttons["closeImport"].tap() }
+        }
+        let deck = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'libraryDeck-' AND label CONTAINS 'マイデッキ'")).firstMatch
+        XCTAssertTrue(deck.waitForExistence(timeout: 10))
+        XCTAssertTrue(deck.label.contains("配下3,000枚"))
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap()
+        XCTAssertTrue(deck.waitForExistence(timeout: 10))
+        XCTAssertTrue(deck.label.contains("配下3,000枚"), "再起動後も一度だけ保存されている")
     }
     func testImportCompletionInspectContinueAndRetryZero() {
         let app = XCUIApplication()
@@ -110,6 +139,9 @@ final class ImportUITests: XCTestCase {
         let image = XCTAttachment(screenshot: app.screenshot()); image.name = "Phase2-import-results"
         image.lifetime = .keepAlways; add(image)
         app.buttons["閉じる"].tap()
+        let deck = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'libraryDeck-' AND label CONTAINS 'マイデッキ'")).firstMatch
+        XCTAssertTrue(deck.waitForExistence(timeout: 5))
+        if deck.value as? String == "折り畳み中" { deck.tap() }
         XCTAssertTrue(app.staticTexts["Import first"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Import second"].exists)
         app.tabBars.buttons["ホーム"].tap(); app.buttons["start-new"].tap()
