@@ -71,6 +71,69 @@ final class StudyStore {
     var noteSaveNotice: NoteSaveNotice?
     var reviewRefreshFailed = false
     var showingReview = false
+    var celebration: CelebrationSummary?
+    var celebrationRequested = false
+    var pendingCelebrationCount = 0
+    @ObservationIgnored private var pendingCelebrationRevision: Int?
+    @ObservationIgnored private var pendingCelebrationRepository: ObjectIdentifier?
+    var achievementNotice: NoteSaveNotice?
+    var showingAchievementHistory = false
+
+    func refreshPendingCelebrations() {
+        let identity = ObjectIdentifier(repository)
+        guard pendingCelebrationRevision != repository.mutationRevision || pendingCelebrationRepository != identity else { return }
+        do {
+            pendingCelebrationCount = try repository.pendingAchievementEvents().count
+            pendingCelebrationRevision = repository.mutationRevision
+            pendingCelebrationRepository = identity
+        } catch { pendingCelebrationCount = 0; pendingCelebrationRevision = nil }
+    }
+
+    // Claim only after the review cover has disappeared, and never on foreground alone.
+    func presentCelebration() {
+        guard !showingReview, celebration == nil else { return }
+        celebrationRequested = false
+        do {
+            let pending = try repository.pendingAchievementEvents()
+            var daysByID: [String: [CelebrationDay]] = [:]
+            for event in pending { daysByID[event.id] = try celebrationDays(for: [event]) }
+            var claimed: [AchievementEvent] = []
+            for event in pending {
+                do {
+                    if let saved = try repository.claimAchievementEvent(id: event.id, now: clock()) { claimed.append(saved) }
+                } catch {
+                    failure = "達成の表示状態を保存できませんでした。未表示の達成はあとで確認できます。"
+                    break
+                }
+            }
+            // A partial failure shows only the successfully claimed subset.
+            celebration = CelebrationSummary(events: claimed, days: CelebrationSummary(events: claimed).flatMap { daysByID[$0.primary.id] } ?? [])
+            refreshPendingCelebrations()
+        } catch { failure = error.localizedDescription }
+    }
+
+    private func celebrationDays(for events: [AchievementEvent]) throws -> [CelebrationDay] {
+        guard let event = CelebrationSummary(events: events)?.primary, event.kind == .streakAdvanced else { return [] }
+        var calendar = Calendar.current
+        calendar.timeZone = TimeZone(identifier: event.record.timeZoneID) ?? .current
+        let day = StudyDay(calendar: calendar, startHour: event.record.startHour)
+        let anchor = day.interval(containing: event.record.occurredAt).start
+        return try (-6...0).map { offset in
+            let date = calendar.date(byAdding: .day, value: offset, to: anchor)!
+            let interval = day.interval(containing: date)
+            let start = interval.start, end = interval.end, now = clock()
+            var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+                $0.reviewedAt >= start && $0.reviewedAt < end && $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4
+            })
+            fetch.fetchLimit = 1
+            return CelebrationDay(date: start, studied: try !repository.context.fetch(fetch).isEmpty,
+                                  label: String(calendar.component(.day, from: start)))
+        }
+    }
+
+    var canContinueAfterCelebration: Bool {
+        switch homePrimaryAction { case .start, .resume: return true; default: return false }
+    }
     var selectedTab = 0
     var dataRevision = 0
     var mediaDisplayNamespace = UUID()
@@ -198,6 +261,7 @@ final class StudyStore {
         homeFailure = nil
     }
     func refreshHome(reconcileNotifications: Bool = false, at referenceDate: Date? = nil) {
+        refreshPendingCelebrations()
         let interval = PerformanceProbe.begin("Store.refreshHome")
         defer { PerformanceProbe.end(interval) }
         do {
@@ -448,9 +512,13 @@ final class StudyStore {
     }
     func completeSession(destination: Int = 0) {
         guard flushTypedDraft() else { return }
+        let normalEnd = review?.emptyState?.reason == .complete
         do { try repository.completeSession(now: clock()) }
         catch { failure = error.localizedDescription; return }
         review = nil; showingReview = false; selectedTab = destination
+        celebrationRequested = normalEnd && destination == 0
+        achievementNotice = nil
+        refreshPendingCelebrations()
         do { try refreshStudy(changed: false) }
         catch { homeFailure = error.localizedDescription; failure = "学習は終了しましたが、ホームを更新できません。" }
     }
@@ -503,6 +571,7 @@ final class StudyStore {
         perform(metadata: false, changed: false) { try repository.applyHomeScope(value) }
     }
     func start(_ mode: StudyMode, policy: ReviewOrderPolicy = .traditional, at referenceDate: Date? = nil) {
+        celebrationRequested = false
         repository.withStudyQueueReuse {
             let interval = PerformanceProbe.begin("Store.start")
             defer { PerformanceProbe.end(interval) }
@@ -520,6 +589,7 @@ final class StudyStore {
         }
     }
     func resume() {
+        celebrationRequested = false
         repository.withStudyQueueReuse {
             if perform(metadata: false, changed: false, { try repository.resume(now: clock()) }) { showingReview = true }
         }
@@ -534,6 +604,9 @@ final class StudyStore {
             catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
             do { try refreshStudy() }
             catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+            // The notification has already been persisted. Avoid loading all review
+            // history on every answer merely to update an unobtrusive home badge.
+            pendingCelebrationCount = (try? repository.options().achievements?.filter { $0.displayedAt == nil }.count) ?? 0
             let finishedSet = !previouslyComplete && review?.sessionProgress?.isComplete == true
             if finishedSet || !swipePrepared {
                 haptics.play(finishedSet ? .sessionCompleted : .grade, mode: settings.hapticsMode)
@@ -545,10 +618,12 @@ final class StudyStore {
             let interval = PerformanceProbe.begin("Store.undo")
             defer { PerformanceProbe.end(interval) }
             guard flushTypedDraft() else { return }
+            achievementNotice = nil
             do { try repository.undo(now: clock()) }
             catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
             do { try refreshStudy() }
             catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+            refreshPendingCelebrations()
             haptics.play(.undo, mode: settings.hapticsMode)
         }
     }
@@ -647,6 +722,8 @@ final class StudyStore {
         }
     }
     func pause() {
+        celebrationRequested = false
+        achievementNotice = nil
         repository.withStudyQueueReuse {
             if perform(metadata: false, changed: false, { try repository.setSessionActive(false, now: clock()) }) { showingReview = false }
         }

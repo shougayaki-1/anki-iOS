@@ -145,6 +145,12 @@ struct AppRootView: View {
                 recoveryMediaStore = mediaStore
                 store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || ProcessInfo.processInfo.arguments.contains("-study-test-widget")) ? WidgetSnapshotPublisher(file: .shared()) : nil)
                 #if DEBUG
+                if studyURL != nil, args.contains("-study-test-celebration-flow"), let store {
+                    try UITestFixtures.populateCelebrationFlow(store)
+                }
+                if studyURL != nil, let index = args.firstIndex(of: "-study-test-celebration"), args.count > index + 1, let store {
+                    store.celebration = UITestFixtures.celebration(args[index + 1])
+                }
                 if studyURL != nil, let index = args.firstIndex(of: "-study-test-recommendation"), args.count > index + 1, let store {
                     try UITestFixtures.populateHomeRecommendation(store, scenario: args[index + 1])
                 }

@@ -12,6 +12,146 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         return repo
     }
+    func testCelebrationWaitsForSuccessfulCompletionAndClaimsOnce() throws {
+        let repo = try fixture()
+        try create(repo)
+        var settings = try repo.settings(); settings.dailyGoal = 1
+        try repo.updateSettings(settings)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        try store.repository.start(mode: .new, answerLimit: 1, now: now)
+        store.resume(); store.draft(revealed: true); store.grade(.easy)
+        XCTAssertNil(store.celebration)
+        XCTAssertEqual(store.pendingCelebrationCount, 3)
+        XCTAssertTrue(store.review?.canUndo == true)
+        store.presentCelebration() // Even an explicit request cannot interrupt review.
+        XCTAssertNil(store.celebration)
+        store.pause()
+        XCTAssertFalse(store.celebrationRequested)
+        store.resume(); store.undo()
+        XCTAssertEqual(store.pendingCelebrationCount, 0)
+        store.draft(revealed: true); store.grade(.easy)
+        store.repository.save = { _ in throw Failure.save }
+        store.completeSession()
+        XCTAssertTrue(store.showingReview)
+        XCTAssertFalse(store.celebrationRequested)
+        XCTAssertNil(store.celebration)
+        store.repository.save = { try $0.save() }
+        store.completeSession()
+        XCTAssertFalse(store.showingReview)
+        XCTAssertTrue(store.celebrationRequested)
+        XCTAssertNil(store.celebration) // Review's onDismiss owns presentation.
+        store.presentCelebration()
+        XCTAssertEqual(store.celebration?.primary.kind, .dailyGoalReached)
+        XCTAssertEqual(store.celebration?.events.count, 3)
+        XCTAssertEqual(store.celebration?.secondary.count, 1) // First study and day 1 overlap.
+        XCTAssertEqual(store.pendingCelebrationCount, 0)
+        store.celebration = nil; store.presentCelebration()
+        XCTAssertNil(store.celebration)
+        let restarted = try StudyStore(container: repo.context.container, clock: { self.now })
+        restarted.presentCelebration()
+        XCTAssertNil(restarted.celebration)
+        XCTAssertFalse(restarted.canContinueAfterCelebration)
+    }
+
+    func testCelebrationGoalMidSessionAndExhaustedQueueBelowLimit() throws {
+        let repo = try fixture()
+        for _ in 0..<4 { try create(repo) }
+        var settings = try repo.settings(); settings.dailyGoal = 3; try repo.updateSettings(settings)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        store.start(.new)
+        for _ in 0..<3 { store.draft(revealed: true); store.grade(.easy) }
+        XCTAssertTrue(store.showingReview)
+        XCTAssertNotNil(store.review?.card)
+        XCTAssertNil(store.celebration)
+        XCTAssertFalse(store.celebrationRequested)
+        XCTAssertTrue(try store.repository.pendingAchievementEvents().contains { $0.kind == .dailyGoalReached })
+        store.draft(revealed: true); store.grade(.easy)
+        XCTAssertEqual(store.review?.emptyState?.reason, .complete)
+        XCTAssertFalse(store.review!.sessionProgress!.isComplete) // Exhausted before answer limit.
+        store.completeSession(); XCTAssertTrue(store.celebrationRequested)
+        store.presentCelebration()
+        XCTAssertEqual(store.celebration?.primary.record.value, 3)
+        XCTAssertEqual(store.celebration?.primary.record.threshold, 3)
+        XCTAssertFalse(store.canContinueAfterCelebration)
+    }
+
+    func testCelebrationContinueCreatesOneNewSessionAfterCompletedSet() throws {
+        let repo = try fixture(); try create(repo); try create(repo)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        try store.repository.start(mode: .new, answerLimit: 1, now: now)
+        store.resume(); store.draft(revealed: true); store.grade(.easy)
+        store.completeSession(); store.presentCelebration()
+        XCTAssertTrue(store.canContinueAfterCelebration)
+        XCTAssertNil(try store.repository.session())
+        store.celebration = nil // Cover dismissal precedes continuation.
+        store.startRecommended()
+        XCTAssertTrue(store.showingReview)
+        XCTAssertNotNil(store.review?.card)
+        XCTAssertEqual(try store.repository.context.fetchCount(FetchDescriptor<SessionDraft>()), 1)
+        XCTAssertFalse(store.celebrationRequested)
+    }
+
+    func testCelebrationWaitingAndZeroCardsNeverForcePresentation() throws {
+        let repo = try fixture(); try create(repo)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        store.start(.new); store.draft(revealed: true); store.grade(.again)
+        XCTAssertEqual(store.review?.emptyState?.reason, .waiting)
+        store.completeSession()
+        XCTAssertFalse(store.celebrationRequested)
+        XCTAssertNil(store.celebration)
+        store.presentCelebration() // Manual home action may confirm saved achievements.
+        XCTAssertNotNil(store.celebration)
+        XCTAssertFalse(store.canContinueAfterCelebration)
+        let empty = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
+        empty.start(.new); empty.presentCelebration()
+        XCTAssertNil(empty.celebration)
+        XCTAssertFalse(empty.canContinueAfterCelebration)
+    }
+
+    func testCelebrationPartialClaimAndPendingAfterRestart() throws {
+        let repo = try fixture(); try create(repo)
+        var settings = try repo.settings(); settings.dailyGoal = 1; try repo.updateSettings(settings)
+        try repo.start(mode: .new, answerLimit: 1, now: now)
+        try repo.updateDraft(revealed: true, now: now); try repo.grade(.easy, now: now)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        XCTAssertNil(store.celebration) // Restart must not automatically replay pending events.
+        store.refreshPendingCelebrations(); XCTAssertEqual(store.pendingCelebrationCount, 3)
+        var saves = 0
+        store.repository.save = { context in
+            saves += 1
+            if saves == 2 { throw Failure.save }
+            try context.save()
+        }
+        store.presentCelebration()
+        XCTAssertEqual(store.celebration?.events.count, 1)
+        XCTAssertEqual(store.pendingCelebrationCount, 2)
+        store.repository.save = { try $0.save() }
+        let restarted = try StudyStore(container: repo.context.container, clock: { self.now })
+        restarted.presentCelebration()
+        XCTAssertEqual(restarted.celebration?.events.count, 2)
+        XCTAssertTrue(Set(store.celebration!.events.map(\.id)).isDisjoint(with: Set(restarted.celebration!.events.map(\.id))))
+    }
+
+    func testCelebrationPrioritiesAndVisualContent() {
+        func event(_ kind: AchievementKind, _ value: Int, _ threshold: Int = 1) -> AchievementEvent {
+            AchievementEvent(record: AchievementRecord(id: "\(kind.rawValue)-\(value)", kind: kind,
+                studyDay: "2026-10-14", threshold: threshold, value: value, occurredAt: now,
+                sourceLogID: UUID(), timeZoneID: "Asia/Tokyo", startHour: 4))
+        }
+        let first = event(.firstStudyToday, 1), normal = event(.streakAdvanced, 12), milestone = event(.streakAdvanced, 7)
+        let goal = event(.dailyGoalReached, 20, 20), mature = event(.matureMilestone, 100, 100)
+        XCTAssertEqual(CelebrationSummary(events: [first])?.headline, "今日も一歩、\n積み重ねました")
+        XCTAssertFalse(CelebrationSummary(events: [normal])!.isSpecial)
+        XCTAssertTrue(CelebrationSummary(events: [milestone])!.isSpecial)
+        XCTAssertEqual(CelebrationSummary(events: [goal])?.unit, "/ 20 枚")
+        XCTAssertTrue(CelebrationSummary(events: [mature])!.detail.contains("FSRS Stability"))
+        XCTAssertEqual(CelebrationSummary(events: [first, normal, goal, milestone, milestone])?.events.count, 4)
+        XCTAssertEqual(CelebrationSummary(events: [first, normal, goal, milestone])?.primary, milestone)
+        XCTAssertEqual(CelebrationSummary(events: [first, normal, goal])?.primary, goal)
+        XCTAssertEqual(CelebrationSummary(events: [first, normal])?.secondary.count, 0)
+        XCTAssertNil(CelebrationSummary(events: []))
+    }
+
     func testAchievementsSaveFailureUndoRestartAndClaim() throws {
         let repo = try fixture()
         try create(repo)
