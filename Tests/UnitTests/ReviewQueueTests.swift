@@ -2,6 +2,34 @@ import XCTest
 @testable import AnkiIOS
 
 final class ReviewQueueTests: XCTestCase {
+    func testSwipeDisplayLocksAxisAndCapsMovementWithoutChangingGradeThreshold() {
+        for (x, y) in [(96.0, 40.0), (-96, 40), (40, 96), (40, -96)] {
+            var intent = ReviewSwipeIntent()
+            XCTAssertTrue(intent.update(x: x, y: y, scrollable: false))
+            let offset = intent.displayTranslation(x: x, y: y)
+            XCTAssertEqual(max(abs(offset.width), abs(offset.height)), 60, accuracy: 0.001)
+            XCTAssertTrue(offset.width == 0 || offset.height == 0)
+            let far = intent.displayTranslation(x: x * 10, y: y * 10)
+            XCTAssertEqual(far, offset)
+            XCTAssertNil(ReviewSwipeAction.decide(x: x * 0.99, y: y * 0.99, revealed: true))
+            XCTAssertNotNil(ReviewSwipeAction.decide(x: x, y: y, revealed: true))
+            XCTAssertEqual(intent.displayTranslation(x: 0, y: 0), .zero)
+            XCTAssertEqual(intent.displayTranslation(x: 100, y: 100), .zero)
+            XCTAssertEqual(intent.displayTranslation(x: .infinity, y: 0), .zero)
+        }
+        var pending = ReviewSwipeIntent()
+        XCTAssertFalse(pending.update(x: 8, y: 0, scrollable: false))
+        XCTAssertEqual(pending.displayTranslation(x: 8, y: 0), .zero)
+        var scroll = ReviewSwipeIntent()
+        XCTAssertFalse(scroll.update(x: 0, y: 100, scrollable: true))
+        XCTAssertEqual(scroll.displayTranslation(x: 0, y: 100), .zero)
+        var horizontal = ReviewSwipeIntent()
+        XCTAssertTrue(horizontal.update(x: 20, y: 5, scrollable: false))
+        XCTAssertEqual(horizontal.displayTranslation(x: 0, y: 100), .zero)
+        XCTAssertGreaterThan(horizontal.displayTranslation(x: 20, y: 5).width, 0)
+        XCTAssertLessThan(horizontal.displayTranslation(x: 20, y: 5).width, 60)
+    }
+
     func testHomeRecommendationUnitsPolicyAndEstimate() {
         for count in [1, 20, 200] {
             for limit in [0, 10, 20] {
