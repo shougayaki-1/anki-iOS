@@ -1,6 +1,24 @@
 import XCTest
 
 final class ImportUITests: XCTestCase {
+    func testCSV3000ProgressAndSavedCount() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-import-3000"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+        app.tabBars.buttons["ライブラリ"].tap(); app.buttons["openImport"].tap()
+        let preview = app.buttons["previewImport"]
+        for _ in 0..<8 where !preview.isHittable { app.swipeUp() }
+        preview.tap()
+        XCTAssertTrue(app.buttons["confirmImport"].waitForExistence(timeout: 10))
+        app.buttons["confirmImport"].tap(); app.buttons["commitImport"].firstMatch.tap()
+        let result = app.staticTexts["importResult"]
+        XCTAssertTrue(result.waitForExistence(timeout: 20))
+        XCTAssertTrue(result.label.contains("処理 3000行"))
+        XCTAssertTrue(result.label.contains("新規 3000ノート"))
+        XCTAssertTrue(result.label.contains("新規カード 3000枚"))
+        XCTAssertFalse(app.otherElements["importProcessingOverlay"].exists)
+    }
     func testImportCompletionInspectContinueAndRetryZero() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString]

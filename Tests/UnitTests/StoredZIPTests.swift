@@ -6,12 +6,13 @@ final class StoredZIPTests: XCTestCase {
         for phase in [ImportOperationPhase.reading, .validating, .exporting] {
             XCTAssertTrue(phase.canCancel)
         }
-        for phase in [ImportOperationPhase.preparing, .saving, .refreshing] {
+        for phase in [ImportOperationPhase.preparing, .restorePoint, .saving, .refreshing] {
             XCTAssertFalse(phase.canCancel)
             XCTAssertEqual(phase.title, "取り込み中")
         }
         XCTAssertNotEqual(ImportOperationPhase.validating.message, ImportOperationPhase.saving.message)
         XCTAssertNotEqual(ImportOperationPhase.saving.message, ImportOperationPhase.refreshing.message)
+        XCTAssertNotEqual(ImportOperationPhase.preparing.message, ImportOperationPhase.restorePoint.message)
     }
 
     func testDeckCompletionDistinguishesCompletePartialEmptyAndExport() {

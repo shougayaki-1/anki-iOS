@@ -212,7 +212,17 @@ struct ImportView: View {
                 }
                 return true
             }
-            .onAppear { acceptingFiles = true }
+            .onAppear {
+                acceptingFiles = true
+                #if DEBUG
+                let args = ProcessInfo.processInfo.arguments
+                if args.contains("-study-test-import-3000"), let index = args.firstIndex(of: "-study-test-store"),
+                   args.count > index + 1, UUID(uuidString: args[index + 1]) != nil, text.isEmpty {
+                    text = "Question,Answer\n" + (1...3000).map { "Q\($0),A\($0)" }.joined(separator: "\n")
+                    format = "CSV"
+                }
+                #endif
+            }
             .onDisappear { acceptingFiles = false; fileOperation?.cancel(); fileGeneration = UUID(); readingFile = false }
             .overlay {
                 if let phase = operationPhase ?? (readingFile ? .reading : nil) {
@@ -290,7 +300,10 @@ struct ImportView: View {
         ImportParser.normalized(row.question).isEmpty || (kind != .cloze && ImportParser.normalized(row.answer).isEmpty)
     }
     private func isDuplicate(_ row: ImportRow) -> Bool {
-        (try? store.repository.duplicate(of: NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer))) != nil
+        // The covered, disabled preview must not refetch/decode the library for
+        // each visible row on every progress-phase render. Commit rechecks duplicates.
+        guard !saving else { return false }
+        return (try? store.repository.duplicate(of: NoteInput(deckID: deckID, kind: kind, question: row.question, answer: row.answer))) != nil
     }
     private func preview() {
         do {
@@ -338,6 +351,8 @@ struct ImportView: View {
                     try PreparedTextImport.make(rows, deckID: deckID, kind: kind,
                                                 tagNames: tagText.components(separatedBy: ","))
                 }.value
+                operationPhase = .restorePoint
+                await ImportOperationPhase.allowDisplay()
                 try await store.createRestorePoint("テキスト・CSVの取り込み")
                 operationPhase = .saving
                 await ImportOperationPhase.allowDisplay()
@@ -444,7 +459,7 @@ struct ImageZIPImportView: View {
     private func commit() {
         guard !saving, result == nil else { return }
         saving = true
-        operationPhase = .preparing
+        operationPhase = .restorePoint
         reloadWarning = nil
         let package = package, deckID = deckID, action = action
         Task {
@@ -616,7 +631,7 @@ struct ImportCompletionHeader: View {
 
 /// Presentation phases describe actual operations; no estimated percentage is shown.
 enum ImportOperationPhase: Equatable {
-    case reading, validating, preparing, saving, refreshing, exporting
+    case reading, validating, preparing, restorePoint, saving, refreshing, exporting
 
     var title: String {
         switch self {
@@ -629,7 +644,8 @@ enum ImportOperationPhase: Equatable {
         switch self {
         case .reading: return "ファイルを読み込んでいます…"
         case .validating: return "内容を確認しています…"
-        case .preparing: return "復元ポイントを作成しています…"
+        case .preparing: return "取り込みの準備をしています…"
+        case .restorePoint: return "復元ポイントを作成しています…"
         case .saving: return "カード・デッキを保存しています…"
         case .refreshing: return "表示を更新しています…"
         case .exporting: return "共有ファイルを準備しています…"
