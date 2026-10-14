@@ -3,6 +3,7 @@ import Foundation
 // A ReviewLog represents one successfully persisted FSRS rating, not one unique card
 // or one session. Undo deletes the log, so undone answers never enter statistics.
 struct StatisticLog {
+    var reviewLogID: UUID? = nil
     let cardID: UUID
     let date: Date
     let grade: ReviewGrade
@@ -61,6 +62,7 @@ private struct StatisticsAccumulator {
 struct StudyStatistics {
     // days are newest-first to preserve the legacy summary API; trends may be
     // reversed in the chart to present time from left to right.
+    var achievements: AchievementStatistics? = nil
     var memory: MemoryAnalysis? = nil
     let days: [DailyStatistics]
     let weeks: [StatisticsBucket]
@@ -383,4 +385,105 @@ struct AchievementProgress {
 
 extension Notification.Name {
     static let studyAchievementEventsAvailable = Notification.Name("studyAchievementEventsAvailable")
+}
+
+
+// UI-only projection. Managed SwiftData models never enter this value API.
+struct AchievementStatistics {
+    let progress: AchievementProgress
+    let history: [AchievementRecord]
+
+    private struct Boundary: Hashable {
+        let timeZoneID: String
+        let startHour: Int
+    }
+
+    // One grouping per study-day definition, shared by all events using it.
+    // First timestamps per card let us verify historical goals without counting
+    // answers that were saved later on that same day.
+    private struct DayIndex {
+        let calendar: Calendar
+        let startHour: Int
+        let firstDates: [Date: [Date]]
+        let streaks: [Date: Int]
+
+        init(logs: [StatisticLog], calendar: Calendar, startHour: Int) throws {
+            self.calendar = calendar; self.startHour = startHour
+            let day = StudyDay(calendar: calendar, startHour: startHour)
+            var firstByCard: [Date: [UUID: Date]] = [:]
+            for log in logs {
+                try Task.checkCancellation()
+                let key = day.interval(containing: log.date).start
+                let previous = firstByCard[key]?[log.cardID] ?? log.date
+                firstByCard[key, default: [:]][log.cardID] = min(previous, log.date)
+            }
+            firstDates = firstByCard.mapValues { $0.values.sorted() }
+            var lengths: [Date: Int] = [:]
+            for key in firstByCard.keys.sorted() {
+                try Task.checkCancellation()
+                let previous = day.interval(containing: calendar.date(byAdding: .day, value: -1, to: key)!).start
+                lengths[key] = (lengths[previous] ?? 0) + 1
+            }
+            streaks = lengths
+        }
+
+        func progress(at now: Date) -> AchievementProgress {
+            let day = StudyDay(calendar: calendar, startHour: startHour)
+            let today = day.interval(containing: now).start
+            let dates = firstDates[today] ?? []
+            // Upper bound: number of unique cards first evaluated at or before now.
+            var lower = 0, upper = dates.count
+            while lower < upper {
+                let middle = (lower + upper) / 2
+                if dates[middle] <= now { lower = middle + 1 } else { upper = middle }
+            }
+            let studied = lower > 0
+            let previous = day.interval(containing: calendar.date(byAdding: .day, value: -1, to: today)!).start
+            let longest = firstDates.reduce(0) { result, entry in
+                entry.value.first.map { $0 <= now } == true ? max(result, streaks[entry.key] ?? 0) : result
+            }
+            return AchievementProgress(currentStreak: streaks[studied ? today : previous] ?? 0,
+                longestStreak: longest, studiedToday: studied, uniqueCardsToday: lower)
+        }
+
+        func validates(_ record: AchievementRecord) -> Bool {
+            let day = StudyDay(calendar: calendar, startHour: startHour).interval(containing: record.occurredAt).start
+            let dates = firstDates[day] ?? []
+            guard dates.first.map({ $0 <= record.occurredAt }) == true else { return false }
+            switch record.kind {
+            case .firstStudyToday: return true
+            case .streakAdvanced: return (streaks[day] ?? 0) >= record.value
+            case .dailyGoalReached:
+                // The sorted first timestamps contain one entry per Card UUID.
+                return record.threshold <= 0 || (dates.count >= record.threshold && dates[record.threshold - 1] <= record.occurredAt)
+            case .matureMilestone: return false
+            }
+        }
+    }
+
+    static func calculate(logs: [StatisticLog], records: [AchievementRecord], matureCount: Int,
+                          now: Date, calendar: Calendar, startHour: Int) throws -> Self {
+        let currentBoundary = Boundary(timeZoneID: calendar.timeZone.identifier, startHour: startHour)
+        let current = try DayIndex(logs: logs, calendar: calendar, startHour: startHour)
+        var indexes = [currentBoundary: current]
+        let ids = Set(logs.compactMap(\.reviewLogID))
+        var history: [AchievementRecord] = []
+        for record in records {
+            try Task.checkCancellation()
+            if record.displayedAt != nil { history.append(record); continue }
+            guard ids.contains(record.sourceLogID) else { continue }
+            if record.kind == .matureMilestone {
+                if matureCount >= record.threshold { history.append(record) }
+                continue
+            }
+            var eventCalendar = calendar
+            eventCalendar.timeZone = TimeZone(identifier: record.timeZoneID) ?? calendar.timeZone
+            let boundary = Boundary(timeZoneID: eventCalendar.timeZone.identifier, startHour: record.startHour)
+            if indexes[boundary] == nil {
+                indexes[boundary] = try DayIndex(logs: logs, calendar: eventCalendar, startHour: record.startHour)
+            }
+            if indexes[boundary]!.validates(record) { history.append(record) }
+        }
+        return Self(progress: current.progress(at: now), history: history.sorted { $0.occurredAt > $1.occurredAt })
+    }
 }

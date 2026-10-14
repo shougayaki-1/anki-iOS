@@ -278,7 +278,7 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(try changed.repository.options().activeSessionProgress?.reviewOrderPolicy, .traditional)
     }
 
-    func testRecommendationTimeCacheScopeAndThreeThousandCardHome() throws {
+    func testRecommendationTimeCacheScopeAndThreeThousandCardHome() async throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let scheduler = try ReviewScheduler()
         let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
@@ -322,6 +322,21 @@ final class StudyRepositoryTests: XCTestCase {
         repo.calendar.timeZone = TimeZone(secondsFromGMT: 3600)!
         _ = try repo.homeSnapshot(now: date.addingTimeInterval(86400), cards: cards, logs: [])
         XCTAssertEqual(repo.homeAnswerTimeFetchCount, fetches + 2)
+        // Reuse the existing 3,000-card / 10,000-log fixture for the records tab.
+        let store = try StudyStore(container: repo.context.container, clock: { date })
+        let mainActorFetches = store.repository.fullHistoryFetchCount
+        store.refreshStatistics()
+        XCTAssertEqual(store.repository.fullHistoryFetchCount, mainActorFetches)
+        for _ in 0..<1000 {
+            if !store.statisticsLoading { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(store.statisticsLoading)
+        XCTAssertNil(store.statisticsError)
+        XCTAssertEqual(store.repository.fullHistoryFetchCount, mainActorFetches)
+        XCTAssertEqual(store.achievementProgress?.longestStreak, 1)
+        XCTAssertEqual(store.statistics?.ratings.values.reduce(0, +), 10000)
+        XCTAssertEqual(store.achievementHistory, [])
         print("Issue187 3000 cards / 10000 logs cold=\(coldSeconds)s warm=\(warmSeconds)s historyFetches=0 extraDecodes=0")
     }
 
@@ -484,6 +499,9 @@ final class StudyRepositoryTests: XCTestCase {
             XCTAssertEqual(cached.days.map(\.answers), uncached.days.map(\.answers))
             XCTAssertEqual(cached.ratings, uncached.ratings)
             XCTAssertEqual(cached.streak, uncached.streak)
+            XCTAssertEqual(cached.achievements?.progress.currentStreak, uncached.achievements?.progress.currentStreak)
+            XCTAssertEqual(cached.achievements?.progress.uniqueCardsToday, uncached.achievements?.progress.uniqueCardsToday)
+            XCTAssertEqual(cached.achievements?.history, uncached.achievements?.history)
             XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
         }
         for _ in 0..<8 {
@@ -508,12 +526,18 @@ final class StudyRepositoryTests: XCTestCase {
         try await report()
         XCTAssertNil(store.statisticsError)
         XCTAssertEqual(store.statistics?.days.first?.answers, 0)
+        XCTAssertEqual(store.achievementProgress?.currentStreak, 0)
+        XCTAssertTrue(store.achievementHistory.isEmpty)
         store.start(.new); store.draft(revealed: true); store.grade(.good)
         try await report()
         XCTAssertEqual(store.statistics?.days.first?.answers, 1)
+        XCTAssertEqual(store.achievementProgress?.uniqueCardsToday, 1)
+        XCTAssertEqual(Set(store.achievementHistory.map(\.kind)), [.firstStudyToday, .streakAdvanced])
         store.undo()
         try await report()
         XCTAssertEqual(store.statistics?.days.first?.answers, 0)
+        XCTAssertEqual(store.achievementProgress?.currentStreak, 0)
+        XCTAssertTrue(store.achievementHistory.isEmpty)
         // Save succeeds, then queue projection fails. A cached report from the
         // old revision must not hide the newly persisted invalid FSRS data.
         let id = try XCTUnwrap(store.review?.card?.cardID)
@@ -540,6 +564,14 @@ final class StudyRepositoryTests: XCTestCase {
         let cold = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 1)
         let warm = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(deckID: root, tagIDs: [tag]), revision: 1)
         XCTAssertEqual(cold.days.first?.answers, warm.days.first?.answers)
+        let excluded = try await reader.load(now: now, calendar: repo.calendar, startHour: 4,
+            scope: LearningScope(deckID: UUID()), revision: 1)
+        XCTAssertEqual(excluded.days.first?.answers, 0)
+        XCTAssertEqual(excluded.achievements?.progress.uniqueCardsToday, 1)
+        XCTAssertEqual(excluded.achievements?.history, try repo.achievementHistory())
+        XCTAssertEqual(cold.achievements?.history, warm.achievements?.history)
+        let achievementAggregations = await reader.achievementAggregations
+        XCTAssertEqual(achievementAggregations, 1)
         let reads = await reader.materialReads
         XCTAssertEqual(reads, 1)
         var calendar = repo.calendar
@@ -551,10 +583,15 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(cached.days.map(\.answers), uncached.days.map(\.answers))
         XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
         XCTAssertNotEqual(cached.meanRetrievability, cold.meanRetrievability)
+        XCTAssertEqual(cached.achievements?.progress.currentStreak, 0)
+        XCTAssertEqual(cached.achievements?.history, uncached.achievements?.history)
+        XCTAssertEqual(cached.achievements?.progress.longestStreak, uncached.achievements?.progress.longestStreak)
         try repo.undo(now: now)
         let undone = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 2)
         XCTAssertEqual(undone.days.first?.answers, 0)
         XCTAssertNil(undone.meanRetrievability)
+        XCTAssertEqual(undone.achievements?.progress.longestStreak, 0)
+        XCTAssertTrue(undone.achievements?.history.isEmpty == true)
         let afterUndoReads = await reader.materialReads
         XCTAssertEqual(afterUndoReads, 2)
         let bounded = StatisticsReader(container: container, maximumCacheCost: 0)
@@ -999,6 +1036,10 @@ final class StudyRepositoryTests: XCTestCase {
         let restored = StudyRepository(container: restoredContainer, mediaStore: media)
         try restored.initialize(now: boundary)
         XCTAssertEqual(try restored.options().achievements, achievementRecords)
+        let restoredReport = try await StatisticsReader(container: restoredContainer).load(now: boundary,
+            calendar: restored.calendar, startHour: 4, scope: LearningScope())
+        XCTAssertEqual(restoredReport.achievements?.history, try restored.achievementHistory())
+        XCTAssertEqual(restoredReport.achievements?.progress.currentStreak, 2)
         XCTAssertNil(try restored.claimAchievementEvent(id: event.id, now: boundary))
         XCTAssertEqual(try restored.achievementProgress(now: boundary).currentStreak, 2)
         XCTAssertEqual(try restored.sessionProgress(), SessionAnswerProgress(answered: 2, limit: 10))

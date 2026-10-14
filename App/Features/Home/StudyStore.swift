@@ -167,6 +167,7 @@ final class StudyStore {
                 statisticsTask?.cancel()
                 statisticsGeneration += 1
                 statistics = nil
+                achievementProgress = nil; achievementHistory = []
                 statisticsLoading = false
                 statisticsError = nil
                 // A visible statistics tab must reload after grade/Undo, edits and restore.
@@ -233,15 +234,6 @@ final class StudyStore {
         catch { failure = error.localizedDescription; return false }
     }
     func refreshStatistics() {
-        do {
-            achievementProgress = try repository.achievementProgress(now: clock())
-            achievementHistory = try repository.achievementHistory()
-        } catch {
-            achievementProgress = nil; achievementHistory = []
-            statisticsError = error.localizedDescription
-            statisticsLoading = false
-            return
-        }
         statisticsTask?.cancel()
         statisticsGeneration += 1
         let generation = statisticsGeneration
@@ -252,17 +244,23 @@ final class StudyStore {
         let calendar = Calendar.current
         let startHour = settings.dayStartHour
         let scope = statisticsScope
-        let revision = statisticsRevision
+        // Includes direct repository writes such as claiming an event, in addition
+        // to Store refreshes and failures after a successful save.
+        let revision = statisticsRevision &+ repository.mutationRevision
         statisticsTask = Task { [weak self] in
             do {
                 let report = try await reader.load(now: now, calendar: calendar,
                                                    startHour: startHour, scope: scope, revision: revision)
                 guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
                 self?.statistics = report
+                self?.achievementProgress = report.achievements?.progress
+                self?.achievementHistory = report.achievements?.history ?? []
                 self?.statisticsLoading = false
             } catch {
                 guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
                 self?.statisticsError = error.localizedDescription
+                self?.achievementProgress = nil
+                self?.achievementHistory = []
                 self?.statisticsLoading = false
             }
         }
@@ -662,6 +660,7 @@ final class StudyStore {
             statisticsTask?.cancel()
             statisticsGeneration += 1
             statistics = nil
+            achievementProgress = nil; achievementHistory = []
             statisticsLoading = false
             statisticsError = nil
             statisticsScope = LearningScope()

@@ -2,6 +2,47 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testAchievementStatisticsUsesEventTimeAndKeepsShownReceipts() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 7, hour: 4))!
+        let firstID = UUID(), secondID = UUID(), card = UUID()
+        let logs = [StatisticLog(reviewLogID: firstID, cardID: card, date: now, grade: .again, durationMs: 0),
+            StatisticLog(reviewLogID: secondID, cardID: UUID(), date: now.addingTimeInterval(60), grade: .good, durationMs: 0)]
+        func record(_ id: String, _ kind: AchievementKind, _ time: Date, threshold: Int = 1,
+                    source: UUID = firstID, displayedAt: Date? = nil) -> AchievementRecord {
+            AchievementRecord(id: id, kind: kind, studyDay: "2026-10-07", threshold: threshold, value: threshold,
+                occurredAt: time, sourceLogID: source, timeZoneID: calendar.timeZone.identifier,
+                startHour: 4, displayedAt: displayedAt)
+        }
+        let records = [record("first", .firstStudyToday, now),
+            record("earlyGoal", .dailyGoalReached, now, threshold: 2),
+            record("goal", .dailyGoalReached, now.addingTimeInterval(60), threshold: 2, source: secondID),
+            record("wrongStreak", .streakAdvanced, now, threshold: 3),
+            record("mature", .matureMilestone, now, threshold: 10),
+            record("missing", .firstStudyToday, now, source: UUID()),
+            record("shown", .streakAdvanced, now, threshold: 7, source: UUID(), displayedAt: now)]
+        let report = try AchievementStatistics.calculate(logs: logs, records: records, matureCount: 9,
+            now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(report.progress.uniqueCardsToday, 1)
+        XCTAssertEqual(Set(report.history.map(\.id)), ["first", "goal", "shown"])
+        let mature = try AchievementStatistics.calculate(logs: logs, records: records, matureCount: 10,
+            now: now.addingTimeInterval(60), calendar: calendar, startHour: 4)
+        XCTAssertEqual(mature.progress.uniqueCardsToday, 2)
+        XCTAssertTrue(mature.history.contains { $0.id == "mature" })
+        for offset in [-86400.0, 0.0, 60.0, 86400.0, 172800.0] {
+            let date = now.addingTimeInterval(offset)
+            let indexed = try AchievementStatistics.calculate(logs: logs, records: [], matureCount: 0,
+                now: date, calendar: calendar, startHour: 4).progress
+            let original = AchievementProgress.calculate(logs: logs.map { ($0.cardID, $0.date) },
+                now: date, calendar: calendar, startHour: 4)
+            XCTAssertEqual(indexed.currentStreak, original.currentStreak)
+            XCTAssertEqual(indexed.longestStreak, original.longestStreak)
+            XCTAssertEqual(indexed.studiedToday, original.studiedToday)
+            XCTAssertEqual(indexed.uniqueCardsToday, original.uniqueCardsToday)
+        }
+    }
+
     func testAchievementStudyDaysBoundariesGapsMilestonesAndTimeZones() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!

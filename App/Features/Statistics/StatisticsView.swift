@@ -251,6 +251,17 @@ struct StatisticsView: View {
                 guard store.selectedTab == 2 else { return }
                 // TabView may retain this view across reloads and tab changes.
                 store.refreshStatistics()
+                var day = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
+                var zone = TimeZone.current.identifier
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled else { return }
+                    let next = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
+                    if next != day || zone != TimeZone.current.identifier {
+                        day = next; zone = TimeZone.current.identifier
+                        store.refreshStatistics()
+                    }
+                }
             }
             .onChange(of: store.statisticsScope) { _, _ in store.refreshStatistics() }
         }
