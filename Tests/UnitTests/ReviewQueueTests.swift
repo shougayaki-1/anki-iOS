@@ -408,3 +408,57 @@ extension ReviewQueueTests {
         }
     }
 }
+
+extension ReviewQueueTests {
+    func testSiblingIndexMatchesHistoryScanAcrossDayBoundaryAndRepeatedAnswers() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let builder = ReviewQueueBuilder(shuffled: { $0 })
+        var settings = StudySettings()
+        let day = StudyDay(startHour: settings.dayStartHour).interval(containing: now)
+        let notes = (0..<8).map { _ in UUID() }
+        let cards = (0..<48).map { index in
+            QueueCard(id: UUID(), state: ["new", "review", "learning", "relearning"][index % 4],
+                      due: now, createdAt: now, suspended: false, noteID: index % 7 == 0 ? nil : notes[index % notes.count])
+        }
+        let logs = (0..<120).map { index in
+            let card = cards[index % 12]
+            return QueueLog(cardID: card.id, reviewedAt: index % 3 == 0 ? day.start.addingTimeInterval(-1) : now,
+                            wasNew: false, noteID: card.noteID)
+        } + [QueueLog(cardID: UUID(), reviewedAt: day.end, wasNew: false, noteID: notes[7])]
+        for enabled in [true, false] {
+            settings.siblingBuryEnabled = enabled
+            let today = logs.filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+            let expected = cards.filter { card in
+                !enabled || card.state == "learning" || card.state == "relearning" || card.noteID == nil ||
+                !today.contains { $0.noteID == card.noteID && $0.cardID != card.id }
+            }
+            let counts = builder.counts(cards: cards, logs: logs, settings: settings, now: now)
+            XCTAssertEqual(counts.due, expected.filter { $0.state != "new" }.count)
+            XCTAssertEqual(counts.eligibleNew, expected.filter { $0.state == "new" }.count)
+            let queue = builder.queue(cards: cards, logs: logs, settings: settings, mode: .review,
+                                      touched: [], reviewStreak: 0, now: now)
+            XCTAssertEqual(Set(queue), Set(expected.filter { $0.state != "new" }.map(\.id)))
+        }
+    }
+
+    func testSiblingIndexThreeThousandCardsTenThousandTodayLogs() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let cards = (0..<3000).map { _ in
+            QueueCard(id: UUID(), state: "review", due: now, createdAt: now, suspended: false, noteID: UUID())
+        }
+        let logs = (0..<10000).map { index in
+            let card = cards[index % cards.count]
+            return QueueLog(cardID: card.id, reviewedAt: now, wasNew: false, noteID: card.noteID)
+        }
+        let builder = ReviewQueueBuilder(shuffled: { $0 })
+        let before = Date()
+        let legacy = cards.filter { card in !logs.contains { $0.noteID == card.noteID && $0.cardID != card.id } }
+        let scanSeconds = Date().timeIntervalSince(before)
+        let start = Date()
+        let counts = builder.counts(cards: cards, logs: logs, settings: StudySettings(), now: now)
+        let indexedSeconds = Date().timeIntervalSince(start)
+        XCTAssertEqual(counts.due, legacy.count)
+        XCTAssertEqual(counts.answerCount, 10000)
+        print("Sibling lookup 3000 cards/10000 today logs: legacy scan=\(scanSeconds)s indexed counts=\(indexedSeconds)s")
+    }
+}

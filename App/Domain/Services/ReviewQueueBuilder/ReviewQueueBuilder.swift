@@ -80,17 +80,29 @@ struct ReviewQueueBuilder {
         return selected
     }
 
+    // Index distinct reviewed cards once; repeated answers to the same card
+    // must not bury that card, while any different card of the note does.
+    private func reviewedCardsByNote(_ logs: [QueueLog]) -> [UUID: Set<UUID>] {
+        var result: [UUID: Set<UUID>] = [:]
+        for log in logs {
+            if let noteID = log.noteID { result[noteID, default: []].insert(log.cardID) }
+        }
+        return result
+    }
+
     func counts(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, now: Date) -> HomeCounts {
         let probe = PerformanceProbe.begin("Queue.counts")
         defer { PerformanceProbe.end(probe) }
         let interval = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let today = logs.filter { $0.reviewedAt >= interval.start && $0.reviewedAt < interval.end }
         let used = Set(today.filter(\.wasNew).map(\.cardID)).count
+        let reviewed = settings.siblingBuryEnabled ? reviewedCardsByNote(today) : [:]
         let available = cards.filter { card in
             guard !card.suspended && !card.isHidden(at: now) else { return false }
             if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
             guard let noteID = card.noteID else { return true }
-            return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
+            guard let answered = reviewed[noteID] else { return true }
+            return answered.count == 1 && answered.contains(card.id)
         }
         let fresh: Int
         if available.contains(where: { $0.state == "new" && !$0.deckLimits.isEmpty }) {
@@ -116,11 +128,13 @@ struct ReviewQueueBuilder {
         defer { PerformanceProbe.end(probe) }
         let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
         let today = logs.filter { $0.reviewedAt >= day.start && $0.reviewedAt < day.end }
+        let reviewed = settings.siblingBuryEnabled ? reviewedCardsByNote(today) : [:]
         let eligible = cards.filter { card in
             if card.studyPaused || card.suspended || card.isHidden(at: now) { return false }
             if !settings.siblingBuryEnabled || card.state == "learning" || card.state == "relearning" { return true }
             guard let noteID = card.noteID else { return true }
-            return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
+            guard let answered = reviewed[noteID] else { return true }
+            return answered.count == 1 && answered.contains(card.id)
         }
         let dueCandidates = eligible.filter { $0.state != "new" && $0.due <= now }
         if mode == .review, let fixedReviewOrder {
