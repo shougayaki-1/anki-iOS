@@ -350,3 +350,33 @@ extension ReviewQueueTests {
         XCTAssertEqual(queue(reviews, .review), reviews.map(\.id))
     }
 }
+
+extension ReviewQueueTests {
+    func testSwipeIntentLocksScrollingAndAmbiguousInitialMovement() {
+        for (x, y) in [(0.0, 16.0), (0, -16), (15, 15)] {
+            var intent = ReviewSwipeIntent()
+            XCTAssertFalse(intent.update(x: x, y: y, scrollable: true))
+            XCTAssertFalse(intent.update(x: 160, y: 0, scrollable: false))
+            XCTAssertFalse(intent.accepts(x: 160, y: 0))
+        }
+        var intent = ReviewSwipeIntent()
+        XCTAssertFalse(intent.update(x: 5, y: 1, scrollable: true))
+        XCTAssertTrue(intent.update(x: 16, y: 1, scrollable: true))
+        XCTAssertTrue(intent.accepts(x: 120, y: 10))
+        XCTAssertFalse(intent.accepts(x: 0, y: 150))
+        XCTAssertFalse(intent.accepts(x: 120, y: 120))
+    }
+    func testShortCardAndCompactHandleAllowVerticalTravelOutsideStartArea() {
+        for y in [-140.0, 140] {
+            var intent = ReviewSwipeIntent()
+            var gate = ReviewSwipeGate()
+            let id = UUID(), now = Date()
+            XCTAssertTrue(intent.update(x: 1, y: y.sign == .minus ? -16 : 16, scrollable: false))
+            gate.begin(id: id, revealed: true)
+            XCTAssertTrue(intent.accepts(x: 0, y: y))
+            XCTAssertTrue(gate.update(id: id, revealed: true, x: 0, y: y, now: now).ready)
+            XCTAssertEqual(gate.finish(id: id, revealed: true, x: 0, y: y, now: now), .grade(y < 0 ? .easy : .hard))
+            XCTAssertNil(gate.finish(id: id, revealed: true, x: 0, y: y, now: now))
+        }
+    }
+}
