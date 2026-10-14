@@ -180,6 +180,12 @@ final class StudyRepository {
             if try context.fetch(FetchDescriptor<StudyPreferences>()).isEmpty {
                 context.insert(StudyPreferences())
             }
+            var saved = try options()
+            if saved.matureAchievementBaseline == nil {
+                let count = try matureCardCount()
+                saved.matureAchievementBaseline = AchievementProgress.matureMilestones.filter { $0 <= count }
+                try writeOptionsInTransaction(saved)
+            }
             try pruneTypedAnswersInTransaction(now: now)
             // Process restart must not count time spent while the app was absent.
             if let draft = try session() { draft.activeSince = nil }
@@ -743,6 +749,7 @@ final class StudyRepository {
     }
 
     func grade(_ grade: ReviewGrade, now: Date) throws {
+        var events: [AchievementEvent] = []
         let interval = PerformanceProbe.begin("Repository.grade")
         defer { PerformanceProbe.end(interval) }
         try transaction {
@@ -782,6 +789,7 @@ final class StudyRepository {
                 let available = ReviewQueueBuilder(calendar: calendar).counts(cards: [single], logs: quotaLogs, settings: settings, now: now)
                 guard available.newRemaining > 0 else { throw StudyError.newLimitReached }
             }
+            let achievementBefore = try todayAchievementCardIDs(now: now)
             let transition = try scheduler.review(before, grade: grade, now: now)
             let after = try JSONEncoder().encode(transition.after)
             let duration = draft.elapsedMs + (draft.activeSince.map { max(0, Int(now.timeIntervalSince($0) * 1000)) } ?? 0)
@@ -809,6 +817,8 @@ final class StudyRepository {
             }
             card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
             card.updatedAt = now
+            events = try recordAchievementsInTransaction(log: log, previousToday: achievementBefore,
+                before: summary, after: scheduler.summary(transition.after), now: now)
             draft.undoLogID = log.id
             if !draft.touchedCardIDs.contains(card.id) { draft.touchedCardIDs.append(card.id) }
             if summary.state == "new" { draft.reviewStreak = 0 }
@@ -820,6 +830,10 @@ final class StudyRepository {
             } else {
                 try selectNext(draft: draft, now: now)
             }
+        }
+        if !events.isEmpty {
+            NotificationCenter.default.post(name: .studyAchievementEventsAvailable, object: self,
+                                            userInfo: ["events": events])
         }
     }
 
@@ -850,6 +864,7 @@ final class StudyRepository {
             if let answer = try context.fetch(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.id == logID })).first { context.delete(answer) }
             var saved = try options()
             saved.deckNewUsage?.removeAll { $0.sequence == latest.sequence }
+            saved.achievements?.removeAll { $0.sourceLogID == latest.id && $0.displayedAt == nil }
             try writeOptionsInTransaction(saved)
             context.delete(latest)
             // Undo restores the evaluation, while independent holds remain in force.
@@ -1002,4 +1017,131 @@ final class StudyRepository {
                                 message: mode == .new ? "今回出題できる新規カードの学習を終えました。今後の復習は期限到来後にホームから始められます。" : "現在復習できるカードはありません。今後の復習は期限到来後にホームから始められます。")
     }
 
+}
+
+
+extension StudyRepository {
+    func achievementProgress(now: Date) throws -> AchievementProgress {
+        try AchievementProgress.calculate(logs: logs().filter { ReviewGrade(rawValue: $0.grade) != nil }
+            .map { ($0.cardID, $0.reviewedAt) }, now: now, calendar: calendar, startHour: settings().dayStartHour)
+    }
+
+    private func todayAchievementCardIDs(now: Date) throws -> Set<UUID> {
+        let interval = StudyDay(calendar: calendar, startHour: try settings().dayStartHour).interval(containing: now)
+        let start = interval.start, end = interval.end
+        return Set(try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+            $0.reviewedAt >= start && $0.reviewedAt < end && $0.reviewedAt <= now
+        })).filter { ReviewGrade(rawValue: $0.grade) != nil }.map(\.cardID))
+    }
+
+    // First rating of a day only: probe occupied days, never load the whole history
+    // into the synchronous grade/queue hot path.
+    private func consecutiveAchievementDays(now: Date, startHour: Int) throws -> Int {
+        let day = StudyDay(calendar: calendar, startHour: startHour)
+        var interval = day.interval(containing: now), count = 0
+        while true {
+            let start = interval.start, end = interval.end
+            var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+                $0.reviewedAt >= start && $0.reviewedAt < end && $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4
+            })
+            fetch.fetchLimit = 1
+            guard try !context.fetch(fetch).isEmpty else { return count }
+            count += 1
+            interval = day.interval(containing: calendar.date(byAdding: .day, value: -1, to: interval.start)!)
+        }
+    }
+
+    func matureCardCount() throws -> Int {
+        let scheduler = try ReviewScheduler()
+        return try cards().filter { card in
+            let summary = try scheduler.summary(snapshot(card))
+            return MatureCards.contains(state: summary.state, stability: summary.stability, suspended: card.isSuspended)
+        }.count
+    }
+
+    private func recordAchievementsInTransaction(log: StudyReviewLog, previousToday: Set<UUID>,
+                                                 before: ScheduleSummary, after: ScheduleSummary, now: Date) throws -> [AchievementEvent] {
+        let settings = try settings()
+        var saved = try options()
+        var records = saved.achievements ?? []
+        let existingIDs = Set(records.map(\.id))
+        let day = AchievementProgress.dayKey(now, calendar: calendar, startHour: settings.dayStartHour)
+        func append(_ kind: AchievementKind, threshold: Int, value: Int) {
+            // Daily achievements have one identity regardless of goal changes or Undo.
+            // A mature threshold is once per lifetime, across all study days.
+            let id = kind == .matureMilestone ? "mature:\(threshold)" : "\(day):\(kind.rawValue)"
+            guard !records.contains(where: { $0.id == id }) else { return }
+            records.append(AchievementRecord(id: id, kind: kind, studyDay: day, threshold: threshold,
+                value: value, occurredAt: now, sourceLogID: log.id,
+                timeZoneID: calendar.timeZone.identifier, startHour: settings.dayStartHour))
+        }
+        if previousToday.isEmpty {
+            let streak = try consecutiveAchievementDays(now: now, startHour: settings.dayStartHour)
+            append(.firstStudyToday, threshold: 1, value: 1)
+            append(.streakAdvanced, threshold: AchievementProgress.streakMilestones.contains(streak) ? streak : 0,
+                   value: streak)
+        }
+        let unique = previousToday.union([log.cardID]).count
+        if let goal = settings.dailyGoal, goal > 0, unique >= goal {
+            append(.dailyGoalReached, threshold: goal, value: unique)
+        }
+        if !MatureCards.contains(state: before.state, stability: before.stability, suspended: false),
+           MatureCards.contains(state: after.state, stability: after.stability, suspended: false) {
+            let count = try matureCardCount()
+            var baseline = Set(saved.matureAchievementBaseline ?? [])
+            // Imported/already mature cards do not create retrospective events.
+            baseline.formUnion(AchievementProgress.matureMilestones.filter { $0 <= count - 1 })
+            for threshold in AchievementProgress.matureMilestones where !baseline.contains(threshold) && count - 1 < threshold && count >= threshold {
+                append(.matureMilestone, threshold: threshold, value: count)
+            }
+            saved.matureAchievementBaseline = baseline.sorted()
+        }
+        saved.achievements = records
+        try writeOptionsInTransaction(saved)
+        return records.filter { !existingIDs.contains($0.id) }.map { AchievementEvent(record: $0) }
+    }
+
+    // Read/reconcile after imports, deletes, restore and relaunch, without creating events.
+    // Shown records stay as historical receipts; current progress always comes from logs.
+    func achievementHistory() throws -> [AchievementRecord] {
+        let records = try options().achievements ?? []
+        guard !records.isEmpty else { return [] }
+        let history = try logs().filter { ReviewGrade(rawValue: $0.grade) != nil }
+        let ids = Set(history.map(\.id))
+        var mature: Int?
+        return try records.filter { record in
+            if record.displayedAt != nil { return true }
+            guard ids.contains(record.sourceLogID) else { return false }
+            if record.kind == .matureMilestone {
+                if mature == nil { mature = try matureCardCount() }
+                return mature! >= record.threshold
+            }
+            var eventCalendar = calendar
+            eventCalendar.timeZone = TimeZone(identifier: record.timeZoneID) ?? calendar.timeZone
+            let progress = AchievementProgress.calculate(logs: history.map { ($0.cardID, $0.reviewedAt) },
+                now: record.occurredAt, calendar: eventCalendar, startHour: record.startHour)
+            switch record.kind {
+            case .firstStudyToday: return progress.studiedToday
+            case .streakAdvanced: return progress.studiedToday && progress.currentStreak >= record.value
+            case .dailyGoalReached: return progress.uniqueCardsToday >= record.threshold
+            case .matureMilestone: return false
+            }
+        }.sorted { $0.occurredAt > $1.occurredAt }
+    }
+
+    func pendingAchievementEvents() throws -> [AchievementEvent] {
+        try achievementHistory().filter { $0.displayedAt == nil }.reversed().map { AchievementEvent(record: $0) }
+    }
+
+    // Returns nil on duplicate delivery. Save failure throws and leaves it available.
+    func claimAchievementEvent(id: String, now: Date) throws -> AchievementEvent? {
+        try transaction {
+            guard let event = try pendingAchievementEvents().first(where: { $0.id == id }) else { return nil }
+            var saved = try options()
+            guard let index = saved.achievements?.firstIndex(where: { $0.id == id }) else { return nil }
+            saved.achievements![index].displayedAt = now
+            try writeOptionsInTransaction(saved)
+            return event
+        }
+    }
 }

@@ -208,6 +208,7 @@ struct WeakPracticeSession: Identifiable {
 
 // Value-only analytics. No scheduler or persistence mutations.
 struct MemoryCard: Identifiable {
+    var state: String = "review"
     let id: UUID
     let title: String
     let stability: Double
@@ -280,6 +281,11 @@ struct MemoryAnalysis {
     let distributions: [MemoryDistribution]
     let retention: [ObservedRetention]
     let targets: [Double]
+    var matureCardCount: Int {
+        distributions.first!.buckets.flatMap(\.cards).filter {
+            MatureCards.contains(state: $0.state, stability: $0.stability, suspended: false)
+        }.count
+    }
     var estimatedRemembered: Double { distributions.last!.buckets.flatMap(\.cards).reduce(0) { $0 + $1.retrievability } }
     static func calculate(cards: [MemoryCard], logs: [StatisticLog], targets: [Double],
                           now: Date, calendar: Calendar, startHour: Int) -> Self {
@@ -293,4 +299,88 @@ struct MemoryAnalysis {
         ], retention: [7, 30, 90].map { .calculate(logs: logs, days: $0, now: now, calendar: calendar, startHour: startHour) },
              targets: Array(Set(targets)).sorted())
     }
+}
+
+
+// Shared definition for achievements and FSRS statistics; this is an estimate.
+enum MatureCards {
+    static let stabilityDays = 21.0
+    static func contains(state: String, stability: Double, suspended: Bool) -> Bool {
+        !suspended && state == "review" && stability.isFinite && stability >= stabilityDays
+    }
+}
+
+enum AchievementKind: String, Codable {
+    case firstStudyToday, streakAdvanced, dailyGoalReached, matureMilestone
+}
+
+struct AchievementRecord: Codable, Equatable, Identifiable {
+    let id: String
+    let kind: AchievementKind
+    let studyDay: String
+    let threshold: Int
+    let value: Int
+    let occurredAt: Date
+    let sourceLogID: UUID
+    let timeZoneID: String
+    let startHour: Int
+    var displayedAt: Date?
+    var title: String {
+        switch kind {
+        case .firstStudyToday: return "今日も学習しました"
+        case .streakAdvanced: return "\(value)日連続達成"
+        case .dailyGoalReached: return "日次目標\(threshold)枚達成"
+        case .matureMilestone: return "長期定着（推定）\(threshold)枚"
+        }
+    }
+}
+
+// Value API for CelebrationView. Delivery is explicitly claimed durably before display.
+struct AchievementEvent: Identifiable, Equatable {
+    let record: AchievementRecord
+    var id: String { record.id }
+    var kind: AchievementKind { record.kind }
+}
+
+struct AchievementProgress {
+    static let streakMilestones = [1, 3, 7, 14, 30, 100]
+    static let matureMilestones = [10, 50, 100, 500]
+    let currentStreak: Int
+    let longestStreak: Int
+    let studiedToday: Bool
+    let uniqueCardsToday: Int
+
+    static func dayKey(_ date: Date, calendar: Calendar, startHour: Int) -> String {
+        let start = StudyDay(calendar: calendar, startHour: startHour).interval(containing: date).start
+        let parts = calendar.dateComponents([.year, .month, .day], from: start)
+        return String(format: "%04d-%02d-%02d", parts.year!, parts.month!, parts.day!)
+    }
+
+    static func calculate(logs: [(cardID: UUID, date: Date)], now: Date,
+                          calendar: Calendar, startHour: Int) -> Self {
+        let day = StudyDay(calendar: calendar, startHour: startHour)
+        let today = day.interval(containing: now).start
+        var days: [Date: Set<UUID>] = [:]
+        for log in logs where log.date <= now {
+            days[day.interval(containing: log.date).start, default: []].insert(log.cardID)
+        }
+        func previous(_ date: Date) -> Date {
+            day.interval(containing: calendar.date(byAdding: .day, value: -1, to: date)!).start
+        }
+        var cursor = days[today] == nil ? previous(today) : today
+        var current = 0
+        while days[cursor] != nil { current += 1; cursor = previous(cursor) }
+        var longest = 0, run = 0, last: Date?
+        for date in days.keys.sorted() {
+            run = last == previous(date) ? run + 1 : 1
+            longest = max(longest, run); last = date
+        }
+        return Self(currentStreak: current, longestStreak: longest, studiedToday: days[today] != nil,
+                    uniqueCardsToday: days[today]?.count ?? 0)
+    }
+}
+
+
+extension Notification.Name {
+    static let studyAchievementEventsAvailable = Notification.Name("studyAchievementEventsAvailable")
 }

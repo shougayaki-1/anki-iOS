@@ -8,6 +8,8 @@ struct LearningScope: Codable, Equatable {
 
 struct StudyOptions: Codable, Equatable {
     var schemaVersion = 2
+    var achievements: [AchievementRecord]? = nil
+    var matureAchievementBaseline: [Int]? = nil
     var siblingBuryEnabled = true
     var notification: NotificationOptions? = nil
     var hapticsMode: HapticsMode? = nil

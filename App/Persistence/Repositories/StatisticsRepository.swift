@@ -147,7 +147,7 @@ actor StatisticsReader {
         let memoryCards = zip(material.cards, states).compactMap { card, state -> MemoryCard? in
             guard included(card.deckID, card.tagIDs), !card.isSuspended, !card.state.isNew,
                   let probability = state.retrievability else { return nil }
-            return MemoryCard(id: card.id, title: card.title, stability: card.stability,
+            return MemoryCard(state: card.state.state, id: card.id, title: card.title, stability: card.stability,
                               difficulty: card.difficulty, retrievability: probability)
         }
         let scopedLogs = material.logs.filter { included($0.deckID, $0.tagIDs) }

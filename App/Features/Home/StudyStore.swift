@@ -74,6 +74,8 @@ final class StudyStore {
     var selectedTab = 0
     var dataRevision = 0
     var mediaDisplayNamespace = UUID()
+    var achievementProgress: AchievementProgress?
+    var achievementHistory: [AchievementRecord] = []
     var statistics: StudyStatistics?
     var statisticsLoading = false
     var statisticsError: String?
@@ -231,6 +233,15 @@ final class StudyStore {
         catch { failure = error.localizedDescription; return false }
     }
     func refreshStatistics() {
+        do {
+            achievementProgress = try repository.achievementProgress(now: clock())
+            achievementHistory = try repository.achievementHistory()
+        } catch {
+            achievementProgress = nil; achievementHistory = []
+            statisticsError = error.localizedDescription
+            statisticsLoading = false
+            return
+        }
         statisticsTask?.cancel()
         statisticsGeneration += 1
         let generation = statisticsGeneration
