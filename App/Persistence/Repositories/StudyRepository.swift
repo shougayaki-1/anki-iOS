@@ -66,6 +66,16 @@ final class StudyRepository {
     #endif
     private(set) var mutationRevision = 0
 
+    // Cumulative counters at phase boundaries; subtract successive events.
+    // Enabled only for the existing isolated Debug performance fixture.
+    func recordPerformanceCounters(_ name: StaticString) {
+        #if DEBUG
+        PerformanceProbe.counters(name, projections: queueProjectionCount, notes: queueNoteFetchCount,
+            cardRows: queueCardRowsFetched, history: fullHistoryFetchCount,
+            answerTimes: homeAnswerTimeFetchCount, decodes: queueStateDecodeCount)
+        #endif
+    }
+
     // These value snapshots live only during one synchronous Store operation.
     // Never retain managed models or reuse them across edits/imports/restores.
     private var reusingStudyQueue = false
@@ -78,6 +88,10 @@ final class StudyRepository {
     private var operationPausedDecks: Set<UUID>?
     private var operationCards: [QueueCard]?
     private var operationScopes: [(LearningScope, Set<UUID>)] = []
+    // One value-only membership snapshot for repeated read-only home checks.
+    // Like Store.homeCards, it is valid only at the same mutation revision and
+    // with no pending context edits. Transactions always discard it before reads.
+    private var scopeNotes: (revision: Int, scope: LearningScope, ids: Set<UUID>)?
 
     // Use for start/grade/Undo/pause/resume plus their post-save screen refresh:
     // start changes session state after reading; grade/Undo read after restoring
@@ -101,7 +115,12 @@ final class StudyRepository {
     }
 
     func queueScopeNoteIDs(_ scope: LearningScope) throws -> Set<UUID> {
+        if !context.hasChanges, let cached = scopeNotes,
+           cached.revision == mutationRevision, cached.scope == scope {
+            return cached.ids
+        }
         if reusingStudyQueue, let cached = operationScopes.first(where: { $0.0 == scope }) {
+            if !context.hasChanges { scopeNotes = (mutationRevision, scope, cached.1) }
             return cached.1
         }
         let decks = try scope.deckID.map { try descendants(of: $0) }
@@ -110,6 +129,7 @@ final class StudyRepository {
             (decks == nil || decks!.contains(note.deckID)) && (tags.isEmpty || tags.isSubset(of: Set(note.tagIDs)))
         }.map(\.id))
         if reusingStudyQueue { operationScopes.append((scope, ids)) }
+        if !context.hasChanges { scopeNotes = (mutationRevision, scope, ids) }
         return ids
     }
 
@@ -140,6 +160,7 @@ final class StudyRepository {
     func transaction<T>(_ body: () throws -> T) throws -> T {
         // A second transaction in an operation must not see earlier snapshots.
         clearOperationQueue()
+        scopeNotes = nil
         // Failed transactions also invalidate material read before rollback.
         defer { mutationRevision += 1 }
         do {

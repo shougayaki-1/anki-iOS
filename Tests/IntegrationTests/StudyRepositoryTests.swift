@@ -17,7 +17,9 @@ final class StudyRepositoryTests: XCTestCase {
         try create(store.repository)
         try store.reload()
         XCTAssertEqual(store.homeRecommendation?.mode, .new)
+        let noteFetches = store.repository.queueNoteFetchCount
         store.startRecommended()
+        XCTAssertEqual(store.repository.queueNoteFetchCount - noteFetches, 1)
         let id = try XCTUnwrap(store.review?.card?.cardID)
         store.draft(text: "keep", revealed: true)
         store.startRecommended()
@@ -29,6 +31,38 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(try store.repository.context.fetchCount(FetchDescriptor<StudyReviewLog>()), logCount)
         store.undo()
         XCTAssertEqual(store.review?.card?.cardID, id)
+    }
+
+    func testHomeScopeMembershipCacheRechecksEditsTransactionsAndRollback() throws {
+        let repo = try fixture()
+        try create(repo)
+        let note = try XCTUnwrap(repo.notes().first)
+        let originalDeck = note.deckID
+        let otherDeck = try repo.createDeck(name: "Other", now: now)
+        let scope = LearningScope(deckID: originalDeck)
+        let fetches = repo.queueNoteFetchCount
+        XCTAssertEqual(try repo.queueScopeNoteIDs(scope), [note.id])
+        XCTAssertEqual(try repo.queueScopeNoteIDs(scope), [note.id])
+        XCTAssertEqual(repo.queueNoteFetchCount - fetches, 1)
+
+        // Pending edits bypass the clean snapshot and never overwrite it.
+        note.deckID = otherDeck
+        XCTAssertTrue(try repo.queueScopeNoteIDs(scope).isEmpty)
+        repo.context.rollback()
+        XCTAssertEqual(try repo.queueScopeNoteIDs(scope), [note.id])
+
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.transaction {
+            note.deckID = otherDeck
+            XCTAssertTrue(try repo.queueScopeNoteIDs(scope).isEmpty)
+        })
+        XCTAssertEqual(try repo.queueScopeNoteIDs(scope), [note.id])
+        repo.save = { try $0.save() }
+        try repo.updateNote(id: note.id, input: NoteInput(deckID: otherDeck, question: "Moved", answer: "A"), now: now)
+        XCTAssertTrue(try repo.queueScopeNoteIDs(scope).isEmpty)
+        XCTAssertEqual(try repo.queueScopeNoteIDs(LearningScope(deckID: otherDeck)), [note.id])
+        try repo.deleteNote(id: note.id)
+        XCTAssertTrue(try repo.queueScopeNoteIDs(LearningScope(deckID: otherDeck)).isEmpty)
     }
 
     func testPauseResumeReusesQueueNotesAndKeepsDraftOnSaveFailure() throws {
