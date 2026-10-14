@@ -447,7 +447,7 @@ struct ReviewHeroSection: View {
                         DisclosureGroup("おすすめの詳細") {
                             Text(HomeStudyPresentation.explanation(answerLimit: recommendation.answerLimit))
                             Text(recommendation.estimateExplanation)
-                            Text("今回の初回回答の目安：\(recommendation.estimatedAnswers)回答。今日の学習実績とは別です。")
+                            Text(recommendation.mode == .review ? "今回の対象：\(recommendation.estimatedAnswers)枚を1回ずつ復習します。" : "今回の初回回答の目安：\(recommendation.estimatedAnswers)回答。今日の学習実績とは別です。")
                         }.font(.footnote).foregroundStyle(.secondary)
                     }
                 case .addCards:

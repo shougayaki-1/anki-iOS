@@ -39,6 +39,9 @@ struct StudySessionProgressSnapshot: Codable, Equatable {
     var initialEligibleCount: Int? = nil
     var reviewOrderPolicy: ReviewOrderPolicy? = nil
     var reviewOrder: [UUID]? = nil
+    // Presence marks a finite, one-pass review set. nil keeps legacy sessions dynamic.
+    // The original configured cap is retained for starting another set (0 = all).
+    var reviewSetLimit: Int? = nil
 }
 
 enum SessionResponseMode: String, Codable, CaseIterable {

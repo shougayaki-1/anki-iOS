@@ -2,6 +2,32 @@ import XCTest
 import UIKit
 
 final class StudyUITests: XCTestCase {
+    func testFiveCardReviewFinishesWithFixedProgressForBothStartActions() {
+        for action in ["start-review", "startRecommended"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-recommendation", "five", "-study-test-reduce-motion"]
+            app.launch()
+            XCTAssertTrue(app.buttons[action].waitForExistence(timeout: 15))
+            app.buttons[action].tap()
+            var questions = Set<String>()
+            for index in 0..<5 {
+                XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+                XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 \(index) / 5問")
+                questions.insert(app.staticTexts["reviewQuestion"].label)
+                app.buttons["revealAnswer"].tap()
+                app.buttons["grade-1"].tap()
+            }
+            XCTAssertEqual(questions.count, 5)
+            XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 10))
+            XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の5問を完了しました")
+            XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 5 / 5問")
+            app.buttons["undoReview"].tap()
+            XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+            XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 4 / 5問")
+            app.terminate()
+        }
+    }
+
     func testCelebrationAfterRealSessionUndoPauseAndRestart() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-celebration-flow", "-study-test-reduce-motion"]

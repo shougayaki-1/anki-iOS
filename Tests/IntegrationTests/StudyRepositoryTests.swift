@@ -414,7 +414,7 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertNotNil(changed.noteSaveNotice)
         XCTAssertEqual(changed.homeRecommendation?.policy, .traditional)
         changed.startRecommended()
-        XCTAssertEqual(try changed.repository.sessionProgress()?.limit, 0)
+        XCTAssertEqual(try changed.repository.sessionProgress()?.limit, 21)
         XCTAssertEqual(try changed.repository.options().activeSessionProgress?.reviewOrderPolicy, .traditional)
     }
 
@@ -1199,44 +1199,48 @@ final class StudyRepositoryTests: XCTestCase {
     }
 
     func testVisibleAnswerTotalTracksOneCardAndShortRelearningWithoutChangingAnswerCap() throws {
-        let repo = try fixture()
-        try create(repo)
-        try repo.start(mode: .new, answerLimit: 20, now: now)
-        let first = try XCTUnwrap(repo.presentation(now: now))
-        XCTAssertEqual(first.sessionProgress?.limit, 20)
-        XCTAssertEqual(first.visibleAnswerTotal, 1)
+        for mode in [StudyMode.new, .mixed] {
+            let repo = try fixture()
+            try create(repo)
+            try repo.start(mode: mode, answerLimit: 20, now: now)
+            let first = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertEqual(first.sessionProgress?.limit, 20)
+            XCTAssertEqual(first.visibleAnswerTotal, 1)
 
-        try revealAndGrade(repo, grade: .again, date: now)
-        let waiting = try XCTUnwrap(repo.presentation(now: now))
-        XCTAssertNil(waiting.card)
-        XCTAssertEqual(waiting.sessionProgress?.answered, 1)
-        XCTAssertEqual(waiting.visibleAnswerTotal, 1)
-        XCTAssertEqual(waiting.emptyState?.reason, .waiting)
+            try revealAndGrade(repo, grade: .again, date: now)
+            let waiting = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertNil(waiting.card)
+            XCTAssertEqual(waiting.sessionProgress?.answered, 1)
+            XCTAssertEqual(waiting.visibleAnswerTotal, 1)
+            XCTAssertEqual(waiting.emptyState?.reason, .waiting)
 
-        let due = try XCTUnwrap(waiting.nextShortDue)
-        try repo.resume(now: due)
-        let repeated = try XCTUnwrap(repo.presentation(now: due))
-        XCTAssertNotNil(repeated.card)
-        XCTAssertEqual(repeated.visibleAnswerTotal, 2)
-        XCTAssertEqual(repeated.sessionProgress?.limit, 20)
-        try repo.undo(now: due)
-        let undone = try XCTUnwrap(repo.presentation(now: due))
-        XCTAssertEqual(undone.sessionProgress?.answered, 0)
-        XCTAssertEqual(undone.visibleAnswerTotal, 1)
+            let due = try XCTUnwrap(waiting.nextShortDue)
+            try repo.resume(now: due)
+            let repeated = try XCTUnwrap(repo.presentation(now: due))
+            XCTAssertNotNil(repeated.card)
+            XCTAssertEqual(repeated.visibleAnswerTotal, 2)
+            XCTAssertEqual(repeated.sessionProgress?.limit, 20)
+            try repo.undo(now: due)
+            let undone = try XCTUnwrap(repo.presentation(now: due))
+            XCTAssertEqual(undone.sessionProgress?.answered, 0)
+            XCTAssertEqual(undone.visibleAnswerTotal, 1)
+        }
     }
 
     func testVisibleAnswerTotalUsesEightAvailableCardsAndConfiguredCap() throws {
-        let repo = try fixture()
-        for _ in 0..<8 { try create(repo) }
-        try repo.start(mode: .new, answerLimit: 20, now: now)
-        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 8)
-        for _ in 0..<8 { try revealAndGrade(repo, grade: .easy, date: now) }
-        let finished = try XCTUnwrap(repo.presentation(now: now))
-        XCTAssertNil(finished.card)
-        XCTAssertEqual(finished.sessionProgress?.answered, 8)
-        XCTAssertEqual(finished.sessionProgress?.limit, 20)
-        XCTAssertEqual(finished.visibleAnswerTotal, 8)
-        XCTAssertEqual(finished.emptyState?.reason, .complete)
+        for mode in [StudyMode.new, .mixed] {
+            let repo = try fixture()
+            for _ in 0..<8 { try create(repo) }
+            try repo.start(mode: mode, answerLimit: 20, now: now)
+            XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 8)
+            for _ in 0..<8 { try revealAndGrade(repo, grade: .easy, date: now) }
+            let finished = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertNil(finished.card)
+            XCTAssertEqual(finished.sessionProgress?.answered, 8)
+            XCTAssertEqual(finished.sessionProgress?.limit, 20)
+            XCTAssertEqual(finished.visibleAnswerTotal, 8)
+            XCTAssertEqual(finished.emptyState?.reason, .complete)
+        }
     }
 
     func testSessionAnswerProgressTracksRemainingAndFinishesAt20RegardlessOfDailyGoal() throws {
@@ -2666,5 +2670,199 @@ extension StudyRepositoryTests {
         let decodes = repo.queueStateDecodeCount
         _ = try repo.queueCards()
         XCTAssertEqual(repo.queueStateDecodeCount, decodes)
+    }
+}
+
+
+extension StudyRepositoryTests {
+    private func dueReviewFixture(_ count: Int) throws -> StudyRepository {
+        let repo = try fixture()
+        let scheduler = try ReviewScheduler()
+        let past = now.addingTimeInterval(-864000)
+        let deck = try repo.decks()[0].id
+        try repo.transaction {
+            for index in 0..<count {
+                let date = past.addingTimeInterval(Double(index))
+                let state = try scheduler.review(scheduler.newCard(now: date), grade: .easy, now: date).after
+                let input = NoteInput(deckID: deck, question: "Review \(index)", answer: "A")
+                let note = Note(input: input, content: try StudyRepository.encodeContent(input), now: date)
+                repo.context.insert(note)
+                let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: try JSONEncoder().encode(state), now: date)
+                card.dueDate = try scheduler.summary(state).dueDate
+                repo.context.insert(card)
+            }
+        }
+        return repo
+    }
+
+    func testFixedReviewSetCountsAndCapsForBothPolicies() throws {
+        for count in [0, 1, 5, 20, 200] {
+            let repo = try dueReviewFixture(count)
+            for cap in [10, 20, 30, 0] {
+                for policy in [ReviewOrderPolicy.traditional, .forgettingRisk] {
+                    if count == 0 {
+                        XCTAssertThrowsError(try repo.start(mode: .review, answerLimit: cap, policy: policy, now: now))
+                        XCTAssertNil(try repo.session())
+                        continue
+                    }
+                    try repo.start(mode: .review, answerLimit: cap, policy: policy, now: now)
+                    let expected = cap == 0 ? count : min(count, cap)
+                    let saved = try XCTUnwrap(repo.options().activeSessionProgress)
+                    XCTAssertEqual(saved.answerLimit, expected)
+                    XCTAssertEqual(saved.reviewSetLimit, cap)
+                    XCTAssertEqual(saved.reviewOrder?.count, expected)
+                    XCTAssertEqual(Set(saved.reviewOrder ?? []).count, expected)
+                    XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, expected)
+                    if policy == .traditional {
+                        let ordered = try repo.cards().sorted { $0.dueDate < $1.dueDate }.prefix(expected).map(\.id)
+                        XCTAssertEqual(saved.reviewOrder, ordered)
+                    }
+                }
+            }
+        }
+    }
+
+    func testFixedReviewSetGradesEachCardOnceAndKeepsAgainDueForNextSet() throws {
+        for policy in [ReviewOrderPolicy.traditional, .forgettingRisk] {
+            let repo = try dueReviewFixture(5)
+            try repo.start(mode: .review, answerLimit: 20, policy: policy, now: now)
+            let order = try XCTUnwrap(repo.options().activeSessionProgress?.reviewOrder)
+            var date = now
+            for (index, id) in order.enumerated() {
+                XCTAssertEqual(try repo.session()?.cardID, id)
+                XCTAssertEqual(try repo.presentation(now: date)?.visibleAnswerTotal, 5)
+                try revealAndGrade(repo, grade: .again, date: date)
+                XCTAssertEqual(try repo.sessionProgress()?.answered, index + 1)
+                date = try XCTUnwrap(repo.card(id)?.dueDate).addingTimeInterval(1)
+                // Previous Again steps are due; they must not displace untouched cards.
+            }
+            XCTAssertNil(try repo.session()?.cardID)
+            XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 5, limit: 5))
+            XCTAssertEqual(try repo.presentation(now: date)?.emptyState?.reason, .complete)
+            XCTAssertEqual(try repo.logs().map(\.cardID), order)
+            XCTAssertFalse(try repo.advanceWaitingSession(now: date))
+            let last = try XCTUnwrap(order.last)
+            let before = try XCTUnwrap(repo.logs().last?.fsrsBefore)
+            try repo.undo(now: date)
+            XCTAssertEqual(try repo.card(last)?.fsrsPayload, before)
+            XCTAssertEqual(try repo.session()?.cardID, last)
+            XCTAssertEqual(try repo.sessionProgress()?.answered, 4)
+            try revealAndGrade(repo, grade: .again, date: date)
+            date = try XCTUnwrap(repo.card(last)?.dueDate).addingTimeInterval(1)
+            try repo.startAnotherSession(now: date)
+            XCTAssertEqual(try repo.options().activeSessionProgress?.reviewSetLimit, 20)
+            XCTAssertEqual(try repo.sessionProgress()?.limit, 5)
+            XCTAssertNotNil(try repo.session()?.cardID)
+        }
+    }
+
+    func testFixedReviewSetRollbackRestartBackupAndExclusions() async throws {
+        let repo = try dueReviewFixture(5)
+        try repo.start(mode: .review, answerLimit: 0, now: now)
+        let order = try XCTUnwrap(repo.options().activeSessionProgress?.reviewOrder)
+        try repo.updateDraft(revealed: true, now: now)
+        let before = try BackupData.capture(repo).canonical()
+        repo.save = { _ in throw Failure.save }
+        do {
+            try repo.grade(.again, now: now)
+            XCTFail("Failed save must throw")
+        } catch Failure.save { }
+        repo.save = { try $0.save() }
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        try repo.grade(.again, now: now)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.session()?.cardID, order[0])
+        XCTAssertFalse(try XCTUnwrap(repo.session()).touchedCardIDs.contains(order[0]))
+        try revealAndGrade(repo, grade: .good, date: now)
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let media = MediaStore(root: root.appendingPathComponent("Media"))
+        let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: now, appVersion: "212"))
+        let restored = StudyRepository(container: try BackupService.restore(backup,
+            location: StudyStorageLocation(canonicalStore: root.appendingPathComponent("Study.store")), mediaStore: media, now: now), mediaStore: media)
+        try restored.initialize(now: now)
+        try restored.resume(now: now)
+        XCTAssertEqual(try restored.options().activeSessionProgress?.reviewOrder, order)
+        XCTAssertEqual(try restored.sessionProgress(), SessionAnswerProgress(answered: 1, limit: 5))
+        XCTAssertEqual(try restored.session()?.cardID, order[1])
+        // Late entrants must not grow this set. Removed/held/paused targets count as no answers.
+        let lateNote = try create(restored)
+        try restored.transaction {
+            let source = try XCTUnwrap(restored.card(order[2]))
+            let late = try XCTUnwrap(restored.cards().first { $0.noteID == lateNote })
+            late.fsrsPayload = source.fsrsPayload; late.dueDate = source.dueDate
+            if let card = try restored.card(order[2]) { restored.context.delete(card) }
+            try restored.card(order[3])?.isSuspended = true
+        }
+        try revealAndGrade(restored, grade: .easy, date: now)
+        XCTAssertEqual(try restored.session()?.cardID, order[4])
+        let deck = try restored.decks()[0].id
+        try restored.setStudyPaused(deckID: deck, paused: true, now: now)
+        XCTAssertThrowsError(try revealAndGrade(restored, grade: .good, date: now))
+        XCTAssertEqual(try restored.sessionProgress()?.answered, 2)
+        try restored.setStudyPaused(deckID: deck, paused: false, now: now)
+        try restored.transaction { try restored.card(order[4])?.isSuspended = true }
+        try restored.resume(now: now)
+        XCTAssertNil(try restored.session()?.cardID)
+        XCTAssertEqual(try restored.presentation(now: now)?.visibleAnswerTotal, 5)
+        XCTAssertEqual(try restored.presentation(now: now)?.emptyState?.title, "今回はここまで")
+    }
+
+    func testLegacyReviewSessionKeepsDynamicRelearning() throws {
+        let repo = try dueReviewFixture(1)
+        try repo.start(mode: .review, answerLimit: 20, now: now)
+        var options = try repo.options()
+        options.activeSessionProgress?.reviewSetLimit = nil
+        options.activeSessionProgress?.reviewOrder = nil
+        options.activeSessionProgress?.answerLimit = 20
+        try repo.updateOptions(options)
+        let id = try XCTUnwrap(repo.session()?.cardID)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 1)
+        try revealAndGrade(repo, grade: .again, date: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 1)
+        let due = try XCTUnwrap(repo.card(id)?.dueDate)
+        try repo.resume(now: due)
+        XCTAssertEqual(try repo.session()?.cardID, id)
+        XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 1, limit: 20))
+        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 2)
+        try repo.undo(now: due)
+        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 1)
+        try revealAndGrade(repo, grade: .easy, date: due)
+        let finished = try XCTUnwrap(repo.presentation(now: due))
+        XCTAssertNil(finished.card)
+        XCTAssertEqual(finished.visibleAnswerTotal, 1)
+        XCTAssertEqual(finished.emptyState?.reason, .complete)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testFixedReviewSetOneAndHundredCardsFinishAtSelectedCount() throws {
+        for count in [1, 100] {
+            let repo = try dueReviewFixture(count)
+            try repo.start(mode: .review, answerLimit: 20, now: now)
+            let order = try XCTUnwrap(repo.options().activeSessionProgress?.reviewOrder)
+            XCTAssertEqual(order.count, min(count, 20))
+            for id in order {
+                XCTAssertEqual(try repo.session()?.cardID, id)
+                try revealAndGrade(repo, grade: .hard, date: now)
+            }
+            XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: order.count, limit: order.count))
+            XCTAssertNil(try repo.session()?.cardID)
+            XCTAssertEqual(try repo.logs().map(\.cardID), order)
+        }
+    }
+
+    func testUnlimitedFixedReviewBackupAcceptsMoreThan500TargetsAndRejectsCorruptSet() throws {
+        let repo = try dueReviewFixture(501)
+        try repo.start(mode: .review, answerLimit: 0, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 501)
+        let bytes = try BackupArchive.create(data: BackupData.capture(repo), media: [:], now: now, appVersion: "212")
+        var backup = try BackupArchive.decode(bytes).data
+        var options = try JSONDecoder().decode(StudyOptions.self, from: backup.options[0].payload)
+        XCTAssertEqual(options.activeSessionProgress?.reviewOrder?.count, 501)
+        options.activeSessionProgress?.reviewOrder?.append(try XCTUnwrap(repo.session()?.cardID))
+        backup.options[0].payload = try JSONEncoder().encode(options)
+        XCTAssertThrowsError(try BackupValidation.validate(backup, media: [:]))
     }
 }

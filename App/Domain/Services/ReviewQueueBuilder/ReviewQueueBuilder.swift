@@ -110,6 +110,7 @@ struct ReviewQueueBuilder {
     func queue(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, mode: StudyMode,
                touched: Set<UUID>, reviewStreak: Int, now: Date,
                policy: ReviewOrderPolicy = .traditional, reviewOrder: [UUID]? = nil,
+               fixedReviewOrder: [UUID]? = nil,
                retrievability: (UUID) -> Double? = { _ in nil }) -> [UUID] {
         let probe = PerformanceProbe.begin("Queue.build")
         defer { PerformanceProbe.end(probe) }
@@ -122,6 +123,10 @@ struct ReviewQueueBuilder {
             return !today.contains { $0.noteID == noteID && $0.cardID != card.id }
         }
         let dueCandidates = eligible.filter { $0.state != "new" && $0.due <= now }
+        if mode == .review, let fixedReviewOrder {
+            let available = Set(dueCandidates.lazy.filter { !touched.contains($0.id) }.map(\.id))
+            return fixedReviewOrder.filter { available.contains($0) }
+        }
         let due: [QueueCard]
         let short: [QueueCard]
         if policy == .traditional {
