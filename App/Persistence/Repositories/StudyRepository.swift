@@ -52,6 +52,8 @@ final class StudyRepository {
     private(set) var context: ModelContext
     var calendar: Calendar
     var mediaStore: MediaStore
+    private var customStudyCache: CustomStudyCandidateSnapshot?
+    private(set) var customStudyIndexBuildCount = 0
     private var queueStates: [UUID: (payload: Data, state: String, prediction: ReviewScheduler.PredictionState)] = [:]
     private(set) var queueStateDecodeCount = 0
     private(set) var reviewRankingFailureCount = 0
@@ -165,17 +167,24 @@ final class StudyRepository {
         clearOperationQueue()
         scopeNotes = nil
         queueStates = [:]
+        customStudyCache = nil
         homeAnswerTimeCache = nil
         mutationRevision += 1
     }
 
-    func transaction<T>(_ body: () throws -> T) throws -> T {
+    func transaction<T>(preservingCustomStudyCache: Bool = false, _ body: () throws -> T) throws -> T {
         guard !importCommitWorking else { throw ImportCommitError.busy }
+        // Only private practice-progress writes may retain the value-only index.
+        // All card/history/settings/import mutations invalidate before and after save.
+        if !preservingCustomStudyCache || context.hasChanges { customStudyCache = nil }
         // A second transaction in an operation must not see earlier snapshots.
         clearOperationQueue()
         scopeNotes = nil
         // Failed transactions also invalidate material read before rollback.
-        defer { mutationRevision += 1 }
+        defer {
+            mutationRevision += 1
+            if !preservingCustomStudyCache { customStudyCache = nil }
+        }
         do {
             let result = try body()
             try save(context)
@@ -183,6 +192,7 @@ final class StudyRepository {
         } catch {
             context.rollback()
             clearOperationQueue()
+            customStudyCache = nil
             throw error
         }
     }
@@ -623,15 +633,20 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, now: Date) throws {
         let interval = PerformanceProbe.begin("Repository.start")
         defer { PerformanceProbe.end(interval) }
         try transaction {
-            let normalized = try normalizedScope(scope)
-            let selectedResponse = try responseMode ?? options().sessionResponseMode ?? .cardDefault
+            let currentOptions = try options()
+            guard currentOptions.customPractice == nil else { throw CustomStudyError.sessionActive }
+            if customStudy == nil, currentOptions.activeSessionProgress?.customStudy != nil, try session() != nil {
+                throw CustomStudyError.sessionActive
+            }
+            let normalized = try normalizedScope(customStudy?.scope ?? scope)
+            let selectedResponse = try customStudy != nil ? SessionResponseMode.cardDefault : (responseMode ?? options().sessionResponseMode ?? .cardDefault)
             let cards = try queueCards(), settings = try settings()
             let rankingScheduler = policy == .forgettingRisk ? try? ReviewScheduler(parameters: optimizationState().activeParameters) : nil
-            let available = try ReviewQueueBuilder(calendar: calendar).queue(
+            let normalAvailable = try ReviewQueueBuilder(calendar: calendar).queue(
                 cards: responseEligibleCards(scopedQueueCards(normalized, cards: cards), mode: selectedResponse), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
                 mode: mode, touched: [], reviewStreak: 0, now: now, policy: policy,
                 retrievability: { id in
@@ -641,6 +656,13 @@ final class StudyRepository {
                     guard value.isFinite, (0...1).contains(value) else { self.reviewRankingFailureCount += 1; return nil }
                     return value
                 })
+            let available: [UUID]
+            if let customStudy {
+                guard customStudy.official, mode == .review else { throw StudyError.invalidContent }
+                let existing = try session(), existingCustom = try options().activeSessionProgress?.customStudy
+                if let existing, existing.cardID != nil || existingCustom == nil { throw CustomStudyError.sessionActive }
+                available = try customStudyPreview(customStudy, preferredIDs: customCardIDs, now: now).cardIDs
+            } else { available = normalAvailable }
             // Check before replacing an interrupted draft, even if home counts were stale.
             guard !available.isEmpty else {
                 if selectedResponse == .ordering { throw StudyError.noOrderingCards }
@@ -651,13 +673,13 @@ final class StudyRepository {
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
             var saved = try options()
-            let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
+            let limit = customStudy?.limit ?? answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
                 startSequence: try lastReviewSequence(), answerLimit: mode == .review ? (limit == 0 ? available.count : min(limit, available.count)) : limit, responseMode: selectedResponse,
                 initialEligibleCount: available.count, reviewOrderPolicy: policy,
                 reviewOrder: mode == .review ? Array(available.prefix(limit == 0 ? available.count : limit)) : (policy == .forgettingRisk ? available : nil),
-                reviewSetLimit: mode == .review ? limit : nil)
+                reviewSetLimit: mode == .review ? limit : nil, customStudy: customStudy)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
@@ -674,6 +696,10 @@ final class StudyRepository {
         let limit = progress?.reviewSetLimit ?? progress?.answerLimit
         // start validates candidates before replacing anything and rolls back a
         // failed save, so an empty/failed restart retains the final Undo.
+        if let condition = progress?.customStudy {
+            try start(mode: .review, scope: condition.scope, customStudy: condition, now: now)
+            return
+        }
         try start(mode: mode, scope: originalScope, answerLimit: limit, responseMode: progress?.responseMode ?? .cardDefault, policy: progress?.reviewOrderPolicy ?? .traditional, now: now)
     }
 
@@ -1173,5 +1199,197 @@ extension StudyRepository {
             try writeOptionsInTransaction(saved)
             return event
         }
+    }
+}
+
+
+extension StudyRepository {
+    func customStudyPreview(_ condition: CustomStudyCondition, preferredIDs: [UUID]? = nil, now: Date) throws -> CustomStudyPreview {
+        let interval = PerformanceProbe.begin("CustomStudy.preview")
+        defer { PerformanceProbe.end(interval) }
+        guard condition.valid else { throw StudyError.invalidContent }
+        let deckIDs = Set(try decks().map(\.id)), tagIDs = Set(try tags().map(\.id))
+        if condition.scope.deckID.map({ !deckIDs.contains($0) }) == true
+            || !Set(condition.scope.tagIDs).isSubset(of: tagIDs) {
+            return CustomStudyPreview(message: "選択したデッキまたはタグが削除されています。条件を選び直してください。")
+        }
+        let settings = try settings(), snapshot = try customStudyCandidates(settings: settings, now: now)
+        let all = snapshot.cards, siblings = snapshot.siblings
+        var candidates = try scopedQueueCards(condition.scope, cards: all).filter { card in
+            guard !card.suspended, !card.isHidden(at: now) else { return false }
+            if settings.siblingBuryEnabled, siblings.hasReviewedSibling(of: card) { return false }
+            return !condition.official || (card.state != "new" && card.due <= now)
+        }
+        switch condition.criterion {
+        case .todayAgain:
+            let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+            let start = day.start
+            let ids = Set(try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+                $0.reviewedAt >= start && $0.reviewedAt <= now && $0.grade == 1
+            })).map(\.cardID))
+            candidates = candidates.filter { ids.contains($0.id) }.sorted { $0.due < $1.due }
+        case .lowRecall:
+            let scheduler = try ReviewScheduler(parameters: optimizationState().activeParameters)
+            let scores = Dictionary(uniqueKeysWithValues: candidates.compactMap { card -> (UUID, Double)? in
+                guard let state = queueStates[card.id]?.prediction, state.canRankReview else { return nil }
+                let probability = scheduler.retrievability(state, now: now)
+                guard probability.isFinite, probability >= 0, probability < 0.9 else { return nil }
+                return (card.id, probability)
+            })
+            candidates = candidates.filter { scores[$0.id] != nil }.sorted {
+                scores[$0.id]! == scores[$1.id]! ? $0.id.uuidString < $1.id.uuidString : scores[$0.id]! < scores[$1.id]!
+            }
+        case .due: candidates = candidates.filter { $0.state != "new" && $0.due <= now }.sorted { $0.due < $1.due }
+        case .soon:
+            let end = calendar.date(byAdding: .day, value: 7, to: now)!
+            candidates = candidates.filter { $0.state != "new" && $0.due > now && $0.due <= end }.sorted { $0.due < $1.due }
+        case .random: candidates.shuffle()
+        }
+        if let preferredIDs {
+            guard Set(preferredIDs).count == preferredIDs.count else { throw StudyError.invalidContent }
+            let ranks = Dictionary(uniqueKeysWithValues: preferredIDs.enumerated().map { ($0.element, $0.offset) })
+            candidates = candidates.filter { ranks[$0.id] != nil }.sorted { ranks[$0.id]! < ranks[$1.id]! }
+        }
+        var notes = Set<UUID>()
+        let selected = candidates.filter { card in
+            guard settings.siblingBuryEnabled, let noteID = card.noteID else { return true }
+            return notes.insert(noteID).inserted
+        }
+        let ids = Array(selected.prefix(condition.limit == 0 ? selected.count : condition.limit).map(\.id))
+        return CustomStudyPreview(cardIDs: ids, message: ids.isEmpty ? "対象がありません。デッキ・タグ・出題条件を変更してください。停止・一時非表示・兄弟カード抑制も適用されます。正式復習は期限到来カードのみです。" : nil)
+    }
+    func saveCustomPreset(_ preset: CustomStudyPreset) throws {
+        guard preset.condition.valid, !preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw StudyError.invalidContent }
+        var saved = try options()
+        var presets = saved.customStudyPresets ?? []
+        if let index = presets.firstIndex(where: { $0.id == preset.id }) { presets[index] = preset }
+        else { presets.append(preset) }
+        saved.customStudyPresets = presets
+        try updateOptions(saved)
+    }
+    func deleteCustomPreset(_ id: UUID) throws {
+        var saved = try options(); saved.customStudyPresets?.removeAll { $0.id == id }; try updateOptions(saved)
+    }
+    func startCustomPractice(_ condition: CustomStudyCondition, ids: [UUID], now: Date) throws {
+        guard !condition.official, condition.valid, try session() == nil,
+              try options().customPractice == nil else { throw CustomStudyError.sessionActive }
+        // Revalidate safety at start, keeping the exact preview order (including random).
+        let available = try customStudyPreview(condition, preferredIDs: ids, now: now)
+        let eligible = Set(available.cardIDs)
+        let selected = ids.filter { eligible.contains($0) }
+        guard !selected.isEmpty, Set(selected).count == selected.count else { throw StudyError.noAvailableCards }
+        try writeCustomPractice(CustomPracticeProgress(condition: condition, cardIDs: selected))
+    }
+    func customPracticeCard(now: Date) throws -> NoteItem? {
+        let interval = PerformanceProbe.begin("CustomStudy.practiceCard")
+        defer { PerformanceProbe.end(interval) }
+        guard let progress = try options().customPractice, progress.valid else { return nil }
+        let settings = try settings(), snapshot = try customStudyCandidates(settings: settings, now: now)
+        let answeredNotes = Set(progress.cardIDs.prefix(progress.index).compactMap { snapshot.cardsByID[$0]?.noteID })
+        let eligible = Set(progress.cardIDs.dropFirst(progress.index).filter { id in
+            guard let card = snapshot.cardsByID[id], !card.suspended, !card.isHidden(at: now) else { return false }
+            return !settings.siblingBuryEnabled || (!snapshot.siblings.hasReviewedSibling(of: card)
+                && !(card.noteID.map { answeredNotes.contains($0) } ?? false))
+        })
+        var updated = progress
+        while updated.index < updated.cardIDs.count, !eligible.contains(updated.cardIDs[updated.index]) {
+            updated.index += 1; updated.revealed = false
+        }
+        if updated != progress { try writeCustomPractice(updated) }
+        guard updated.index < updated.cardIDs.count else { return nil }
+        return try noteItems(cardID: updated.cardIDs[updated.index]).first
+    }
+    func advanceCustomPractice(revealOnly: Bool, now: Date) throws {
+        guard try customPracticeCard(now: now) != nil else { return }
+        guard var progress = try options().customPractice else { return }
+        if revealOnly { progress.revealed = true }
+        else if progress.revealed { progress.index += 1; progress.revealed = false }
+        try writeCustomPractice(progress)
+    }
+    func finishCustomPractice() throws {
+        try writeCustomPractice(nil)
+    }
+    private func writeCustomPractice(_ progress: CustomPracticeProgress?) throws {
+        try transaction(preservingCustomStudyCache: true) {
+            var saved = try options()
+            saved.customPractice = progress
+            try writeOptionsInTransaction(saved)
+        }
+    }
+    // Prewarm the read-only history on its own actor/context. Managed models never cross actors.
+    func prepareCustomStudyCandidates(now: Date) async throws {
+        try Task.checkCancellation()
+        let settings = try settings()
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        if !context.hasChanges, customStudyCache?.day == day { return }
+        customStudyCache = nil
+        guard !context.hasChanges else { throw CustomStudyError.dataChanged }
+        let revision = mutationRevision
+        // Yield to the reader before projecting cards so first Form layout and
+        // the main-actor projection do not occupy the same uninterrupted UI turn.
+        let reviewedIDs = try await CustomStudyHistoryReader(container: context.container).cardIDs(day: day)
+        try Task.checkCancellation()
+        guard revision == mutationRevision, !context.hasChanges else { throw CustomStudyError.dataChanged }
+        let cards = try queueCards()
+        let byID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
+        let siblings = CustomStudySiblingIndex(cardIDs: reviewedIDs, cards: byID)
+        customStudyCache = CustomStudyCandidateSnapshot(day: day, cards: cards, cardsByID: byID, siblings: siblings)
+        customStudyIndexBuildCount += 1
+    }
+    private func customStudyCandidates(settings: StudySettings, now: Date) throws -> CustomStudyCandidateSnapshot {
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+        if !context.hasChanges, let cached = customStudyCache, cached.day == day { return cached }
+        customStudyCache = nil
+        let cards = try queueCards(), start = day.start, end = day.end
+        let byID = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, $0) })
+        // Sibling eligibility needs IDs only, never FSRS payloads or quota backfills.
+        var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.reviewedAt >= start && $0.reviewedAt < end })
+        fetch.propertiesToFetch = [\.cardID]
+        let siblings = CustomStudySiblingIndex(cardIDs: try context.fetch(fetch).map(\.cardID), cards: byID)
+        let result = CustomStudyCandidateSnapshot(day: day, cards: cards, cardsByID: byID, siblings: siblings)
+        customStudyIndexBuildCount += 1
+        if !context.hasChanges { customStudyCache = result }
+        return result
+    }
+}
+
+
+// Value-only index: O(history) to build and O(1) per card, including repeated
+// ratings of the same card. A card's own history must never bury that card.
+private struct CustomStudySiblingIndex: Sendable {
+    private var reviewedByNote: [UUID: Set<UUID>] = [:]
+    init(cardIDs: [UUID], cards: [UUID: QueueCard]) {
+        for id in cardIDs {
+            if let noteID = cards[id]?.noteID { reviewedByNote[noteID, default: []].insert(id) }
+        }
+    }
+    func hasReviewedSibling(of card: QueueCard) -> Bool {
+        guard let noteID = card.noteID, let reviewed = reviewedByNote[noteID] else { return false }
+        return reviewed.count > 1 || !reviewed.contains(card.id)
+    }
+}
+
+private struct CustomStudyCandidateSnapshot: Sendable {
+    let day: DateInterval
+    let cards: [QueueCard]
+    let cardsByID: [UUID: QueueCard]
+    let siblings: CustomStudySiblingIndex
+}
+
+private actor CustomStudyHistoryReader {
+    let container: ModelContainer
+    init(container: ModelContainer) { self.container = container }
+    func cardIDs(day: DateInterval) throws -> [UUID] {
+        let interval = PerformanceProbe.begin("CustomStudy.historyRead")
+        defer { PerformanceProbe.end(interval) }
+        try Task.checkCancellation()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let start = day.start, end = day.end
+        var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.reviewedAt >= start && $0.reviewedAt < end })
+        fetch.propertiesToFetch = [\.cardID]
+        let ids = try context.fetch(fetch).map(\.cardID)
+        try Task.checkCancellation()
+        return ids
     }
 }

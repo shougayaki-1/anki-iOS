@@ -26,6 +26,8 @@ struct StudyOptions: Codable, Equatable {
     var deckNewUsage: [DeckNewUsage]? = nil
     var sessionResponseMode: SessionResponseMode? = nil
     var librarySearch: LibrarySearchPreferences? = nil
+    var customStudyPresets: [CustomStudyPreset]? = nil
+    var customPractice: CustomPracticeProgress? = nil
     var activeSessionProgress: StudySessionProgressSnapshot? = nil
 }
 
@@ -42,6 +44,7 @@ struct StudySessionProgressSnapshot: Codable, Equatable {
     // Presence marks a finite, one-pass review set. nil keeps legacy sessions dynamic.
     // The original configured cap is retained for starting another set (0 = all).
     var reviewSetLimit: Int? = nil
+    var customStudy: CustomStudyCondition? = nil
 }
 
 enum SessionResponseMode: String, Codable, CaseIterable {
@@ -777,6 +780,56 @@ struct ReviewSwipeIntent {
         case .grade(.again), .grade(.good): return axis == .horizontal
         case .grade(.easy), .grade(.hard): return axis == .vertical
         default: return false
+        }
+    }
+}
+
+// Conditions are reusable; only a running session stores a frozen ID set.
+struct CustomStudyCondition: Codable, Equatable {
+    var scope = LearningScope()
+    var criterion = CustomStudyCriterion.random
+    var limit = 30 // 0 means all; numeric limits match the existing session cap.
+    var official = false
+    var valid: Bool { scope.schemaVersion == 1 && (0...500).contains(limit) }
+}
+enum CustomStudyCriterion: String, Codable, CaseIterable {
+    case todayAgain, lowRecall, due, soon, random
+    var title: String {
+        switch self {
+        case .todayAgain: return "今日Againと評価"
+        case .lowRecall: return "想起確率が低い順（90%未満）"
+        case .due: return "期限到来"
+        case .soon: return "今後7日以内に期限到来"
+        case .random: return "ランダム"
+        }
+    }
+}
+struct CustomStudyPreset: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    var condition: CustomStudyCondition
+}
+struct CustomPracticeProgress: Codable, Equatable {
+    var condition: CustomStudyCondition
+    var cardIDs: [UUID]
+    var index = 0
+    var revealed = false
+    var valid: Bool {
+        condition.valid && !condition.official && Set(cardIDs).count == cardIDs.count
+            && (0...cardIDs.count).contains(index)
+    }
+}
+struct CustomStudyPreview {
+    var cardIDs: [UUID] = []
+    var message: String? = nil
+}
+
+enum CustomStudyError: LocalizedError {
+    case sessionActive, dataChanged
+    var errorDescription: String? {
+        switch self {
+        case .sessionActive: return "進行中の学習を再開・終了してから開始してください。"
+        case .dataChanged: return "カードが更新されました。対象を再構築してください。"
         }
     }
 }

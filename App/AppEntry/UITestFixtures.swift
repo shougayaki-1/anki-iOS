@@ -146,6 +146,33 @@ enum UITestFixtures {
         try store.reload()
         store.showingReview = true
     }
+    @MainActor static func populateCustomMedia(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let audio = try repository.addAudio(AudioEncodingPolicy.prepare(silentAudio()), now: now)
+        try repository.createNote(NoteInput(deckID: repository.decks()[0].id,
+            question: "縦書きの問題", answer: "縦書きの解答",
+            questionAudioID: audio, answerAudioID: audio,
+            questionLayout: .vertical, answerLayout: .vertical), now: now)
+    }
+    @MainActor static func populateCustomScale(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        try populateScale(repository, now: now, basic: true)
+        let cards = try repository.cards(), scheduler = try ReviewScheduler()
+        let day = StudyDay(calendar: repository.calendar, startHour: try repository.settings().dayStartHour).interval(containing: now)
+        let step = now.timeIntervalSince(day.start) / 10_000
+        try repository.transaction {
+            for index in 0..<10_000 {
+                let card = cards[index % cards.count], date = day.start.addingTimeInterval(Double(index) * step)
+                let before = try repository.snapshot(card), wasNew = try scheduler.summary(before).state == "new"
+                let transition = try scheduler.review(before, grade: .good, now: date)
+                let after = try JSONEncoder().encode(transition.after)
+                repository.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                    mode: .mental, durationMs: 1000, wasNew: wasNew, sequence: index + 1))
+                card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+            }
+        }
+    }
+
     @MainActor static func populateScale(_ repository: StudyRepository, now: Date, basic: Bool = false, multipleDecks: Bool = false) throws {
         guard try repository.notes().isEmpty else { return }
         let base = now.addingTimeInterval(-300 * 86400), scheduler = try ReviewScheduler()

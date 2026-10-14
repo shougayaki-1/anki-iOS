@@ -170,6 +170,16 @@ struct BackupValidation {
                       Set(order).count == order.count, progress.answerLimit == order.count,
                       cap == 0 || order.count <= cap else { throw BackupError.invalidData }
             }
+            if let presets = options.customStudyPresets {
+                guard Set(presets.map(\.id)).count == presets.count,
+                      presets.allSatisfy({ $0.condition.valid && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else { throw BackupError.invalidData }
+            }
+            if let practice = options.customPractice {
+                guard practice.valid, data.sessions.isEmpty else { throw BackupError.invalidData }
+            }
+            if let condition = options.activeSessionProgress?.customStudy {
+                guard condition.valid, condition.official, options.activeSessionProgress?.reviewSetLimit != nil else { throw BackupError.invalidData }
+            }
             if let home = options.homeScope {
                 // Stale home references are repaired on load; active session scope remains strict.
                 guard home.schemaVersion == 1 else { throw BackupError.invalidData }
