@@ -37,8 +37,7 @@ struct ReviewView: View {
     @State private var excludedSwipeFrames: [CGRect] = []
     @State private var handleIntent = ReviewSwipeIntent()
     @GestureState private var handleDragging = false
-    @State private var settlingSwipe = false
-    @State private var captureSwipeCard: (() -> UIView?)?
+    @State private var visualSwipeIntent = ReviewSwipeIntent()
     @Environment(\.dynamicTypeSize) private var typeSize
     enum ReadingFocus: Hashable { case question, answer }
     @AccessibilityFocusState private var readingFocus: ReadingFocus?
@@ -166,26 +165,18 @@ struct ReviewView: View {
                         .frame(maxWidth: .infinity)
                         .frame(minHeight: store.review?.card == nil ? geometry.size.height : 0)
                         .background(Color(uiColor: .systemBackground))
+                        .id(store.review?.card?.cardID)
+                        .transition(motionReduced ? .identity : .opacity)
                         .offset(motionReduced ? .zero : swipeTranslation)
                         .background {
                             ReviewCardPan(enabled: swipeEnabled, excludedFrames: excludedSwipeFrames,
                                           onLayout: { scrollable in if !swiping { contentScrollable = scrollable } },
-                                          onAttach: { captureSwipeCard = $0 },
                                           onChange: updateCardSwipe, onEnd: finishCardSwipe,
                                           onCancel: cancelSwipe)
                         }
 
                 }
                 .background { swipeBackdrop }
-                .overlay(alignment: .top) {
-                    if motionReduced, let action = swipeProgress.candidate {
-                        Label(swipeProgress.ready ? "離すと\(action.title)" : action.title,
-                              systemImage: swipeProgress.ready ? "checkmark.circle.fill" : action.symbol)
-                            .font(.headline).padding(12)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-                            .padding(8).allowsHitTesting(false)
-                    }
-                }
                 .onPreferenceChange(ReviewSwipeExclusionKey.self) { excludedSwipeFrames = $0 }
                 .accessibilityIdentifier("reviewCardSurface")
                 .scrollDismissesKeyboard(.interactively)
@@ -218,6 +209,17 @@ struct ReviewView: View {
                     .padding(.horizontal, 24).padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .systemBackground))
+                    // Use the fixed progress area so labels never cover card text
+                    // or depend on how much of the backdrop is exposed.
+                    .overlay {
+                        if let action = swipeProgress.candidate {
+                            Label(swipeProgress.ready ? "離すと\(action.title)" : action.title,
+                                  systemImage: swipeProgress.ready ? "checkmark.circle.fill" : action.symbol)
+                                .font(.headline).foregroundStyle(swipeColor(action)).padding(8)
+                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                                .padding(8).allowsHitTesting(false)
+                        }
+                    }
                     .background { ReviewFixedAreaGestureShield() }
                 }
             }
@@ -229,7 +231,7 @@ struct ReviewView: View {
                         }
                         ReviewActionBar(
                             answerRevealed: review.answerRevealed,
-                            isEnabled: imageAvailable(item) && !settlingSwipe,
+                            isEnabled: imageAvailable(item),
                             onReveal: {
                                 speechPlayer.stop()
                                 typingFocused = false
@@ -284,7 +286,7 @@ struct ReviewView: View {
                 if focused { invalidateSwipe() }
             }
             .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.answerRevealed)
-            .animation(motionReduced ? nil : .easeInOut(duration: 0.18), value: store.review?.card?.cardID)
+            .animation(motionReduced ? nil : .easeInOut(duration: 0.15), value: store.review?.card?.cardID)
             .onAppear { speechEventChanged(speechEvent) }
             .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
             .onChange(of: scenePhase) { _, phase in
@@ -667,14 +669,9 @@ struct ReviewView: View {
         ZStack {
             if let action = swipeProgress.candidate {
                 swipeColor(action).opacity(swipeProgress.ready ? 0.3 : 0.12)
-                VStack(spacing: 6) {
-                    Image(systemName: swipeProgress.ready ? "checkmark.circle.fill" : action.symbol)
-                        .font(.title3)
-                    Text(action.title).font(.headline)
-                    if swipeProgress.ready { Text("離して評価").font(.caption2) }
-                }
-                // The whole label fits in the 96pt strip exposed at the gate.
-                .frame(width: 80).padding(8)
+                Image(systemName: swipeProgress.ready ? "checkmark.circle.fill" : action.symbol)
+                    .font(.title3)
+                    .frame(width: 44, height: 44).padding(4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity,
                        alignment: swipeAlignment(action))
             }
@@ -703,7 +700,8 @@ struct ReviewView: View {
             swipeGate.begin(id: item.cardID, revealed: true)
             store.haptics.prepareSwipe(mode: store.settings.hapticsMode)
         }
-        swipeTranslation = translation
+        _ = visualSwipeIntent.update(x: translation.width, y: translation.height, scrollable: false)
+        swipeTranslation = visualSwipeIntent.displayTranslation(x: translation.width, y: translation.height)
         swipeProgress = swipeGate.update(id: item.cardID, revealed: review.answerRevealed,
             x: translation.width, y: translation.height, now: Date())
         if swipeProgress.feedback { store.haptics.play(.swipeReady, mode: store.settings.hapticsMode) }
@@ -716,37 +714,31 @@ struct ReviewView: View {
         guard case .grade(let grade) = swipeGate.finish(id: card.cardID, revealed: review.answerRevealed,
             x: translation.width, y: translation.height, now: Date()) else { return }
         speechPlayer.stop(); pronunciation.discard(); typingFocused = false
-        let snapshot = motionReduced ? nil : captureSwipeCard?()
-        store.grade(grade, swipePrepared: prepared)
-        guard store.failure == nil, let snapshot, let window = snapshot.window else {
-            snapshot?.removeFromSuperview(); return
+        // Reset before replacing content so the incoming card starts at rest.
+        // The fade never delays grading or disables the next card / Undo.
+        var reset = Transaction(animation: nil)
+        reset.disablesAnimations = true
+        withTransaction(reset) { cancelSwipe() }
+        withAnimation(motionReduced ? nil : .easeOut(duration: 0.15)) {
+            store.grade(grade, swipePrepared: prepared)
         }
-        settlingSwipe = true
-        let target: CGAffineTransform
-        switch grade {
-        case .again: target = CGAffineTransform(translationX: -window.bounds.width, y: 0)
-        case .good: target = CGAffineTransform(translationX: window.bounds.width, y: 0)
-        case .easy: target = CGAffineTransform(translationX: 0, y: -window.bounds.height)
-        case .hard: target = CGAffineTransform(translationX: 0, y: window.bounds.height)
-        }
-        UIView.animate(withDuration: 0.22, animations: {
-            snapshot.transform = target; snapshot.alpha = 0
-        }, completion: { _ in snapshot.removeFromSuperview(); settlingSwipe = false })
     }
 
     private var swipeEnabled: Bool {
         guard let review = store.review, review.answerRevealed,
               let item = review.card, imageAvailable(item) else { return false }
         return store.settings.reviewAppearance.gesturesEnabled && !voiceOver && scenePhase == .active &&
-            !typingFocused && !settlingSwipe && store.showingReview && store.failure == nil &&
+            !typingFocused && store.showingReview && store.failure == nil &&
             !whiteboardPresented && editingCard == nil && !confirmingEdit
     }
     private func invalidateSwipe() {
         swipeGate.invalidate(); swipeProgress = .idle; swipeTranslation = .zero
+        visualSwipeIntent = ReviewSwipeIntent()
     }
     private func cancelSwipe() {
         swipeGate.cancel(); swipeProgress = .idle
-        withAnimation(motionReduced ? nil : .easeOut(duration: 0.18)) { swipeTranslation = .zero }
+        visualSwipeIntent = ReviewSwipeIntent()
+        withAnimation(motionReduced ? nil : .easeOut(duration: 0.15)) { swipeTranslation = .zero }
         swiping = false
     }
 
@@ -1071,7 +1063,6 @@ private struct ReviewCardPan: UIViewRepresentable {
     let enabled: Bool
     let excludedFrames: [CGRect]
     let onLayout: (Bool) -> Void
-    let onAttach: (@escaping () -> UIView?) -> Void
     let onChange: (CGSize) -> Void
     let onEnd: (CGSize) -> Void
     let onCancel: () -> Void
@@ -1114,16 +1105,6 @@ private struct ReviewCardPan: UIViewRepresentable {
                     scroll.addGestureRecognizer(gesture)
                     scroll.panGestureRecognizer.require(toFail: gesture)
                     recognizer = gesture
-                    DispatchQueue.main.async { [weak self, weak scroll] in
-                        self?.configuration?.onAttach { [weak scroll] in
-                            guard let scroll, let window = scroll.window,
-                                  let snapshot = scroll.snapshotView(afterScreenUpdates: false) else { return nil }
-                            snapshot.frame = scroll.convert(scroll.bounds, to: window)
-                            snapshot.isUserInteractionEnabled = false
-                            window.addSubview(snapshot)
-                            return snapshot
-                        }
-                    }
                     observations = [scroll.observe(\.contentSize, options: [.initial, .new]) { [weak self] _, _ in self?.measure() },
                                     scroll.observe(\.bounds, options: [.new]) { [weak self] _, _ in self?.measure() }]
                     return

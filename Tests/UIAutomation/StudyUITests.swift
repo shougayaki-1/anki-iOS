@@ -1135,7 +1135,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(answer.waitForExistence(timeout: 5))
         XCTAssertFalse(app.descendants(matching: .any)["reviewSwipeHandle"].exists, "Short content allows all axes directly")
         attach(app, "Issue204-short-before")
-        for (index, delta) in [(130.0, 0.0), (-130, 0), (0, -130), (0, 130)].enumerated() {
+        for (index, delta) in [(130.0, 45.0), (-130, 45), (45, -130), (45, 130)].enumerated() {
             dragReview(answer, dx: delta.0, dy: delta.1)
             XCTAssertTrue(app.buttons["undoReview"].isEnabled, "Direction \(index) must grade")
             attach(app, "Issue204-short-after-\(index)")

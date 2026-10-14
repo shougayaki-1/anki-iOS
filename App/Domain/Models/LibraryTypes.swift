@@ -758,6 +758,20 @@ struct ReviewSwipeIntent {
         }
         return axis == .horizontal || axis == .vertical
     }
+    // Presentation only: the grading gate continues to receive raw translation.
+    func displayTranslation(x: Double, y: Double) -> CGSize {
+        guard x.isFinite, y.isFinite, accepts(x: x, y: y) else { return .zero }
+        func resisted(_ value: Double) -> Double {
+            let magnitude = min(abs(value), ReviewSwipeAction.distance)
+            let fraction = magnitude / ReviewSwipeAction.distance
+            return (value < 0 ? -1 : 1) * 60 * (2 * fraction - fraction * fraction)
+        }
+        switch axis {
+        case .horizontal: return CGSize(width: resisted(x), height: 0)
+        case .vertical: return CGSize(width: 0, height: resisted(y))
+        default: return .zero
+        }
+    }
     func accepts(x: Double, y: Double) -> Bool {
         switch ReviewSwipeAction.candidate(x: x, y: y, revealed: true) {
         case .grade(.again), .grade(.good): return axis == .horizontal
