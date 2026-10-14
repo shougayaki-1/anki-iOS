@@ -138,7 +138,7 @@ struct SettingsView: View {
                         get: { store.settings.reviewAppearance.animationsEnabled },
                         set: { value in update { $0.reviewAppearance.animationsEnabled = value } }
                     )).accessibilityIdentifier("reviewAnimationsToggle")
-                    Text("解答の表示順は答え表示後に適用します。スワイプは専用領域で操作し、VoiceOver使用中はボタンを使います。画像マスクは常に表示し、端末の文字サイズと「視差効果を減らす」設定を反映します。")
+                    Text("解答の表示順は答え表示後に適用します。答え表示後、スクロール不要なカードはカード上で上下左右、スクロールが必要なカードは本文上で左右・下部操作領域で上下左右にスワイプ評価できます。長文の本文上下操作はスクロール専用です。スワイプをオフにした場合やVoiceOver使用中は評価ボタンを使えます。画像マスクは常に表示し、端末の文字サイズと「視差効果を減らす」設定を反映します。")
                         .fixedSize(horizontal: false, vertical: true)
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 } header: { Text("学習画面").foregroundStyle(Color("SecondaryText")) }.headerProminence(.increased)
