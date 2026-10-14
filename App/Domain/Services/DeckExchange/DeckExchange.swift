@@ -35,8 +35,13 @@ struct ValidatedDeckPackage: Sendable {
     var cardCount: Int { package.notes.reduce(0) { $0 + ((try? CardGeneration.variants(kind: $1.kind, content: $1.content).count) ?? 0) } }
 }
 enum DeckImportPlanError: LocalizedError {
-    case changed
-    var errorDescription: String? { "取込先または重複の状態が変わりました。更新されたプレビューを確認して、もう一度確定してください。" }
+    case changed, consent
+    var errorDescription: String? {
+        switch self {
+        case .changed: return "取込先または更新対象の状態が変わりました。更新されたプレビューを確認して、もう一度確定してください。"
+        case .consent: return "更新対象と履歴方針への同意が必要です。差分を確認してください。"
+        }
+    }
 }
 
 enum DeckImportDestination: Equatable {
@@ -53,10 +58,36 @@ struct DeckImportMapping: Equatable, Identifiable {
     let reused: Bool
 }
 
+enum DeckNoteUpdateConsent: String, Equatable {
+    case preserveHistory, resetSchedule
+}
+
+struct DeckNoteUpdate: Equatable, Identifiable {
+    let id: UUID // Source and target UUID must match; content similarity is never identity.
+    let before: BackupNote
+    let cards: [BackupStudyCard]
+    let beforeContent: TextContent
+    let beforeTags: [String]
+    let incoming: SharedNote
+    let mediaHashesBefore: [String?]
+    let mediaHashesAfter: [String?]
+    let changes: [DeckNoteDifference]
+    let requiresReset: Bool
+    let revision: Int
+}
+
+struct DeckNoteDifference: Equatable, Identifiable {
+    let id: String
+    let before: String
+    let after: String
+}
+
 struct DeckImportPreview: Equatable {
-    let duplicates: Set<UUID>
+    var duplicates: Set<UUID>
     let destinationName: String
     let mappings: [DeckImportMapping]
+    var updates: [DeckNoteUpdate] = []
+    var updateBlocked: [UUID: String] = [:]
 }
 
 struct DeckImportReceipt {
@@ -65,10 +96,12 @@ struct DeckImportReceipt {
     let createdNotes: Int
     let createdCards: Int
     let duplicateNotes: Int
+    var updatedNotes = 0
+    var resetNotes = 0
     var skipped: [AnkiSkippedNote] = []
     var warnings: [AnkiSkippedNote] = []
     var outcome: ImportResult.Outcome {
-        guard createdNotes > 0 else { return .empty }
+        guard createdNotes + updatedNotes > 0 else { return .empty }
         return duplicateNotes > 0 || !skipped.isEmpty || !warnings.isEmpty ? .partial : .complete
     }
     var title: String {
@@ -79,7 +112,7 @@ struct DeckImportReceipt {
         }
     }
     var summary: String {
-        "追加 \(createdNotes)ノート / 新規カード \(createdCards)枚\n重複スキップ \(duplicateNotes)ノート / 未対応 \(skipped.count)ノート / 変更の警告 \(warnings.count)件"
+        "追加 \(createdNotes)ノート / 新規カード \(createdCards)枚\n更新 \(updatedNotes)ノート（未学習リセット \(resetNotes)）\n重複スキップ \(duplicateNotes)ノート / 未対応 \(skipped.count)ノート / 変更の警告 \(warnings.count)件"
     }
 }
 
@@ -259,14 +292,89 @@ extension StudyRepository {
             let processed = Set(ready.map(\.id))
             remaining.removeAll { processed.contains($0.id) }
         }
-        return DeckImportPreview(duplicates: duplicates,
+        var preview = DeckImportPreview(duplicates: duplicates,
             destinationName: mappings.first { $0.id == package.rootID }!.destinationPath, mappings: mappings)
+        // Only reused destinations can be updated. Never relocate an existing note.
+        if case .mergeInto = destination {
+            let localNotes = Dictionary(grouping: try notes(), by: \.id)
+            let localCards = Dictionary(grouping: try cards(), by: \.noteID)
+            let tagNames = Dictionary(uniqueKeysWithValues: try tags().map { ($0.id, $0.name) })
+            let draft = try session()
+            let undoCardID: UUID?
+            if let undoID = draft?.undoLogID { undoCardID = try logs().first { $0.id == undoID }?.cardID }
+            else { undoCardID = nil }
+            for source in package.notes {
+                guard let matches = localNotes[source.id], matches.count == 1 else { continue }
+                preview.duplicates.insert(source.id)
+                let note = matches[0], existingCards = localCards[note.id] ?? []
+                let before = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+                let variants = try CardGeneration.variants(kind: source.kind, content: source.content)
+                let mapping = mappings.first { $0.id == source.deckID }
+                let keys = existingCards.map(\.variantKey)
+                let blocked: String?
+                if mapping?.reused != true || mapping?.targetID != note.deckID {
+                    blocked = "UUIDは一致しますが統合先が異なります。既存ノートは移動しません。"
+                } else if note.type != source.kind.rawValue || Set(keys) != Set(variants) || keys.count != variants.count ||
+                            !existingCards.allSatisfy({ $0.identityKey == "\(note.id.uuidString):\($0.variantKey)" }) {
+                    blocked = "形式またはカード構成が変わるため、カードUUID・履歴を安全に対応付けできません。別ノートとして追加してください。"
+                } else if existingCards.contains(where: { $0.id == draft?.cardID || $0.id == undoCardID }) {
+                    blocked = "学習中またはUndo対象のノートです。進行中の回答・Undoを保護するため更新できません。スキップ／別ノート追加を選んでください。"
+                } else { blocked = nil }
+                if let blocked { preview.updateBlocked[source.id] = blocked; continue }
+                var changes: [DeckNoteDifference] = []
+                func difference(_ name: String, _ old: String, _ new: String) {
+                    if old != new { changes.append(DeckNoteDifference(id: name, before: old.isEmpty ? "なし" : old, after: new.isEmpty ? "なし" : new)) }
+                }
+                difference("問題", before.question, source.content.question)
+                difference("解答", before.answer, source.content.answer)
+                difference("ヒント", before.hint ?? "", source.content.hint ?? "")
+                difference("解説", before.explanation, source.content.explanation)
+                let previousTags = note.tagIDs.compactMap { tagNames[$0] }.sorted()
+                difference("タグ", previousTags.joined(separator: "、"), source.tags.sorted().joined(separator: "、"))
+                func mediaDifference(_ name: String, _ old: UUID?, _ new: UUID?) {
+                    let oldHash = old.flatMap { existingHashes[$0] }, newHash = new.flatMap { hashes[$0] }
+                    guard oldHash != newHash else { return }
+                    changes.append(DeckNoteDifference(id: name,
+                        before: oldHash.map { "添付あり（内容ハッシュ：" + $0.prefix(12) + "）" } ?? "添付なし",
+                        after: newHash.map { "添付あり（内容ハッシュ：" + $0.prefix(12) + "）" } ?? "添付なし"))
+                }
+                mediaDifference("画像", before.imageID, source.content.imageID)
+                mediaDifference("問題音声", before.questionAudioID, source.content.questionAudioID)
+                mediaDifference("解答音声", before.answerAudioID, source.content.answerAudioID)
+                let previousMode = ResponseMode(rawValue: note.defaultResponseMode) ?? .mental
+                difference("回答方法", previousMode.title, source.responseMode.title)
+                difference("問題読み上げ", before.speechQuestion ?? "", source.content.speechQuestion ?? "")
+                difference("解答読み上げ", before.speechAnswer ?? "", source.content.speechAnswer ?? "")
+                difference("問題レイアウト", before.questionLayout?.rawValue ?? "標準", source.content.questionLayout?.rawValue ?? "標準")
+                difference("解答レイアウト", before.answerLayout?.rawValue ?? "標準", source.content.answerLayout?.rawValue ?? "標準")
+                // Strict comparison: anything affecting the prompt or answer requires reset.
+                var oldCore = before, newCore = source.content
+                oldCore.hint = nil; newCore.hint = nil
+                oldCore.explanation = ""; newCore.explanation = ""
+                oldCore.questionLayout = nil; newCore.questionLayout = nil
+                oldCore.answerLayout = nil; newCore.answerLayout = nil
+                let reset = try DeckExchange.fingerprint(kind: source.kind, content: oldCore, hashes: existingHashes) !=
+                    DeckExchange.fingerprint(kind: source.kind, content: newCore, hashes: hashes) || previousMode != source.responseMode
+                if reset && (source.kind == .cloze || source.kind == .imageOcclusion) {
+                    preview.updateBlocked[source.id] = "穴埋め・マスクの出題変更は対応が曖昧になるため更新できません。別ノートとして追加してください。"
+                    continue
+                }
+                guard !changes.isEmpty else { continue }
+                preview.updates.append(DeckNoteUpdate(id: source.id, before: BackupNote(note),
+                    cards: existingCards.map(BackupStudyCard.init).sorted { $0.id.uuidString < $1.id.uuidString },
+                    beforeContent: before, beforeTags: previousTags, incoming: source,
+                    mediaHashesBefore: [before.imageID, before.questionAudioID, before.answerAudioID].map { $0.flatMap { existingHashes[$0] } },
+                    mediaHashesAfter: [source.content.imageID, source.content.questionAudioID, source.content.answerAudioID].map { $0.flatMap { hashes[$0] } },
+                    changes: changes, requiresReset: reset, revision: mutationRevision))
+            }
+        }
+        return preview
     }
 
     func importDeckPackage(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date) throws -> Int {
         try importDeckPackageReceipt(validated, skipDuplicates: skipDuplicates, now: now).createdNotes
     }
-    func importDeckPackageReceipt(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date, destination: DeckImportDestination = .newRoot, expectedPreview: DeckImportPreview? = nil) throws -> DeckImportReceipt {
+    func importDeckPackageReceipt(_ validated: ValidatedDeckPackage, skipDuplicates: Bool, now: Date, destination: DeckImportDestination = .newRoot, expectedPreview: DeckImportPreview? = nil, updates: [UUID: DeckNoteUpdateConsent] = [:]) throws -> DeckImportReceipt {
         let interval = PerformanceProbe.begin("Import.deckPackage")
         defer { PerformanceProbe.end(interval) }
         // Only decode can construct this immutable, fully validated value. Do not
@@ -274,12 +382,32 @@ extension StudyRepository {
         try Task.checkCancellation()
         let preview = try previewDeckImport(validated, destination: destination)
         if let expectedPreview, expectedPreview != preview { throw DeckImportPlanError.changed }
-        let notes = validated.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }
-        let duplicateCount = skipDuplicates ? preview.duplicates.count : 0
+        if !updates.isEmpty {
+            guard expectedPreview != nil else { throw DeckImportPlanError.consent }
+            for (id, consent) in updates {
+                guard let candidate = preview.updates.first(where: { $0.id == id }),
+                      consent == (candidate.requiresReset ? .resetSchedule : .preserveHistory) else { throw DeckImportPlanError.consent }
+            }
+        }
+        let notes = validated.package.notes.filter { updates[$0.id] != nil || !skipDuplicates || !preview.duplicates.contains($0.id) }
+        let duplicateCount = skipDuplicates ? preview.duplicates.filter { updates[$0] == nil }.count : 0
         guard !notes.isEmpty else {
             return DeckImportReceipt(rootDeckID: nil, destinationName: nil, createdNotes: 0, createdCards: 0, duplicateNotes: duplicateCount)
         }
-        let required = Set(notes.flatMap { [$0.content.imageID].compactMap { $0 } + $0.content.audioIDs })
+        let updateCandidates = Dictionary(uniqueKeysWithValues: preview.updates.map { ($0.id, $0) })
+        let updateModels = updates.isEmpty ? [:] : Dictionary(uniqueKeysWithValues: try self.notes().filter { updates[$0.id] != nil }.map { ($0.id, $0) })
+        let updateCards = updates.isEmpty ? [:] : Dictionary(grouping: try cards().filter { updates[$0.noteID] != nil }, by: \.noteID)
+        let localHashes = Dictionary(uniqueKeysWithValues: try self.assets().map { ($0.id, $0.sha256) })
+        let sourceHashes = Dictionary(uniqueKeysWithValues: validated.package.media.map { ($0.id, $0.sha256) })
+        let required = Set(notes.flatMap { source -> [UUID] in
+            let incoming = [source.content.imageID, source.content.questionAudioID, source.content.answerAudioID]
+            guard updates[source.id] != nil, let candidate = updateCandidates[source.id] else { return incoming.compactMap { $0 } }
+            let old = [candidate.beforeContent.imageID, candidate.beforeContent.questionAudioID, candidate.beforeContent.answerAudioID]
+            return zip(old, incoming).compactMap { previous, next in
+                guard let next, previous.flatMap({ localHashes[$0] }) != sourceHashes[next] else { return nil }
+                return next
+            }
+        })
         var written: [String] = [], remapped: [UUID: UUID] = [:], assets: [StoredImage] = []
         do {
             for asset in validated.package.media where required.contains(asset.id) {
@@ -312,7 +440,26 @@ extension StudyRepository {
                     content.questionAudioID = content.questionAudioID.flatMap { remapped[$0] }
                     content.answerAudioID = content.answerAudioID.flatMap { remapped[$0] }
                     let input = NoteInput(deckID: deckIDs[source.deckID]!, kind: source.kind, responseMode: source.responseMode)
-                    let note = Note(input: input, content: try JSONEncoder().encode(content), now: now)
+                    let isUpdate = updates[source.id] != nil
+                    let note: Note
+                    if isUpdate {
+                        guard let existing = updateModels[source.id] else { throw DeckImportPlanError.changed }
+                        note = existing
+                        let previous = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+                        content.speechOverrides = previous.speechOverrides
+                        // Keep existing attachment UUIDs when their bytes have not changed.
+                        if previous.imageID.flatMap({ localHashes[$0] }) == source.content.imageID.flatMap({ sourceHashes[$0] }) { content.imageID = previous.imageID }
+                        if previous.questionAudioID.flatMap({ localHashes[$0] }) == source.content.questionAudioID.flatMap({ sourceHashes[$0] }) { content.questionAudioID = previous.questionAudioID }
+                        if previous.answerAudioID.flatMap({ localHashes[$0] }) == source.content.answerAudioID.flatMap({ sourceHashes[$0] }) { content.answerAudioID = previous.answerAudioID }
+                        note.contentPayload = try JSONEncoder().encode(content)
+                        note.defaultResponseMode = source.responseMode.rawValue
+                        note.updatedAt = now
+                        if updates[source.id] == .resetSchedule {
+                            for card in updateCards[note.id] ?? [] {
+                                card.fsrsPayload = fresh; card.dueDate = now; card.updatedAt = now
+                            }
+                        }
+                    } else { note = Note(input: input, content: try JSONEncoder().encode(content), now: now) }
                     if source.tags.isEmpty { note.tagIDs = [] }
                     else if let cached = importedTags[source.tags] { note.tagIDs = cached }
                     else {
@@ -320,14 +467,17 @@ extension StudyRepository {
                         // Retain only a bounded number of tag combinations in this transaction.
                         if importedTags.count < 128 { importedTags[source.tags] = ids }
                     }
-                    context.insert(note)
-                    for variant in try CardGeneration.variants(kind: source.kind, content: content) {
-                        context.insert(StudyCard(noteID: note.id, variantKey: variant, payload: fresh, now: now))
-                        cardCount += 1
+                    if !isUpdate {
+                        context.insert(note)
+                        for variant in try CardGeneration.variants(kind: source.kind, content: content) {
+                            context.insert(StudyCard(noteID: note.id, variantKey: variant, payload: fresh, now: now))
+                            cardCount += 1
+                        }
                     }
                 }
                 return DeckImportReceipt(rootDeckID: deckIDs[validated.package.rootID], destinationName: preview.destinationName,
-                                         createdNotes: notes.count, createdCards: cardCount, duplicateNotes: duplicateCount)
+                                         createdNotes: notes.count - updates.count, createdCards: cardCount, duplicateNotes: duplicateCount,
+                                         updatedNotes: updates.count, resetNotes: updates.values.filter { $0 == .resetSchedule }.count)
             }
         } catch { for path in written { try? mediaStore.remove(path) }; throw error }
     }
