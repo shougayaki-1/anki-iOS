@@ -3014,3 +3014,105 @@ extension StudyRepositoryTests {
         XCTAssertTrue(try repo.logs().isEmpty)
     }
 }
+
+extension StudyRepositoryTests {
+    func testCustomStudy3000CardsWith10000TodayLogsKeepsOwnHistoryEligible() throws {
+        let repo = try fixture()
+        try UITestFixtures.populateCustomScale(repo, now: now)
+        let condition = CustomStudyCondition(criterion: .random, limit: 0)
+        XCTAssertEqual(try repo.customStudyPreview(condition, now: now).cardIDs.count, 3000)
+        let ids = Array(try repo.customStudyPreview(condition, now: now).cardIDs.prefix(10))
+        let before = try repo.counts(now: now), decodes = repo.queueStateDecodeCount
+        let indexBuilds = repo.customStudyIndexBuildCount
+        try repo.startCustomPractice(CustomStudyCondition(limit: 10), ids: ids, now: now)
+        for id in ids {
+            XCTAssertEqual(try repo.customPracticeCard(now: now)?.cardID, id)
+            try repo.advanceCustomPractice(revealOnly: true, now: now)
+            try repo.advanceCustomPractice(revealOnly: false, now: now)
+        }
+        XCTAssertNil(try repo.customPracticeCard(now: now))
+        XCTAssertEqual(try repo.logs().count, 10_000)
+        XCTAssertEqual(try repo.counts(now: now), before)
+        XCTAssertEqual(repo.queueStateDecodeCount, decodes)
+        XCTAssertEqual(repo.customStudyIndexBuildCount, indexBuilds)
+    }
+
+    func testCustomTodaySiblingIndexAllowsRepeatedOwnReviewsAndRechecksOtherSibling() throws {
+        let repo = try fixture(), scheduler = try ReviewScheduler()
+        let note = try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A", reverseEnabled: true), now: now)
+        let cards = try repo.cards().filter { $0.noteID == note }
+        func record(_ card: StudyCard, sequence: Int) throws {
+            try repo.transaction {
+                let before = try repo.snapshot(card)
+                let transition = try scheduler.review(before, grade: .good, now: now)
+                let after = try JSONEncoder().encode(transition.after)
+                repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: after,
+                    mode: .mental, durationMs: 0, wasNew: false, sequence: sequence))
+                card.fsrsPayload = after; card.dueDate = try scheduler.summary(transition.after).dueDate
+            }
+        }
+        try record(cards[0], sequence: 1); try record(cards[0], sequence: 2)
+        let condition = CustomStudyCondition(limit: 0)
+        let preview = try repo.customStudyPreview(condition, now: now)
+        XCTAssertEqual(preview.cardIDs, [cards[0].id])
+        try repo.startCustomPractice(condition, ids: preview.cardIDs, now: now)
+        XCTAssertEqual(try repo.customPracticeCard(now: now)?.cardID, cards[0].id)
+        try record(cards[1], sequence: 3)
+        XCTAssertNil(try repo.customPracticeCard(now: now))
+        XCTAssertTrue(try repo.customStudyPreview(condition, now: now).cardIDs.isEmpty)
+        let indexBuilds = repo.customStudyIndexBuildCount
+        XCTAssertEqual(try repo.customStudyPreview(condition, now: now.addingTimeInterval(86400)).cardIDs.count, 1)
+        XCTAssertEqual(repo.customStudyIndexBuildCount, indexBuilds + 1)
+    }
+}
+
+extension StudyRepositoryTests {
+    func testCustomStudyIndexRechecksPendingChangesAndRollback() throws {
+        let repo = try fixture(); try create(repo)
+        let condition = CustomStudyCondition(limit: 0)
+        let id = try XCTUnwrap(repo.customStudyPreview(condition, now: now).cardIDs.first)
+        try repo.card(id)?.isSuspended = true
+        XCTAssertTrue(try repo.customStudyPreview(condition, now: now).cardIDs.isEmpty)
+        repo.context.rollback()
+        XCTAssertEqual(try repo.customStudyPreview(condition, now: now).cardIDs, [id])
+        try repo.startCustomPractice(condition, ids: [id], now: now)
+        try repo.card(id)?.isSuspended = true
+        try repo.finishCustomPractice()
+        XCTAssertTrue(try repo.customStudyPreview(condition, now: now).cardIDs.isEmpty)
+        try repo.setSuspended(cardID: id, value: false, now: now)
+        _ = try repo.customStudyPreview(condition, now: now)
+        try repo.startCustomPractice(condition, ids: [id], now: now)
+        let builds = repo.customStudyIndexBuildCount
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.advanceCustomPractice(revealOnly: true, now: now))
+        repo.save = { try $0.save() }
+        XCTAssertEqual(try repo.customPracticeCard(now: now)?.cardID, id)
+        XCTAssertEqual(repo.customStudyIndexBuildCount, builds + 1)
+        XCTAssertFalse(try XCTUnwrap(repo.options().customPractice).revealed)
+        try repo.setStudyPaused(deckID: repo.decks()[0].id, paused: true, now: now)
+        XCTAssertNil(try repo.customPracticeCard(now: now))
+    }
+}
+
+extension StudyRepositoryTests {
+    func testCustomStudyAsyncPreparationMatchesAndRejectsCancellation() async throws {
+        let repo = try fixture(); try create(repo); try create(repo)
+        let cancelled = Task { try await repo.prepareCustomStudyCandidates(now: now) }
+        cancelled.cancel()
+        do { try await cancelled.value; XCTFail("Cancelled preparation must not publish an index") }
+        catch is CancellationError {} catch { XCTFail("Unexpected error: \(error)") }
+        XCTAssertEqual(repo.customStudyIndexBuildCount, 0)
+        try await repo.prepareCustomStudyCandidates(now: now)
+        XCTAssertEqual(repo.customStudyIndexBuildCount, 1)
+        let preview = try repo.customStudyPreview(CustomStudyCondition(limit: 0), now: now)
+        XCTAssertEqual(Set(preview.cardIDs), Set(try repo.cards().map(\.id)))
+        XCTAssertEqual(repo.customStudyIndexBuildCount, 1)
+        let card = try XCTUnwrap(repo.card(preview.cardIDs[0]))
+        card.isSuspended = true
+        do { try await repo.prepareCustomStudyCandidates(now: now); XCTFail("Unsaved mutations must invalidate the index") }
+        catch CustomStudyError.dataChanged {} catch { XCTFail("Unexpected error: \(error)") }
+        repo.context.rollback()
+        try await repo.prepareCustomStudyCandidates(now: now)
+        XCTAssertEqual(repo.customStudyIndexBuildCount, 2)
+    }
+}

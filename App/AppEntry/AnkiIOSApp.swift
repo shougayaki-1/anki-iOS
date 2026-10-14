@@ -184,6 +184,12 @@ struct AppRootView: View {
                     try UITestFixtures.populateScale(store.repository, now: store.clock(), basic: args.contains("-study-test-scale-basic"), multipleDecks: args.contains("-study-performance"))
                     try store.reload()
                 }
+                if studyURL != nil, args.contains("-study-test-custom-media"), let store {
+                    try UITestFixtures.populateCustomMedia(store.repository, now: store.clock()); try store.reload()
+                }
+                if studyURL != nil, args.contains("-study-test-custom-scale"), let store {
+                    try UITestFixtures.populateCustomScale(store.repository, now: store.clock()); try store.reload()
+                }
                 if studyURL != nil, args.contains("-study-test-tag-filters"), let store {
                     try UITestFixtures.populateTagFilters(store.repository, now: store.clock())
                     try store.reload()

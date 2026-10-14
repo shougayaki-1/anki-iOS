@@ -6,6 +6,14 @@ struct CustomStudyView: View {
     @FocusState private var focusedField: Field?
     @State private var condition = CustomStudyCondition()
     @State private var preview = CustomStudyPreview()
+    @State private var preparing = false
+    @State private var rebuildRevision = 0
+    private struct Request: Equatable {
+        let condition: CustomStudyCondition
+        let dataRevision: Int
+        let rebuildRevision: Int
+    }
+    private var request: Request { Request(condition: condition, dataRevision: store.dataRevision, rebuildRevision: rebuildRevision) }
     @State private var presets: [CustomStudyPreset] = []
     @State private var editingID: UUID?
     @State private var name = ""
@@ -18,9 +26,9 @@ struct CustomStudyView: View {
         Form {
             if hasPractice {
                 Section("中断したカスタム練習") {
-                    Button("練習を再開") { showingPractice = true }.accessibilityIdentifier("resumeCustomPractice")
+                    Button("練習を再開") { showingPractice = true }.disabled(preparing).accessibilityIdentifier("resumeCustomPractice")
                     Button("練習を終了", role: .destructive) {
-                        run { try store.repository.finishCustomPractice(); reload() }
+                        run { try store.repository.finishCustomPractice(); reload(); rebuild() }
                     }
                 }
             }
@@ -56,6 +64,7 @@ struct CustomStudyView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             Section("対象プレビュー") {
+                if preparing { ProgressView("対象を読み込み中") }
                 Text("\(preview.cardIDs.count)枚・\(condition.criterion.title)・\(condition.official ? "正式復習" : "練習")")
                 Text("停止・一時非表示と兄弟カード抑制を適用。1枚につき1回答。実行中の対象は固定し、削除・停止されたカードはスキップします。")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -63,7 +72,7 @@ struct CustomStudyView: View {
                 Button("対象を再構築") { rebuild() }
                 Button("カスタム学習を開始") { start() }
                     .buttonStyle(PrimaryActionStyle())
-                    .disabled(preview.cardIDs.isEmpty || hasPractice || store.review != nil).accessibilityIdentifier("startCustomStudy")
+                    .disabled(preparing || preview.cardIDs.isEmpty || hasPractice || store.review != nil).accessibilityIdentifier("startCustomStudy")
                 if store.review != nil { Text("ホームから既存の学習を再開・終了してから開始してください。") }
             }
             Section("条件を保存") {
@@ -72,7 +81,7 @@ struct CustomStudyView: View {
                     run {
                         let preset = CustomStudyPreset(id: editingID ?? UUID(), name: name.trimmingCharacters(in: .whitespacesAndNewlines), condition: condition)
                         try store.repository.saveCustomPreset(preset)
-                        editingID = preset.id; reload()
+                        editingID = preset.id; reload(); rebuild()
                     }
                 }.disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty).accessibilityIdentifier("saveCustomStudy")
                 if editingID != nil { Button("別の条件を新規作成") { editingID = nil; name = "" } }
@@ -95,11 +104,12 @@ struct CustomStudyView: View {
         .scrollDismissesKeyboard(.interactively)
         .onSubmit { focusedField = nil }
         .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("完了") { focusedField = nil } } }
-        .onAppear { reload(); rebuild() }
-        .onChange(of: condition) { _, _ in rebuild() }
+        .onAppear { reload() }
+        .onChange(of: condition) { _, _ in preview = CustomStudyPreview() }
+        .task(id: request) { await refreshPreview(request) }
         .confirmationDialog("保存した条件を削除しますか？", isPresented: Binding(get: { deleteTarget != nil }, set: { if !$0 { deleteTarget = nil } })) {
             Button("削除", role: .destructive) {
-                if let target = deleteTarget { run { try store.repository.deleteCustomPreset(target.id); reload() } }
+                if let target = deleteTarget { run { try store.repository.deleteCustomPreset(target.id); reload(); rebuild() } }
                 deleteTarget = nil
             }
         }
@@ -117,8 +127,20 @@ struct CustomStudyView: View {
         }
     }
     private func rebuild() {
-        preview = CustomStudyPreview()
-        run { preview = try store.repository.customStudyPreview(condition, now: store.clock()) }
+        preview = CustomStudyPreview(); rebuildRevision += 1
+    }
+    private func refreshPreview(_ requested: Request) async {
+        preparing = true; preview = CustomStudyPreview()
+        do {
+            let now = store.clock()
+            try await store.repository.prepareCustomStudyCandidates(now: now)
+            guard !Task.isCancelled, request == requested else { return }
+            preview = try store.repository.customStudyPreview(requested.condition, now: store.clock())
+            failure = nil; preparing = false
+        } catch {
+            guard !Task.isCancelled, request == requested else { return }
+            failure = error.localizedDescription; preparing = false
+        }
     }
     private func start() {
         if condition.official {
@@ -138,6 +160,11 @@ struct CustomStudyView: View {
 private struct CustomPracticeView: View {
     @Bindable var store: StudyStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @StateObject private var speechPlayer = StudySpeechPlayer()
+    @State private var lastSpeechEvent: SpeechPresentationKey?
+    @State private var autoSpeechPaused = false
     @State private var progress: CustomPracticeProgress?
     @State private var card: NoteItem?
     @State private var failure: String?
@@ -151,7 +178,9 @@ private struct CustomPracticeView: View {
                         Text(progress.condition.criterion.title)
                         Text("進行: \(progress.index) / \(progress.cardIDs.count)枚（スキップを含む）")
                         if let card {
-                            Text(card.content.question).font(.title2)
+                            StudyTextView(text: card.content.question, layout: card.content.questionLayout, font: questionFont, fontSize: store.settings.reviewAppearance.textSize == .standard ? 24 : 32)
+                                .accessibilityIdentifier("customPracticeQuestion")
+                            audioControls(card, revealed: progress.revealed)
                             if let id = card.sourceContent.imageID, let url = try? store.repository.assetURL(id: id) {
                                 AsyncStudyImageView(file: url, namespace: store.mediaDisplayNamespace, revision: store.dataRevision, identity: id.uuidString,
                                     masks: card.kind == .imageOcclusion ? card.sourceContent.masks ?? [] : [],
@@ -160,7 +189,8 @@ private struct CustomPracticeView: View {
                             }
                             if !progress.revealed { StudyHintView(hint: card.content.hint).id(card.cardID) }
                             if progress.revealed {
-                                Text(card.content.answer)
+                                StudyTextView(text: card.content.answer, layout: card.content.answerLayout, font: answerFont, fontSize: store.settings.reviewAppearance.textSize == .standard ? 20 : 28)
+                                    .accessibilityIdentifier("customPracticeAnswer")
                                 if !card.content.explanation.isEmpty { Text(card.content.explanation).foregroundStyle(.secondary) }
                                 Button("次のカード") { update(revealOnly: false) }.buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("nextCustomPractice")
                             } else {
@@ -181,6 +211,74 @@ private struct CustomPracticeView: View {
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("中断") { dismiss() } } }
             .onAppear { reload() }
             .onChange(of: store.dataRevision) { _, _ in reload() }
+            .onChange(of: speechEvent) { _, event in speechEventChanged(event) }
+            .onChange(of: scenePhase) { _, phase in if phase != .active { speechPlayer.stop() } }
+            .onDisappear { speechPlayer.stop() }
+        }
+    }
+    private var questionFont: Font {
+        switch store.settings.reviewAppearance.textSize {
+        case .standard: return .title2
+        case .larger: return .title
+        case .extraLarge: return .largeTitle
+        }
+    }
+    private var answerFont: Font {
+        switch store.settings.reviewAppearance.textSize {
+        case .standard: return .body
+        case .larger: return .title2
+        case .extraLarge: return .title
+        }
+    }
+    private var speechEvent: SpeechPresentationKey? {
+        card.map { SpeechPresentationKey(cardID: $0.cardID, revealed: progress?.revealed == true) }
+    }
+    private func speechEventChanged(_ event: SpeechPresentationKey?) {
+        guard event != lastSpeechEvent else { return }
+        speechPlayer.stop(); lastSpeechEvent = event
+        guard let event, let card, scenePhase == .active, !voiceOver, !autoSpeechPaused,
+              store.settings.speech.autoplay(deckID: card.deckID, noteOverride: card.sourceContent.speechOverrides?[card.variantKey]).includes(event.side) else { return }
+        playAudio(event.side, card: card)
+    }
+    private func playAudio(_ side: SpeechSide, card: NoteItem, ttsOnly: Bool = false) {
+        guard side == .question || progress?.revealed == true else { return }
+        if !ttsOnly, let id = card.content.audioID(for: side) {
+            if let url = try? store.repository.assetURL(id: id) { speechPlayer.playAttached(url: url) }
+            else { speechPlayer.missingAttachment() }
+        } else {
+            let assessment = SpeechReadout.assessment(kind: card.kind, displayed: card.content, side: side)
+            if let text = assessment.text { speechPlayer.play(text: text, settings: store.settings.speech) }
+            else if let failure = assessment.failure { speechPlayer.unavailableReadout(failure) }
+        }
+    }
+    @ViewBuilder private func audioControls(_ card: NoteItem, revealed: Bool) -> some View {
+        let question = SpeechReadout.text(kind: card.kind, displayed: card.content, side: .question)
+        let answer = revealed ? SpeechReadout.text(kind: card.kind, displayed: card.content, side: .answer) : nil
+        VStack(alignment: .leading, spacing: 8) {
+            if card.content.questionAudioID != nil || question != nil {
+                Button { playAudio(.question, card: card) } label: { Label("問題を再生", systemImage: "speaker.wave.2") }
+                    .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("customPracticeSpeakQuestion")
+            }
+            if revealed, card.content.answerAudioID != nil || answer != nil {
+                Button { playAudio(.answer, card: card) } label: { Label("解答を再生", systemImage: "speaker.wave.2") }
+                    .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("customPracticeSpeakAnswer")
+            }
+            if (card.content.questionAudioID != nil || (revealed && card.content.answerAudioID != nil)), question != nil || answer != nil {
+                Menu("TTSで読む", systemImage: "text.bubble") {
+                    if question != nil { Button("問題の英文を読む") { playAudio(.question, card: card, ttsOnly: true) } }
+                    if answer != nil { Button("解答の英文を読む") { playAudio(.answer, card: card, ttsOnly: true) } }
+                }.frame(minHeight: 44)
+            }
+            if speechPlayer.playing {
+                Button { speechPlayer.stop() } label: { Label("停止", systemImage: "stop.fill") }
+                    .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("customPracticeStopAudio")
+            }
+            if store.settings.speech.autoplay(deckID: card.deckID, noteOverride: card.sourceContent.speechOverrides?[card.variantKey]) != .off {
+                Button(autoSpeechPaused ? "自動再生を再開" : "この練習の自動再生を停止") {
+                    autoSpeechPaused.toggle(); if autoSpeechPaused { speechPlayer.stop() }
+                }.buttonStyle(SecondaryActionStyle())
+            }
+            if let notice = speechPlayer.notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
         }
     }
     private func reload() {
@@ -190,6 +288,9 @@ private struct CustomPracticeView: View {
         } catch { card = nil; failure = error.localizedDescription }
     }
     private func update(revealOnly: Bool) {
+        speechPlayer.stop()
+        let interval = PerformanceProbe.begin("CustomPractice.update")
+        defer { PerformanceProbe.end(interval) }
         do { try store.repository.advanceCustomPractice(revealOnly: revealOnly, now: store.clock()); reload() }
         catch { failure = error.localizedDescription }
     }

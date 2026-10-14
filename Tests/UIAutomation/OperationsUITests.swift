@@ -293,3 +293,57 @@ extension OperationsUITests {
         XCTAssertFalse(app.buttons["resumeCustomPractice"].exists)
     }
 }
+
+extension OperationsUITests {
+    func testCustomPracticeVerticalTextAttachedAudioAndHiddenAnswer() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-custom-media"]
+        app.launch()
+        XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 15)); tab(app, "ライブラリ").tap()
+        app.buttons["カスタム学習"].tap()
+        let start = app.buttons["startCustomStudy"]; scrollTo(start, in: app); start.tap()
+        let question = app.buttons["customPracticeSpeakQuestion"]
+        XCTAssertTrue(question.waitForExistence(timeout: 10)); question.tap()
+        XCTAssertTrue(app.buttons["customPracticeStopAudio"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["customPracticeSpeakAnswer"].exists)
+        XCTAssertFalse(app.descendants(matching: .any)["customPracticeAnswer"].exists)
+        app.buttons["customPracticeStopAudio"].tap()
+        attach(app, name: "Issue124-vertical-question-audio")
+        let reveal = app.buttons["revealCustomPractice"]; scrollTo(reveal, in: app); reveal.tap()
+        app.swipeDown()
+        let answerAudio = app.buttons["customPracticeSpeakAnswer"]; scrollTo(answerAudio, in: app); answerAudio.tap()
+        XCTAssertTrue(app.buttons["customPracticeStopAudio"].waitForExistence(timeout: 5))
+        let answer = app.descendants(matching: .any)["customPracticeAnswer"]; scrollTo(answer, in: app)
+        attach(app, name: "Issue124-vertical-answer-audio")
+        let next = app.buttons["nextCustomPractice"]; scrollTo(next, in: app); next.tap()
+        XCTAssertTrue(app.staticTexts["カスタム練習が完了しました"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["customPracticeStopAudio"].exists)
+    }
+
+    func testCustomPracticeScaleResponseAudit() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-custom-scale", "-study-performance"]
+        app.launch()
+        XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 60))
+        // Leave fixture generation outside an optional Instruments attachment.
+        print("CUSTOM_AUDIT_READY cards=3000 todayLogs=10000")
+        Thread.sleep(forTimeInterval: 20)
+        tab(app, "ライブラリ").tap(); app.buttons["カスタム学習"].tap()
+        let rebuild = app.buttons["対象を再構築"]; scrollTo(rebuild, in: app)
+        for _ in 0..<3 { rebuild.tap() }
+        attach(app, name: "Issue124-scale-preview")
+        app.buttons["startCustomStudy"].tap()
+        for _ in 0..<3 {
+            let reveal = app.buttons["revealCustomPractice"]; scrollTo(reveal, in: app); reveal.tap()
+            let next = app.buttons["nextCustomPractice"]; scrollTo(next, in: app); next.tap()
+        }
+        app.buttons["中断"].tap(); app.swipeDown(); app.swipeDown()
+        let resume = app.buttons["resumeCustomPractice"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 10)); resume.tap()
+        XCTAssertTrue(app.buttons["revealCustomPractice"].waitForExistence(timeout: 10))
+        app.buttons["中断"].tap(); app.swipeDown(); app.swipeDown()
+        app.buttons["練習を終了"].tap()
+        XCTAssertFalse(app.buttons["resumeCustomPractice"].exists)
+        print("CUSTOM_AUDIT_FINISHED")
+    }
+}

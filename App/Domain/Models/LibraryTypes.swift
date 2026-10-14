@@ -825,6 +825,11 @@ struct CustomStudyPreview {
 }
 
 enum CustomStudyError: LocalizedError {
-    case sessionActive
-    var errorDescription: String? { "進行中の学習を再開・終了してから開始してください。" }
+    case sessionActive, dataChanged
+    var errorDescription: String? {
+        switch self {
+        case .sessionActive: return "進行中の学習を再開・終了してから開始してください。"
+        case .dataChanged: return "カードが更新されました。対象を再構築してください。"
+        }
+    }
 }
