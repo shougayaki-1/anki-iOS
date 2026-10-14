@@ -105,7 +105,7 @@ struct ImportView: View {
                             Text("hint / ヒントのヘッダーを認識します。指定したヒント列が空欄の場合、重複更新で既存ヒントを消去します。列を指定しない場合は保持します。")
                                 .font(.footnote).foregroundStyle(.secondary)
                         }
-                        Button("プレビューを作成", action: preview).accessibilityIdentifier("previewImport")
+                        Button("プレビューを作成", action: preview).buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("previewImport")
                             .disabled(text.isEmpty)
                     } header: { Text("入力") } footer: { Text("通常の文章から問いや解答を自動生成しません。プレビューで編集できます。") }
                     Section("登録先") {
@@ -517,21 +517,27 @@ struct ImportCompletionView: View {
                         }
                     }
                 }
+            }
+            .multilineTextAlignment(.center).padding(24).frame(maxWidth: .infinity)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            BottomActionArea {
                 if !result.affectedCardIDs.isEmpty {
                     NavigationLink {
                         ImportedCardsView(store: store, cardIDs: result.affectedCardIDs)
                     } label: { Text("取り込んだカードを見る").frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent).controlSize(.large).accessibilityIdentifier("viewImportedCards")
+                    .buttonStyle(PrimaryActionStyle()).accessibilityIdentifier("viewImportedCards")
                 }
                 if result.outcome == .empty {
-                    Button("入力を修正して再試行", action: retryImport).buttonStyle(.borderedProminent)
+                    Button("入力を修正して再試行", action: retryImport).buttonStyle(PrimaryActionStyle())
                         .accessibilityIdentifier("retryEmptyImport")
                 }
-                Button("続けて取り込む", action: continueImport).buttonStyle(.bordered).controlSize(.large)
-                    .accessibilityIdentifier("continueImport")
-                Button("閉じる", action: close).accessibilityIdentifier(closeIdentifier)
+                HStack {
+                    Button("続けて取り込む", action: continueImport).buttonStyle(SecondaryActionStyle())
+                        .accessibilityIdentifier("continueImport")
+                    Button("閉じる", action: close).buttonStyle(SecondaryActionStyle()).accessibilityIdentifier(closeIdentifier)
+                }
             }
-            .multilineTextAlignment(.center).padding(24).frame(maxWidth: .infinity)
         }
         .onAppear {
             guard !appeared else { return }
@@ -672,9 +678,9 @@ struct ImportFileSelectionButton: View {
         VStack(alignment: .leading, spacing: 8) {
             Button(action: action) {
                 Label("ファイルを選択", systemImage: "doc.badge.plus")
-                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .frame(maxWidth: .infinity)
             }
-            .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+            .buttonStyle(PrimaryActionStyle())
             .accessibilityIdentifier("selectImportFile")
             Text("CSV / TSV / TXT / 画像ZIP / .studydeck / .apkg")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -688,9 +694,9 @@ struct ImportConfirmationButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text("取り込みを確定").font(.headline).frame(maxWidth: .infinity, minHeight: 48)
+            Text("取り込みを確定").font(.headline).frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
+        .buttonStyle(PrimaryActionStyle())
         .accessibilityIdentifier(identifier).disabled(disabled)
         .padding(.horizontal).padding(.vertical, 10).background(.regularMaterial)
     }

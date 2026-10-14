@@ -195,7 +195,7 @@ struct NoteEditorView: View {
                             .accessibilityIdentifier("generatedCardCount")
                     }
                     Button("出題プレビュー") { preview = true }.accessibilityIdentifier("previewNote")
-                    if item == nil { Button("保存して次へ") { requestSave(next: true) }.disabled(!canSave) }
+                    if item == nil { Button("保存して次へ") { requestSave(next: true) }.buttonStyle(SecondaryActionStyle()).disabled(!canSave) }
                 }
                 Section("タグ") { TextField("タグ（カンマ区切り）", text: $tagText) }
                 Section("画像（任意）") {
@@ -255,9 +255,18 @@ struct NoteEditorView: View {
                 if let image { CropView(image: image) { applyCrop($0) } }
             }
             .safeAreaInset(edge: .bottom) {
-                if let notice = saveNotice {
-                    NoteSaveNoticeView(notice: notice) {
-                        if saveNotice?.id == notice.id { saveNotice = nil }
+                VStack(spacing: 0) {
+                    if let notice = saveNotice {
+                        NoteSaveNoticeView(notice: notice) {
+                            if saveNotice?.id == notice.id { saveNotice = nil }
+                        }
+                    }
+                    BottomActionArea {
+                        Button("カードを保存") { requestSave(next: false) }
+                            .buttonStyle(PrimaryActionStyle())
+                            .keyboardShortcut("s", modifiers: .command)
+                            .accessibilityIdentifier("saveNote")
+                            .disabled(!canSave)
                     }
                 }
             }
@@ -270,10 +279,6 @@ struct NoteEditorView: View {
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) { Button("閉じる") { persistDraft(); if failure == nil { dismiss() } }.keyboardShortcut(.escape, modifiers: []).accessibilityIdentifier("closeEditor").accessibilityHint(duringReview ? "入力中の変更を破棄して学習に戻ります" : "入力中の下書きを保持します") }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") { requestSave(next: false) }.keyboardShortcut("s", modifiers: .command).accessibilityIdentifier("saveNote")
-                        .disabled(!canSave)
-                }
             }
             .confirmationDialog("同じデッキに重複候補があります", isPresented: $duplicateChoice, titleVisibility: .visible) {
                 Button("スキップして閉じる") {

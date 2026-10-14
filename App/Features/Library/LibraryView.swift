@@ -54,22 +54,22 @@ struct LibraryView: View {
                 Button(activeDeckFilter == nil ? "カードを追加" : "このデッキにカードを追加") {
                     selection.removeAll(); editMode = .inactive; adding = true
                 }
-                .buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+                .buttonStyle(PrimaryActionStyle())
                 .accessibilityIdentifier("emptyLibraryAdd")
                 if isFirstCard {
                     Button("インポート") { selection.removeAll(); editMode = .inactive; importing = true }
-                        .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryImport")
+                        .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("emptyLibraryImport")
                 }
             }
             if hasSearch {
                 Button("検索条件をクリア") { search = ""; selection.removeAll(); editMode = .inactive }
-                    .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryClearSearch")
+                    .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("emptyLibraryClearSearch")
             }
             if activeDeckFilter != nil {
                 Button("デッキの絞り込みを解除") {
                     clearedDeckFilter = true; selection.removeAll(); editMode = .inactive
                 }
-                .buttonStyle(.bordered).accessibilityIdentifier("emptyLibraryClearDeck")
+                .buttonStyle(SecondaryActionStyle()).accessibilityIdentifier("emptyLibraryClearDeck")
             }
         }
     }
@@ -334,7 +334,7 @@ struct LibraryTreeRowView: View, Equatable {
                         Text(row.cardCount == 0 ? "空" : "\(row.cardCount)枚").font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(.leading, CGFloat(min(row.depth, 5)) * 12)
-                    .frame(minHeight: 36).contentShape(Rectangle())
+                    .frame(minHeight: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("階層\(row.depth + 1)、\(deck.name)、配下\(row.cardCount)枚")

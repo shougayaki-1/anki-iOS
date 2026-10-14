@@ -428,6 +428,7 @@ struct ReviewHeroSection: View {
                         .accessibilityIdentifier("nextShortReview")
                     Text("開始時の学習対象で待機しています。期限になると続きから再開できます。")
                     Button("今回の学習を完了", action: { store.completeSession() })
+                        .buttonStyle(SecondaryActionStyle())
                         .accessibilityIdentifier("completeStudy")
                 case .complete:
                     Text("今回の出題は完了しました").font(.headline)
@@ -464,7 +465,7 @@ struct ReviewHeroSection: View {
                         Text(store.homeRecommendation?.title ?? action.title).font(.headline)
                             .fixedSize(horizontal: false, vertical: true)
                             .frame(maxWidth: .infinity, minHeight: 56)
-                    }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction")).foregroundStyle(.white)
+                    }.buttonStyle(PrimaryActionStyle())
                         .accessibilityIdentifier(store.homeRecommendation == nil ? action.identifier : "startRecommended")
                         .accessibilityLabel(store.homeRecommendation.map { $0.title + "。" + $0.poolText + "。" + $0.limitText + "。推定：" + $0.timeText } ?? action.accessibilityLabel(answerLimit: store.sessionAnswerLimit))
                 }
