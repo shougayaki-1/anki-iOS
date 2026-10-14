@@ -145,6 +145,10 @@ struct AppRootView: View {
                 recoveryMediaStore = mediaStore
                 store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || ProcessInfo.processInfo.arguments.contains("-study-test-widget")) ? WidgetSnapshotPublisher(file: .shared()) : nil)
                 #if DEBUG
+                if studyURL != nil, args.contains("-study-test-deck-update"), let store,
+                   let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
+                    try UITestFixtures.populateDeckUpdate(store, name: args[index + 1])
+                }
                 if studyURL != nil, args.contains("-study-test-dashboard"), let store {
                     try UITestFixtures.populateDashboard(store)
                 }

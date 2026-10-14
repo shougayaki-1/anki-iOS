@@ -6,6 +6,52 @@ import SQLite3
 
 // Only explicit UI-test launch arguments create fixtures, in the app's sandbox.
 enum UITestFixtures {
+    static func deckUpdatePreview() -> ValidatedDeckPackage? {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-study-test-deck-update"), let index = args.firstIndex(of: "-study-test-store"),
+              args.count > index + 1, UUID(uuidString: args[index + 1]) != nil else { return nil }
+        let mode = args.contains("-study-test-deck-update-reset") ? "Reset" : "Keep"
+        let file = URL.documentsDirectory.appendingPathComponent("Update-\(mode)-\(args[index + 1]).studydeck")
+        return try? DeckExchange.decode(Data(contentsOf: file))
+    }
+
+    @MainActor static func populateDeckUpdate(_ store: StudyStore, name: String) throws {
+        let repo = store.repository, now = store.clock()
+        guard try repo.notes().isEmpty else { return }
+        let deck = try repo.decks()[0].id
+        func image(_ title: String, color: UIColor) -> Data {
+            let format = UIGraphicsImageRendererFormat(); format.scale = 1
+            return UIGraphicsImageRenderer(size: CGSize(width: 240, height: 100), format: format).image { context in
+                color.setFill(); context.fill(CGRect(x: 0, y: 0, width: 240, height: 100))
+                title.draw(at: CGPoint(x: 24, y: 32), withAttributes: [.font: UIFont.systemFont(ofSize: 24), .foregroundColor: UIColor.white])
+            }.pngData()!
+        }
+        let oldImage = try repo.addImage(image("東京", color: .systemIndigo), now: now)
+        let replacementID = UUID(), replacementBytes = image("東京都", color: .systemTeal)
+        try repo.createNote(NoteInput(deckID: deck, question: "日本の首都は？", answer: "東京", hint: "関東地方", tagNames: ["地理"], imageID: oldImage), now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now.addingTimeInterval(3))
+        try repo.transaction { if let draft = try repo.session() { draft.cardID = nil; draft.undoLogID = nil } }
+        let (original, urls) = try repo.captureDeckPackage(rootID: deck)
+        let originalBytes = try urls.mapValues { try Data(contentsOf: $0) }
+        for reset in [false, true] {
+            let notes = original.notes.map { note -> SharedNote in
+                var content = note.content
+                content.hint = "日本の政治・行政の中心"
+                if reset { content.answer = "東京都（日本の首都）"; content.imageID = replacementID }
+                return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content,
+                    responseMode: note.responseMode, tags: ["地理", "日本"])
+            }
+            let media = reset ? [SharedMedia(id: replacementID, mediaType: "image/png", width: 240, height: 100,
+                sha256: BackupArchive.hash(replacementBytes))] : original.media
+            let package = DeckPackage(rootID: deck, decks: original.decks, notes: notes, media: media)
+            let file = URL.documentsDirectory.appendingPathComponent("Update-\(reset ? "Reset" : "Keep")-\(name).studydeck")
+            try DeckExchange.encode(package, bytes: reset ? [replacementID: replacementBytes] : originalBytes).write(to: file, options: .atomic)
+        }
+        try store.reload()
+    }
+
     @MainActor static func populateDashboard(_ store: StudyStore) throws {
         let repo = store.repository, now = store.clock()
         guard try repo.notes().isEmpty else { return }

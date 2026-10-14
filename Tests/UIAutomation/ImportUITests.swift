@@ -204,3 +204,60 @@ final class ImportUITests: XCTestCase {
     }
 
 }
+
+extension ImportUITests {
+    func testDeckUpdateDiffConsentKeepAndReset() throws {
+        let app = XCUIApplication(), id = UUID().uuidString
+        func scrollTo(_ element: XCUIElement) throws {
+            for _ in 0..<22 {
+                let top = app.navigationBars.firstMatch.frame.maxY + 8
+                let confirm = app.buttons["confirmDeckImport"]
+                let bottom = confirm.exists ? confirm.frame.minY - 8 : app.frame.maxY - 70
+                if element.exists && element.isHittable && element.frame.minY >= top && element.frame.maxY <= bottom { return }
+                let down = element.exists && element.frame.minY < top
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: down ? 0.3 : 0.7)).press(forDuration: 0.01,
+                    thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.96, dy: down ? 0.7 : 0.3)))
+            }
+            XCTFail("対象の操作が表示されません")
+            throw NSError(domain: "DeckUpdateUI", code: 1)
+        }
+        func attach(_ name: String) {
+            let image = XCTAttachment(screenshot: app.screenshot()); image.name = name; image.lifetime = .keepAlways; add(image)
+        }
+        for reset in [false, true] {
+            app.launchArguments = ["-study-test-store", id, "-study-test-deck-update"] + (reset ? ["-study-test-deck-update-reset"] : [])
+            app.launch()
+            XCTAssertTrue(app.tabBars.buttons["ライブラリ"].waitForExistence(timeout: 15))
+            app.tabBars.buttons["ライブラリ"].tap(); app.buttons["openImport"].tap()
+            XCTAssertTrue(app.buttons["confirmDeckImport"].waitForExistence(timeout: 10))
+            let mode = app.descendants(matching: .any)["deckImportMode"].firstMatch
+            try scrollTo(mode); mode.tap(); app.buttons["選択した既存デッキに統合"].tap()
+            let diff = app.buttons["更新差分を確認"].firstMatch
+            try scrollTo(diff); diff.tap()
+            let consent = app.switches.matching(NSPredicate(format: "identifier BEGINSWITH 'deckUpdateConsent-'")).firstMatch
+            try scrollTo(consent)
+            XCTAssertEqual(consent.value as? String, "0")
+            XCTAssertFalse(app.buttons["confirmDeckImport"].isEnabled)
+            attach(reset ? "Issue106-reset-diff-before-consent" : "Issue106-preserve-diff-before-consent")
+            consent.switches.firstMatch.tap()
+            XCTAssertEqual(consent.value as? String, "1")
+            XCTAssertTrue(app.buttons["confirmDeckImport"].isEnabled)
+            // Cancellation leaves consent and data unchanged, then explicit confirmation commits.
+            app.buttons["confirmDeckImport"].tap()
+            XCTAssertTrue(app.buttons["commitDeckImport"].firstMatch.waitForExistence(timeout: 5))
+            let dismissRegion = app.otherElements["PopoverDismissRegion"]
+            if dismissRegion.exists { dismissRegion.tap() }
+            else { app.buttons["キャンセル"].firstMatch.tap() }
+            XCTAssertTrue(app.buttons["confirmDeckImport"].exists)
+            app.buttons["confirmDeckImport"].tap()
+            XCTAssertTrue(app.buttons["commitDeckImport"].firstMatch.waitForExistence(timeout: 5))
+            app.buttons["commitDeckImport"].firstMatch.tap()
+            let result = app.staticTexts["deckExchangeResult"]
+            XCTAssertTrue(result.waitForExistence(timeout: 20))
+            XCTAssertTrue(result.label.contains("更新 1ノート"))
+            XCTAssertTrue(result.label.contains("未学習リセット \(reset ? 1 : 0)"))
+            attach(reset ? "Issue106-reset-result" : "Issue106-preserve-result")
+            app.terminate()
+        }
+    }
+}

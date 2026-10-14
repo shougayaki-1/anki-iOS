@@ -45,6 +45,9 @@ struct ImportView: View {
 
     init(store: StudyStore, initialText: String = "", sourceName: String = "貼り付け", initialDeckID: UUID? = nil) {
         self.store = store
+        #if DEBUG
+        if let package = UITestFixtures.deckUpdatePreview() { _deckPackage = State(initialValue: package) }
+        #endif
         initialImportDeckID = initialDeckID
         _text = State(initialValue: initialText)
         _source = State(initialValue: sourceName)

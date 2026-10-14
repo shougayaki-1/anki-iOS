@@ -960,3 +960,204 @@ extension BackupRepositoryTests {
         XCTAssertTrue(ambiguous.mappings.allSatisfy { !$0.reused })
     }
 }
+
+extension BackupRepositoryTests {
+    private func updatePackage(_ repo: StudyRepository, noteID: UUID, edit: (SharedNote) -> SharedNote) throws -> ValidatedDeckPackage {
+        let (original, urls) = try repo.captureDeckPackage(rootID: repo.decks()[0].id)
+        let package = DeckPackage(rootID: original.rootID, decks: original.decks,
+            notes: original.notes.map { $0.id == noteID ? edit($0) : $0 }, media: original.media)
+        return try DeckExchange.validated(package: package, bytes: urls.mapValues { try Data(contentsOf: $0) })
+    }
+    private func updateFixture(_ root: URL) throws -> (StudyRepository, UUID, DeckImportDestination) {
+        let repo = try fixture(root); try populate(repo)
+        try repo.transaction { if let draft = try repo.session() { draft.cardID = nil; draft.undoLogID = nil } }
+        let id = try XCTUnwrap(repo.notes().first { $0.type == NoteKind.basic.rawValue }).id
+        return (repo, id, .mergeInto(try repo.decks()[0].id))
+    }
+    func testDeckNoteUpdateIdentityAndConsentAreStrict() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, id, destination) = try updateFixture(root)
+        let package = try updatePackage(repo, noteID: id) { note in
+            var content = note.content; content.hint = "新しいヒント"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: ["更新"])
+        }
+        XCTAssertTrue(try repo.previewDeckImport(package).updates.isEmpty)
+        XCTAssertTrue(try repo.previewDeckImport(package, destination: .childOf(repo.decks()[0].id)).updates.isEmpty)
+        let preview = try repo.previewDeckImport(package, destination: destination)
+        XCTAssertEqual(preview.updates.map(\.id), [id]); XCTAssertFalse(preview.updates[0].requiresReset)
+        let before = try BackupData.capture(repo)
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, updates: [id: .preserveHistory]))
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [id: .resetSchedule]))
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [UUID(): .preserveHistory]))
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        let skipped = try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview)
+        XCTAssertEqual(skipped.updatedNotes, 0); XCTAssertEqual(skipped.createdNotes, 0)
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        // Even exact content matches with different UUIDs must never be update candidates.
+        let otherID = try updatePackage(repo, noteID: id) { note in
+            SharedNote(id: UUID(), deckID: note.deckID, kind: note.kind, content: note.content, responseMode: note.responseMode, tags: ["更新"])
+        }
+        XCTAssertTrue(try repo.previewDeckImport(otherID, destination: destination).updates.isEmpty)
+        let structure = try updatePackage(repo, noteID: id) { note in
+            var content = note.content; content.reverseEnabled = false; content.hint = "変更"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: note.tags)
+        }
+        let blocked = try repo.previewDeckImport(structure, destination: destination)
+        XCTAssertTrue(blocked.updates.isEmpty); XCTAssertNotNil(blocked.updateBlocked[id])
+        let clozeID = try XCTUnwrap(repo.notes().first { $0.type == NoteKind.cloze.rawValue }).id
+        let clozeChange = try updatePackage(repo, noteID: clozeID) { note in
+            var content = note.content; content.question = "{{c1::大阪}}と{{c2::京都}}"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: note.tags)
+        }
+        let ambiguous = try repo.previewDeckImport(clozeChange, destination: destination)
+        XCTAssertTrue(ambiguous.updates.isEmpty); XCTAssertNotNil(ambiguous.updateBlocked[clozeID])
+        let wrongDeck = try repo.createDeck(name: "別の統合先", now: now)
+        let wrongDestination = try repo.previewDeckImport(package, destination: .mergeInto(wrongDeck))
+        XCTAssertTrue(wrongDestination.updates.isEmpty); XCTAssertNotNil(wrongDestination.updateBlocked[id])
+        try repo.transaction { let draft = try XCTUnwrap(repo.session()); draft.cardID = try repo.cards().first { $0.noteID == id }?.id }
+        XCTAssertNotNil(try repo.previewDeckImport(package, destination: destination).updateBlocked[id])
+    }
+    func testDeckNoteUpdatePreservesHistoryAndBackupCompatibility() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, id, destination) = try updateFixture(root)
+        let package = try updatePackage(repo, noteID: id) { note in
+            var content = note.content; content.hint = "保持更新"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: ["地理"])
+        }
+        let preview = try repo.previewDeckImport(package, destination: destination)
+        let before = try BackupData.capture(repo)
+        let receipt = try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now.addingTimeInterval(40), destination: destination, expectedPreview: preview, updates: [id: .preserveHistory])
+        XCTAssertEqual(receipt.updatedNotes, 1); XCTAssertEqual(receipt.createdNotes, 0); XCTAssertEqual(receipt.createdCards, 0)
+        XCTAssertEqual(receipt.outcome, .partial)
+        let after = try BackupData.capture(repo)
+        XCTAssertEqual(after.cards, before.cards); XCTAssertEqual(after.logs, before.logs)
+        XCTAssertEqual(after.decks, before.decks); XCTAssertEqual(after.sessions, before.sessions)
+        XCTAssertEqual(after.notes.filter { $0.id != id }, before.notes.filter { $0.id != id })
+        XCTAssertEqual(after.media, before.media)
+        XCTAssertEqual(try repo.noteItems().first { $0.noteID == id }?.sourceContent.hint, "保持更新")
+        let backup = try BackupArchive.decode(try await BackupService.export(repository: repo, now: now, appVersion: "test"))
+        XCTAssertEqual(backup.data.canonical(), try BackupData.capture(repo).canonical())
+        // v1 exchange remains readable and contains no schedule/history transfer.
+        let exchange = try await DeckExchange.export(repository: repo, rootID: repo.decks()[0].id)
+        XCTAssertEqual(try DeckExchange.decode(exchange).package.schemaVersion, 1)
+    }
+    func testDeckNoteResetRequiresConsentRetainsLogsAndRollsBack() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, id, destination) = try updateFixture(root)
+        let package = try updatePackage(repo, noteID: id) { note in
+            var content = note.content; content.answer = "修正版の答え"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: ["新規タグ"])
+        }
+        let preview = try repo.previewDeckImport(package, destination: destination)
+        XCTAssertTrue(try XCTUnwrap(preview.updates.first).requiresReset)
+        let before = try BackupData.capture(repo)
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [id: .preserveHistory]))
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [id: .resetSchedule]))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before.canonical())
+        let reopened = StudyRepository(container: repo.context.container, mediaStore: repo.mediaStore)
+        XCTAssertEqual(try BackupData.capture(reopened).canonical(), before.canonical())
+        repo.save = { try $0.save() }
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [id: .resetSchedule])) // failed save invalidates consent
+        let fresh = try repo.previewDeckImport(package, destination: destination)
+        let resetTime = now.addingTimeInterval(100)
+        let receipt = try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: resetTime, destination: destination, expectedPreview: fresh, updates: [id: .resetSchedule])
+        XCTAssertEqual(receipt.resetNotes, 1)
+        let after = try BackupData.capture(repo)
+        XCTAssertEqual(after.logs, before.logs); XCTAssertEqual(after.decks, before.decks); XCTAssertEqual(after.sessions, before.sessions)
+        XCTAssertEqual(after.cards.filter { $0.noteID != id }, before.cards.filter { $0.noteID != id })
+        let scheduler = try ReviewScheduler(desiredRetention: repo.settings().desiredRetention)
+        let expectedSummary = try scheduler.summary(scheduler.newCard(now: resetTime))
+        for card in after.cards where card.noteID == id {
+            var expected = try XCTUnwrap(before.cards.first { $0.id == card.id })
+            XCTAssertEqual(try scheduler.summary(JSONDecoder().decode(SchedulerSnapshot.self, from: card.fsrsPayload)), expectedSummary)
+            expected.fsrsPayload = card.fsrsPayload; expected.dueDate = resetTime; expected.updatedAt = resetTime
+            XCTAssertEqual(card, expected)
+        }
+        XCTAssertEqual(try repo.noteItems().first { $0.noteID == id }?.sourceContent.answer, "修正版の答え")
+    }
+    func testDeckUpdateStaleContentTagsAndScheduleRejectConsent() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, id, destination) = try updateFixture(root)
+        let package = try updatePackage(repo, noteID: id) { note in
+            var content = note.content; content.hint = "受信ヒント"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: note.tags)
+        }
+        for change in 0..<3 {
+            let preview = try repo.previewDeckImport(package, destination: destination)
+            try repo.transaction {
+                let note = try XCTUnwrap(repo.notes().first { $0.id == id })
+                if change == 0 { var content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload); content.hint = "同時編集"; note.contentPayload = try JSONEncoder().encode(content) }
+                if change == 1 { note.tagIDs = try repo.tagIDs(for: ["同時タグ"]) }
+                if change == 2 { let card = try XCTUnwrap(repo.cards().first { $0.noteID == id }); card.dueDate = now.addingTimeInterval(500) }
+            }
+            let before = try BackupData.capture(repo)
+            XCTAssertThrowsError(try repo.importDeckPackageReceipt(package, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [id: .preserveHistory]))
+            XCTAssertEqual(try BackupData.capture(repo), before)
+        }
+    }
+}
+
+extension BackupRepositoryTests {
+    func testDeckUpdateMediaRollbackAndUnchangedAttachmentIDs() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (repo, id, destination) = try updateFixture(root)
+        let imageID = try XCTUnwrap(repo.assets().first).id
+        try repo.transaction {
+            let note = try XCTUnwrap(repo.notes().first { $0.id == id })
+            var content = try JSONDecoder().decode(TextContent.self, from: note.contentPayload)
+            content.imageID = imageID; note.contentPayload = try JSONEncoder().encode(content)
+        }
+        let keep = try updatePackage(repo, noteID: id) { note in
+            var content = note.content; content.hint = "画像維持"
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: note.tags)
+        }
+        let before = try BackupData.capture(repo)
+        let preview = try repo.previewDeckImport(keep, destination: destination)
+        try repo.importDeckPackageReceipt(keep, skipDuplicates: true, now: now, destination: destination, expectedPreview: preview, updates: [id: .preserveHistory])
+        XCTAssertEqual(try BackupData.capture(repo).media, before.media)
+        XCTAssertEqual(try repo.noteItems().first { $0.noteID == id }?.sourceContent.imageID, imageID)
+        let original = keep.package
+        let format = UIGraphicsImageRendererFormat(); format.scale = 1
+        let bytes = UIGraphicsImageRenderer(size: CGSize(width: 80, height: 40), format: format).image { context in
+            UIColor.blue.setFill(); context.fill(CGRect(x: 0, y: 0, width: 80, height: 40))
+        }.pngData()!
+        let replacement = UUID()
+        let media = original.media + [SharedMedia(id: replacement, mediaType: "image/png", width: 80, height: 40, sha256: BackupArchive.hash(bytes))]
+        let notes = original.notes.map { note -> SharedNote in
+            guard note.id == id else { return note }
+            var content = note.content; content.imageID = replacement
+            return SharedNote(id: note.id, deckID: note.deckID, kind: note.kind, content: content, responseMode: note.responseMode, tags: note.tags)
+        }
+        var mediaBytes = keep.bytes; mediaBytes[replacement] = bytes
+        let changed = try DeckExchange.validated(package: DeckPackage(rootID: original.rootID, decks: original.decks, notes: notes, media: media), bytes: mediaBytes)
+        let changedPreview = try repo.previewDeckImport(changed, destination: destination)
+        XCTAssertTrue(try XCTUnwrap(changedPreview.updates.first).requiresReset)
+        XCTAssertTrue(changedPreview.updates[0].changes.contains { $0.id == "画像" })
+        let failureBefore = try BackupData.capture(repo)
+        func files() -> Set<String> {
+            let enumerator = FileManager.default.enumerator(at: repo.mediaStore.root, includingPropertiesForKeys: [.isRegularFileKey])
+            return Set((enumerator?.allObjects as? [URL] ?? []).filter { (try? $0.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true }.map(\.path))
+        }
+        let beforeFiles = files()
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.importDeckPackageReceipt(changed, skipDuplicates: true, now: now, destination: destination, expectedPreview: changedPreview, updates: [id: .resetSchedule]))
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), failureBefore.canonical())
+        XCTAssertEqual(files(), beforeFiles)
+        repo.save = { try $0.save() }
+        let fresh = try repo.previewDeckImport(changed, destination: destination)
+        try repo.importDeckPackageReceipt(changed, skipDuplicates: true, now: now, destination: destination, expectedPreview: fresh, updates: [id: .resetSchedule])
+        let updated = try XCTUnwrap(repo.noteItems().first { $0.noteID == id })
+        let updatedImage = try XCTUnwrap(updated.sourceContent.imageID)
+        XCTAssertNotEqual(updatedImage, imageID); XCTAssertNotEqual(updatedImage, replacement)
+        XCTAssertEqual(try Data(contentsOf: repo.assetURL(id: updatedImage)), bytes)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try repo.assetURL(id: imageID).path))
+        XCTAssertEqual(try repo.logs().map(BackupStudyReviewLog.init), failureBefore.logs)
+        XCTAssertEqual(try BackupData.capture(repo).cards.filter { $0.noteID != id }, failureBefore.cards.filter { $0.noteID != id })
+    }
+}

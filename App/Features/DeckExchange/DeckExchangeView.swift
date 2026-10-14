@@ -30,6 +30,8 @@ struct DeckPackagePreviewView: View {
     @State private var exportBytes: Data?
     @State private var preview: DeckImportPreview?
     @State private var skipDuplicates = true
+    @State private var updates: [UUID: DeckNoteUpdateConsent] = [:]
+    @State private var expandedUpdates = Set<UUID>()
     @State private var ankiPreview: AnkiImportPreview?
     @State private var skippedPage = 0
     @State private var warningPage = 0
@@ -146,11 +148,13 @@ struct DeckPackagePreviewView: View {
                                     .font(.footnote)
                             }
                         }
-                        LabeledContent("追加ノート", value: "\(selected.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }.count)")
-                        LabeledContent("追加カード", value: "\(selected.package.notes.filter { !skipDuplicates || !preview.duplicates.contains($0.id) }.reduce(0) { $0 + ((try? CardGeneration.variants(kind: $1.kind, content: $1.content).count) ?? 0) })")
+                        LabeledContent("追加ノート", value: "\(selected.package.notes.filter { updates[$0.id] == nil && (!skipDuplicates || !preview.duplicates.contains($0.id)) }.count)")
+                        LabeledContent("追加カード", value: "\(selected.package.notes.filter { updates[$0.id] == nil && (!skipDuplicates || !preview.duplicates.contains($0.id)) }.reduce(0) { $0 + ((try? CardGeneration.variants(kind: $1.kind, content: $1.content).count) ?? 0) })")
+                        LabeledContent("更新ノート", value: "\(updates.count)（リセット \(updates.values.filter { $0 == .resetSchedule }.count)）")
+                        LabeledContent("スキップノート", value: "\(skipDuplicates ? preview.duplicates.filter { updates[$0] == nil }.count : 0)")
                         LabeledContent("重複ノート", value: "\(preview.duplicates.count)")
                         Toggle("重複をスキップ", isOn: $skipDuplicates).accessibilityIdentifier("skipDeckDuplicates")
-                        Text("本文・形式・画像/音声の内容が同じノートを重複として扱います。タグや回答方法の違いは重複判定に含みません。既存ノートの上書きは行いません。")
+                        Text("本文・形式・画像/音声の内容が同じノートを重複として扱います。タグや回答方法の違いは重複判定に含みません。更新はUUIDが一致し、統合先・カード構成を確認できるノートだけ選択できます。")
                             .font(.footnote)
 
                     } else if exportBytes != nil {
@@ -165,7 +169,14 @@ struct DeckPackagePreviewView: View {
                             Text(note.content.question).lineLimit(3)
                             Text(note.content.answer).lineLimit(3).foregroundStyle(.secondary)
                             Text("\(note.kind.rawValue)・\(note.tags.joined(separator: ", "))").font(.caption)
-                            if preview?.duplicates.contains(note.id) == true { Text("重複").font(.caption) }
+                            if preview?.duplicates.contains(note.id) == true { Text("重複・更新候補").font(.caption) }
+                        }
+                        if let candidate = preview?.updates.first(where: { $0.id == note.id }) {
+                            noteUpdateReview(candidate)
+                        } else if let reason = preview?.updateBlocked[note.id] {
+                            Text(reason).font(.footnote).foregroundStyle(.orange)
+                        } else if ankiPreview == nil {
+                            Text("安全な更新候補なし（UUID・取込先・カード構成の一致、変更ありの場合のみ更新可）").font(.caption).foregroundStyle(.secondary)
                         }
                     }
                     HStack {
@@ -186,7 +197,7 @@ struct DeckPackagePreviewView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if isImport, let selected, let preview, !showingCompletion {
                 ImportConfirmationButton(identifier: "confirmDeckImport", disabled: working ||
-                    !selected.package.notes.contains { !skipDuplicates || !preview.duplicates.contains($0.id) }) {
+                    !selected.package.notes.contains { updates[$0.id] != nil || !skipDuplicates || !preview.duplicates.contains($0.id) }) {
                     confirmation = true
                 }
             }
@@ -217,7 +228,7 @@ struct DeckPackagePreviewView: View {
             case .failure(let error): if (error as NSError).code != NSUserCancelledError { failure = error.localizedDescription }
             }
         }
-        .confirmationDialog("新規カードとして取り込みますか？", isPresented: $confirmation, titleVisibility: .visible) {
+        .confirmationDialog("追加・更新を確定しますか？", isPresented: $confirmation, titleVisibility: .visible) {
             Button("取り込む") {
                 guard !working, completion == nil, let selected else { return }
                 run(phase: .preparing) {
@@ -226,11 +237,11 @@ struct DeckPackagePreviewView: View {
                     try Task.checkCancellation()
                     operationPhase = .saving
                     await ImportOperationPhase.allowDisplay()
-                    var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock(), destination: importDestination, expectedPreview: preview)
+                    var receipt = try store.repository.importDeckPackageReceipt(selected, skipDuplicates: skipDuplicates, now: store.clock(), destination: importDestination, expectedPreview: preview, updates: updates)
                     receipt.skipped = ankiPreview?.skipped ?? []
                     receipt.warnings = ankiPreview?.warnings ?? []
                     var warning: String?
-                    if receipt.createdNotes > 0 {
+                    if receipt.createdNotes + receipt.updatedNotes > 0 {
                         operationPhase = .refreshing
                         await ImportOperationPhase.allowDisplay()
                         do { try store.reload() }
@@ -241,7 +252,7 @@ struct DeckPackagePreviewView: View {
                     if receipt.outcome == .complete { store.haptics.play(.importCompleted, mode: store.settings.hapticsMode) }
                 }
             }.accessibilityIdentifier("commitDeckImport")
-        } message: { Text("\(preview?.destinationName ?? "")へ追加します。既存のカード・回答履歴は保持されます。重複判定は確定時に再確認します。\(ankiPreview == nil ? "" : " Ankiの履歴は移行せず、未対応ノートを除外し、装飾はプレーンテキストになります。")") }
+        } message: { Text("\(preview?.destinationName ?? "")へ取り込みます。更新 \(updates.count)ノート、未学習リセット \(updates.values.filter { $0 == .resetSchedule }.count)ノート。リセット対象のFSRS・復習予定を初期化します。過去の回答履歴とUUIDは保持します。確定時に再検証します。\(ankiPreview == nil ? "" : " Ankiの履歴は移行せず、未対応ノートを除外し、装飾はプレーンテキストになります。")") }
         .alert("デッキファイルを処理できません", isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("閉じる", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
@@ -256,9 +267,71 @@ struct DeckPackagePreviewView: View {
     }
     private func refreshImportPreview() {
         guard let selected, exportBytes == nil else { return }
+        updates = [:] // Consent applies only to the reviewed destination and snapshot.
+        expandedUpdates = []
         do { preview = try store.repository.previewDeckImport(selected, destination: importDestination) }
         catch { preview = nil; failure = error.localizedDescription }
     }
+    private func noteUpdateReview(_ candidate: DeckNoteUpdate) -> some View {
+        DisclosureGroup("更新差分を確認", isExpanded: Binding(
+            get: { expandedUpdates.contains(candidate.id) },
+            set: { expanded in
+                if expanded { expandedUpdates.insert(candidate.id) }
+                else { expandedUpdates.remove(candidate.id) }
+            })) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("既存ノートUUID：\(candidate.id.uuidString)").font(.caption).textSelection(.enabled)
+                Text("カード \(candidate.cards.count) → \(candidate.cards.count)枚。生成・削除なし。出題の対応とカードIDを維持。")
+                    .font(.footnote)
+                Text("変更なし：" + ["問題", "解答", "ヒント", "タグ", "画像", "問題音声", "解答音声"].filter { name in !candidate.changes.contains { $0.id == name } }.joined(separator: "、"))
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(candidate.changes) { change in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(change.id).font(.subheadline.bold())
+                        Text("変更前：" + change.before).foregroundStyle(.secondary)
+                        Text("変更後：" + change.after)
+                        if change.id == "画像" { imageDifference(candidate) }
+                    }.font(.footnote).textSelection(.enabled)
+                }
+                Text(candidate.requiresReset ?
+                     "出題・解答に影響する変更です。更新には未学習リセットの同意が必要です。学習状態と復習予定を初期化し、過去の回答履歴・カードID・停止状態は保持します。" :
+                     "出題・解答とカード構成は同一です。学習状態・復習予定・回答履歴・カードID・停止状態を保持して更新します。")
+                    .font(.footnote).foregroundStyle(candidate.requiresReset ? .orange : .secondary)
+                Toggle(candidate.requiresReset ? "未学習リセットに同意して更新" : "学習履歴を保持して更新", isOn: Binding(
+                    get: { updates[candidate.id] != nil },
+                    set: { consent in
+                        if consent { updates[candidate.id] = candidate.requiresReset ? .resetSchedule : .preserveHistory }
+                        else { updates.removeValue(forKey: candidate.id) }
+                    }))
+                    .toggleStyle(.switch)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("deckUpdateConsent-" + candidate.id.uuidString)
+                Text("選択しない場合は重複方針に従ってスキップ／別ノート追加します。取り込み前に復元ポイントを保存します。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }.padding(.vertical, 4)
+        }.buttonStyle(.borderless)
+    }
+
+    private func imageDifference(_ candidate: DeckNoteUpdate) -> some View {
+        let oldImage = candidate.beforeContent.imageID.flatMap { try? store.repository.assetURL(id: $0) }
+            .flatMap { UIImage(contentsOfFile: $0.path) }
+        let newImage = candidate.incoming.content.imageID.flatMap { selected?.bytes[$0] }
+            .flatMap { UIImage(data: $0) }
+        return HStack(alignment: .top) {
+            imageDifferenceSide("変更前", image: oldImage)
+            imageDifferenceSide("変更後", image: newImage)
+        }
+    }
+    private func imageDifferenceSide(_ label: String, image: UIImage?) -> some View {
+        VStack(spacing: 4) {
+            Text(label).font(.caption).foregroundStyle(.secondary)
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: 120)
+                    .accessibilityLabel(label + "の画像")
+            } else { Text("画像なし").foregroundStyle(.secondary).frame(maxWidth: .infinity) }
+        }
+    }
+
     private func run(phase: ImportOperationPhase, _ action: @escaping @MainActor () async throws -> Void) {
         guard !working else { return }
         working = true; operationPhase = phase; completion = nil
@@ -286,7 +359,7 @@ struct DeckPackagePreviewView: View {
         if let shareURL { try? FileManager.default.removeItem(at: shareURL.deletingLastPathComponent()) }
         shareURL = nil
     }
-    private func clearPreview() { ankiPreview = nil; skippedPage = 0; warningPage = 0; selected = nil; exportBytes = nil; preview = nil; completion = nil; page = 0; removeShareFile() }
+    private func clearPreview() { updates = [:]; expandedUpdates = []; ankiPreview = nil; skippedPage = 0; warningPage = 0; selected = nil; exportBytes = nil; preview = nil; completion = nil; page = 0; removeShareFile() }
     private func deckPath(_ id: UUID, in package: DeckPackage) -> String {
         var cursor: UUID? = id, names: [String] = []
         let byID = Dictionary(uniqueKeysWithValues: package.decks.map { ($0.id, $0) })
@@ -342,7 +415,7 @@ private struct DeckExchangeCompletionView: View {
                         Text("保存したノートはありません。重複・未対応の理由を確認してください。プレビューを保持しているので再試行できます。")
                             .font(.footnote).foregroundStyle(.secondary)
                     } else {
-                        Text("すべて新規学習として追加しました。既存カードの学習履歴・復習状態は保持されています。")
+                        Text("追加カードは未学習で開始します。更新は選択した履歴方針を適用しました。過去の回答履歴・UUIDと対象外の復習状態は保持されています。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if let warning { Text(warning).foregroundStyle(.orange).accessibilityIdentifier("deckImportCommittedWarning") }
