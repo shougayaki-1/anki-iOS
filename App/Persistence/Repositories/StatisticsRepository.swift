@@ -17,6 +17,7 @@ actor StatisticsReader {
         let isSuspended: Bool
         let isCardSuspended: Bool
         let dueDate: Date
+        let forecastDueDate: Date
         let state: ReviewScheduler.PredictionState
     }
     private struct Material {
@@ -37,6 +38,7 @@ actor StatisticsReader {
         let evaluatedAt: Date
         let nextFutureLog: Date?
         let report: StudyStatistics
+        var cost: Int { 65536 + report.calendarDays.count * 256 }
     }
     private var histories: [HistoryEntry] = []
     private struct AchievementEntry {
@@ -58,7 +60,7 @@ actor StatisticsReader {
     private(set) var historyAggregations = 0
     private(set) var achievementAggregations = 0
     var cachedHistoryCount: Int { histories.count }
-    var cachedCost: Int { (cached?.material.cost ?? 0) + histories.count * 65536 }
+    var cachedCost: Int { (cached?.material.cost ?? 0) + histories.reduce(0) { $0 + $1.cost } }
     #endif
 
     init(container: ModelContainer, maximumCacheCost: Int = 16 * 1024 * 1024, cacheLifetime: Duration = .seconds(60)) {
@@ -139,10 +141,11 @@ actor StatisticsReader {
             #if DEBUG
             historyAggregations += 1
             #endif
-            if cached != nil, material.cost + 65536 <= maximumCacheCost {
+            let reportCost = 65536 + history.calendarDays.count * 256
+            if cached != nil, material.cost + reportCost <= maximumCacheCost {
                 // Four compact historical reports at most. Time-dependent card
                 // metrics never enter this cache; future logs bound its validity.
-                while histories.count >= 4 || material.cost + (histories.count + 1) * 65536 > maximumCacheCost {
+                while histories.count >= 4 || material.cost + histories.reduce(0, { $0 + $1.cost }) + reportCost > maximumCacheCost {
                     histories.removeFirst()
                 }
                 histories.append(HistoryEntry(calendar: calendar, startHour: startHour, day: day, scope: normalized,
@@ -161,6 +164,27 @@ actor StatisticsReader {
                   let probability = state.retrievability else { return nil }
             return MemoryCard(state: card.state.state, id: card.id, title: card.title, stability: card.stability,
                               difficulty: card.difficulty, retrievability: probability)
+        }
+        let active = material.cards.filter { included($0.deckID, $0.tagIDs) && !$0.isSuspended }
+        let mature = memoryCards.filter { MatureCards.contains(state: $0.state, stability: $0.stability, suspended: false) }
+        let matureIDs = Set(mature.map(\.id))
+        report.growth = [
+            MemoryGrowthGroup(id: "未学習", explanation: "FSRSがNew状態のカードです。まだ正式な自己評価をしていません。", cards: active.filter { $0.state.isNew }.map {
+                MemoryCard(state: "new", id: $0.id, title: $0.title, stability: $0.stability, difficulty: $0.difficulty, retrievability: 0)
+            }),
+            MemoryGrowthGroup(id: "学習・復習中", explanation: "学習中・再学習中、および長期定着の条件に達していないReview状態です。", cards: memoryCards.filter { !matureIDs.contains($0.id) }),
+            MemoryGrowthGroup(id: "長期定着", explanation: "Review状態かつStability 21日以上。FSRSによる推定で、永久記憶の保証ではありません。", cards: mature)
+        ]
+        let studyDay = StudyDay(calendar: calendar, startHour: startHour)
+        report.scheduledDays = (0..<30).map { offset in
+            let date = calendar.date(byAdding: .day, value: offset, to: now)!
+            let interval = studyDay.interval(containing: date)
+            return ForecastDay(start: interval.start, end: interval.end)
+        }
+        for card in active where !card.state.isNew {
+            if let index = ReviewForecast.scheduledIndex(due: card.forecastDueDate, days: report.scheduledDays) {
+                report.scheduledDays[index].scheduled += 1
+            }
         }
         let scopedLogs = material.logs.filter { included($0.deckID, $0.tagIDs) }
         let targetDecks = Set(material.cards.filter { included($0.deckID, $0.tagIDs) && !$0.isSuspended }.compactMap(\.deckID))
@@ -253,7 +277,7 @@ actor StatisticsReader {
             let title = try note.map { try JSONDecoder().decode(TextContent.self, from: $0.contentPayload).question } ?? "カード"
             cost += title.utf8.count
             return PreparedCard(id: card.id, title: title, stability: summary.stability, difficulty: summary.difficulty, deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
-                                isSuspended: card.isSuspended || note.map { paused.contains($0.deckID) } == true, isCardSuspended: card.isSuspended, dueDate: card.dueDate, state: state)
+                                isSuspended: card.isSuspended || note.map { paused.contains($0.deckID) } == true, isCardSuspended: card.isSuspended, dueDate: card.dueDate, forecastDueDate: max(card.dueDate, options?.cardMarks?.first(where: { $0.cardID == card.id })?.hiddenUntil ?? card.dueDate), state: state)
         }
         #if DEBUG
         materialReads += 1

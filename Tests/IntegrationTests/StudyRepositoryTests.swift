@@ -671,12 +671,14 @@ final class StudyRepositoryTests: XCTestCase {
         store.start(.new); store.draft(revealed: true); store.grade(.good)
         try await report()
         XCTAssertEqual(store.statistics?.days.first?.answers, 1)
+        XCTAssertEqual(store.statistics?.dashboardPeriods[7]?.cards, 1)
         XCTAssertEqual(store.achievementProgress?.uniqueCardsToday, 1)
         XCTAssertEqual(Set(store.achievementHistory.map(\.kind)), [.firstStudyToday, .streakAdvanced])
         store.undo()
         try await report()
         XCTAssertEqual(store.statistics?.days.first?.answers, 0)
         XCTAssertEqual(store.achievementProgress?.currentStreak, 0)
+        XCTAssertEqual(store.statistics?.dashboardPeriods[7]?.cards, 0)
         XCTAssertTrue(store.achievementHistory.isEmpty)
         // Save succeeds, then queue projection fails. A cached report from the
         // old revision must not hide the newly persisted invalid FSRS data.

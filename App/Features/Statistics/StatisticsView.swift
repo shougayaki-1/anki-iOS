@@ -111,7 +111,7 @@ private struct StatisticsTrendChart: View {
     }
 }
 
-struct StatisticsView: View {
+struct StatisticsDetailsView: View {
     @Bindable var store: StudyStore
     @State private var period: StatisticsPeriod = .day
     @State private var metric: StatisticsMetric = .answers
@@ -122,8 +122,7 @@ struct StatisticsView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        List {
                 Section {
                     NavigationLink("保存したタイピング回答") { TypedAnswerHistoryView(store: store) }
                         .accessibilityIdentifier("typedAnswerHistory")
@@ -228,32 +227,7 @@ struct StatisticsView: View {
                     Section { ContentUnavailableView("まだ記録を読み込んでいません", systemImage: "chart.bar") }
                 }
             }
-            .navigationDestination(isPresented: $store.showingAchievementHistory) { AchievementHistoryView(store: store) }
-            .navigationTitle("記録")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("更新", systemImage: "arrow.clockwise") { store.refreshStatistics() }
-                        .disabled(store.statisticsLoading)
-                }
-            }
-            .task(id: store.selectedTab) {
-                guard store.selectedTab == 2 else { return }
-                // TabView may retain this view across reloads and tab changes.
-                store.refreshStatistics()
-                var day = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
-                var zone = TimeZone.current.identifier
-                while !Task.isCancelled {
-                    try? await Task.sleep(for: .seconds(30))
-                    guard !Task.isCancelled else { return }
-                    let next = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
-                    if next != day || zone != TimeZone.current.identifier {
-                        day = next; zone = TimeZone.current.identifier
-                        store.refreshStatistics()
-                    }
-                }
-            }
-            .onChange(of: store.statisticsScope) { _, _ in store.refreshStatistics() }
-        }
+        .navigationTitle("学習の詳細")
     }
 }
 
@@ -473,7 +447,7 @@ private struct MemoryDistributionView: View {
     }
 }
 
-private struct MemoryEvidenceCardsView: View {
+struct MemoryEvidenceCardsView: View {
     let store: StudyStore
     let ids: [UUID]
     var cards: [MemoryCard] = []

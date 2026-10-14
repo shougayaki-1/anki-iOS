@@ -60,6 +60,11 @@ private struct StatisticsAccumulator {
 }
 
 struct StudyStatistics {
+    // Compact value projections built with the existing history pass, never in body.
+    var dashboardPeriods: [Int: StatisticsBucket] = [:] // 0 = all history
+    var calendarDays: [Date: StatisticsBucket] = [:]
+    var growth: [MemoryGrowthGroup] = []
+    var scheduledDays: [ForecastDay] = []
     // days are newest-first to preserve the legacy summary API; trends may be
     // reversed in the chart to present time from left to right.
     var achievements: AchievementStatistics? = nil
@@ -96,6 +101,8 @@ struct StudyStatistics {
         var weekly: [Date: StatisticsAccumulator] = [:]
         var monthly: [Date: StatisticsAccumulator] = [:]
         var all = StatisticsAccumulator()
+        var periods: [Int: StatisticsAccumulator] = [:]
+        let periodStarts = [7, 30, 90].map { ($0, calendar.date(byAdding: .day, value: -($0 - 1), to: today)!) }
         var unattributedAnswers = 0
 
         for log in logs where log.date <= now && included(deckID: log.deckID, tags: log.tagIDs) {
@@ -106,6 +113,9 @@ struct StudyStatistics {
             weekly[week, default: StatisticsAccumulator()].record(log)
             monthly[month, default: StatisticsAccumulator()].record(log)
             all.record(log)
+            for (count, start) in periodStarts {
+                if studyDate >= start { periods[count, default: StatisticsAccumulator()].record(log) }
+            }
             if log.deckID == nil { unattributedAnswers += 1 }
         }
 
@@ -134,10 +144,16 @@ struct StudyStatistics {
             cursor = studyDay.interval(containing: calendar.date(byAdding: .day, value: -1, to: cursor)!).start
         }
 
-        let report = Self(days: days, weeks: weeks, months: months, streak: streak,
+        var report = Self(days: days, weeks: weeks, months: months, streak: streak,
                           ratings: all.ratings, durationMs: all.durationMs,
                           meanRetrievability: nil, overdueCount: 0,
                           unattributedAnswers: unattributedAnswers)
+        report.dashboardPeriods = Dictionary(uniqueKeysWithValues: [7, 30, 90].map {
+            ($0, (periods[$0] ?? StatisticsAccumulator()).bucket(at: today))
+        })
+        report.dashboardPeriods[0] = all.bucket(at: today)
+        // Keep each bucket's true study-day key, including DST changes.
+        report.calendarDays = Dictionary(uniqueKeysWithValues: daily.map { ($0.key, $0.value.bucket(at: $0.key)) })
         return report.updatingCurrentCards(cards, now: now, selectedDeckIDs: selectedDeckIDs,
                                            selectedTagIDs: selectedTagIDs, fallback: retrievabilities)
     }
@@ -157,10 +173,13 @@ struct StudyStatistics {
         let mean = probabilities.isEmpty ? nil : probabilities.reduce(0, +) / Double(probabilities.count)
         let overdue = scopedCards.filter { !$0.isNew && $0.dueDate < now }.count
 
-        return Self(days: days, weeks: weeks, months: months, streak: streak,
+        var result = Self(days: days, weeks: weeks, months: months, streak: streak,
                     ratings: ratings, durationMs: durationMs,
                     meanRetrievability: mean, overdueCount: overdue,
                     unattributedAnswers: unattributedAnswers)
+        result.dashboardPeriods = dashboardPeriods
+        result.calendarDays = calendarDays
+        return result
     }
 }
 
@@ -486,4 +505,11 @@ struct AchievementStatistics {
         }
         return Self(progress: current.progress(at: now), history: history.sorted { $0.occurredAt > $1.occurredAt })
     }
+}
+
+// Exhaustive, disjoint current-card categories; maturation has one shared owner.
+struct MemoryGrowthGroup: Identifiable {
+    let id: String
+    let explanation: String
+    let cards: [MemoryCard]
 }
