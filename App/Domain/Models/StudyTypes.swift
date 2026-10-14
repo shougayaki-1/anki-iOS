@@ -180,6 +180,47 @@ struct HomeSnapshot: Equatable {
     let dayStart: Date
     let nextRefresh: Date
     var studyPaused = false
+    var medianAnswerSeconds: Double? = nil
+}
+
+// Read-only recommendation. Card pool and answer budget deliberately have separate units.
+struct HomeRecommendation: Equatable {
+    let mode: StudyMode
+    let cardCount: Int
+    let answerLimit: Int
+    let medianAnswerSeconds: Double?
+    let scope: LearningScope
+    let responseMode: SessionResponseMode
+    init(mode: StudyMode, cardCount: Int, answerLimit: Int, medianAnswerSeconds: Double?, scope: LearningScope = LearningScope(), responseMode: SessionResponseMode = .cardDefault) {
+        self.mode = mode; self.cardCount = cardCount; self.answerLimit = answerLimit
+        self.medianAnswerSeconds = medianAnswerSeconds; self.scope = scope; self.responseMode = responseMode
+    }
+    var policy: ReviewOrderPolicy {
+        mode == .review && answerLimit > 0 && cardCount > answerLimit ? .forgettingRisk : .traditional
+    }
+    var title: String { mode == .review ? "おすすめの復習を始める" : "おすすめの新規学習を始める" }
+    var poolText: String { "\(mode == .review ? "復習待ち" : "新規カード")：\(cardCount)枚" }
+    var limitText: String { answerLimit == 0 ? "今回は回答上限なし" : "今回は最大\(answerLimit)回答" }
+    var reason: String {
+        if policy == .forgettingRisk { return "復習待ちが多いため、忘れそうなカードから取り組みます。" }
+        return mode == .review ? "期限を迎えたカードから復習します。" : "復習待ちはありません。新しいカードに取り組めます。"
+    }
+    var estimatedAnswers: Int { answerLimit == 0 ? cardCount : min(cardCount, answerLimit) }
+    var timeText: String {
+        guard let seconds = medianAnswerSeconds, seconds.isFinite, (1...300).contains(seconds), cardCount > 0 else { return "推定不可" }
+        return "約\(max(1, Int(ceil(Double(estimatedAnswers) * seconds / 60))))分"
+    }
+    var estimateExplanation: String {
+        "直近30日の有効な回答時間（最大1,000回答・5回答以上）の中央値 × 初回の予定回答数。再回答や待機によって所要時間は変わります。"
+    }
+}
+
+enum AnswerTimeEstimate {
+    static func median(milliseconds: [Int], validRange: ClosedRange<Int> = 1_000...300_000, minimumSamples: Int = 5) -> Double? {
+        let values = milliseconds.filter { validRange.contains($0) }.sorted()
+        guard values.count >= minimumSamples && !values.isEmpty else { return nil }
+        return Double(values[(values.count - 1) / 2] + values[values.count / 2]) / 2_000
+    }
 }
 
 struct ReviewPresentation {
@@ -264,7 +305,7 @@ enum HomeStudyPresentation {
     }
 
     static func startTitle(mode: StudyMode, answerLimit: Int) -> String {
-        let limit = answerLimit == 0 ? "上限なし" : "最大\(answerLimit)問"
+        let limit = answerLimit == 0 ? "上限なし" : "最大\(answerLimit)回答"
         return "\(mode.title)・\(limit)"
     }
 

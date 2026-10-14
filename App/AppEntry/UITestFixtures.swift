@@ -6,9 +6,9 @@ import SQLite3
 
 // Only explicit UI-test launch arguments create fixtures, in the app's sandbox.
 enum UITestFixtures {
-    @MainActor static func configureAccessibilityScene() {
+    @MainActor static func configureAccessibilityScene(largeText: Bool = true) {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
-            scene.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge
+            if largeText { scene.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge }
             scene.traitOverrides.userInterfaceStyle = .dark
         }
     }
@@ -63,6 +63,39 @@ enum UITestFixtures {
             }
         }
     }
+    @MainActor static func populateHomeRecommendation(_ store: StudyStore, scenario: String) throws {
+        let repository = store.repository, now = store.clock()
+        guard try repository.notes().isEmpty else { return }
+        let count = scenario == "many" ? 200 : 1
+        let deck = try repository.decks()[0].id
+        for index in 0..<count {
+            try repository.createNote(NoteInput(deckID: deck, question: "今日の復習 \(index + 1)", answer: "回答"), now: now)
+        }
+        let scheduler = try ReviewScheduler()
+        let past = now.addingTimeInterval(-864000)
+        let transition = try scheduler.review(scheduler.newCard(now: past), grade: .easy, now: past)
+        let payload = try JSONEncoder().encode(transition.after)
+        try repository.transaction {
+            for card in try repository.cards() {
+                card.fsrsPayload = payload
+                card.dueDate = scenario == "empty" ? now.addingTimeInterval(86400) : now.addingTimeInterval(-60)
+            }
+            if let card = try repository.cards().first {
+                for sequence in 1...5 {
+                    let log = StudyReviewLog(card: card, transition: transition, before: payload, after: payload,
+                        mode: .mental, durationMs: 24000, wasNew: false, sequence: sequence)
+                    log.reviewedAt = now.addingTimeInterval(-86400)
+                    repository.context.insert(log)
+                }
+            }
+        }
+        if scenario == "resume" {
+            try repository.start(mode: .review, now: now)
+            try repository.updateDraft(text: "保持される下書き", now: now)
+        }
+        try store.reload()
+    }
+
     @MainActor static func populateDueNotification(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let base = now.addingTimeInterval(-7200)

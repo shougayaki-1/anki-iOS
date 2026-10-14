@@ -29,6 +29,26 @@ extension PersistenceController {
 
 @MainActor
 final class StudyRepository {
+    // A bounded recent sample, invalidated after writes or a study-day/time-zone change.
+    var homeAnswerTimeCache: (revision: Int, day: Date, zone: String, samples: [(UUID, Int, String)])?
+    private(set) var homeAnswerTimeFetchCount = 0
+    func homeAnswerMedian(cardIDs: Set<UUID>, responseMode: SessionResponseMode = .cardDefault, now: Date, day: Date) throws -> Double? {
+        let samples: [(UUID, Int, String)]
+        if let cache = homeAnswerTimeCache, cache.revision == mutationRevision,
+           cache.day == day, cache.zone == calendar.timeZone.identifier, !context.hasChanges {
+            samples = cache.samples
+        } else {
+            let since = calendar.date(byAdding: .day, value: -30, to: now)!
+            var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+                $0.reviewedAt >= since && $0.reviewedAt <= now && $0.durationMs >= 1_000 && $0.durationMs <= 300_000
+            }, sortBy: [SortDescriptor(\.reviewedAt, order: .reverse)])
+            fetch.fetchLimit = 1_000
+            samples = try context.fetch(fetch).map { ($0.cardID, $0.durationMs, $0.responseMode) }
+            homeAnswerTimeFetchCount += 1
+            homeAnswerTimeCache = (mutationRevision, day, calendar.timeZone.identifier, samples)
+        }
+        return AnswerTimeEstimate.median(milliseconds: samples.filter { cardIDs.contains($0.0) && (responseMode.override == nil || $0.2 == responseMode.rawValue) }.map { $0.1 })
+    }
     let context: ModelContext
     var calendar: Calendar
     var mediaStore: MediaStore

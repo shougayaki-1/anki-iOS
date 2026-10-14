@@ -79,8 +79,8 @@ struct ReviewForecast: Equatable, Sendable {
         let duration = data.logs.filter {
             $0.reviewedAt >= since && $0.reviewedAt <= now && (1...1_800_000).contains($0.durationMs) &&
             (deckID == nil || pathByCard[$0.cardID]?.contains(deckID!) == true)
-        }.map { Double($0.durationMs) / 1000 }.sorted()
-        let median: Double? = duration.isEmpty ? nil : (duration[(duration.count - 1) / 2] + duration[duration.count / 2]) / 2
+        }.map(\.durationMs)
+        let median = AnswerTimeEstimate.median(milliseconds: duration, validRange: 1...1_800_000, minimumSamples: 1)
         let freshOrder = cards.indices.sorted {
             cards[$0].source.createdAt == cards[$1].source.createdAt
             ? cards[$0].source.id.uuidString < cards[$1].source.id.uuidString

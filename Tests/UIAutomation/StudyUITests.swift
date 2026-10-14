@@ -3,57 +3,72 @@ import UIKit
 
 final class StudyUITests: XCTestCase {
     func testReviewHomeSeparatesAnswerLimitAndCardPoolAndStartsInOneTap() {
-        let app = XCUIApplication()
-        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-notification-due"]
-        app.launch()
-        let review = app.buttons["start-review"]
-        XCTAssertTrue(review.waitForExistence(timeout: 15))
-        XCTAssertTrue(review.isHittable)
-        XCTAssertTrue(review.label.contains("最大20問"))
-        XCTAssertTrue(review.label.contains("復習できるカード：1枚"))
-        XCTAssertLessThan(review.frame.maxY, app.tabBars.firstMatch.frame.minY)
-        let progress = app.staticTexts["今日の学習（全デッキ）"]
-        XCTAssertTrue(progress.exists)
-        XCTAssertLessThan(progress.frame.minY, review.frame.minY)
-        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "同じカードへの再回答も数えます")).count, 0)
-        app.buttons["学習モードの説明"].tap()
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "同じカードへの再回答も数えます")).firstMatch.waitForExistence(timeout: 5))
-        app.buttons["閉じる"].tap()
-        attach(app, "Issue110-compact-home-progress-and-review")
-        review.tap()
-        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        for scenario in ["few", "many", "empty", "resume"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-recommendation", scenario, "-study-test-reduce-motion"]
+            if scenario == "many" { app.launchArguments += ["-study-test-dark"] }
+            app.launch()
+            let recommendation = app.buttons["startRecommended"]
+            if scenario == "empty" {
+                XCTAssertTrue(app.staticTexts["今は学習できるカードがありません"].waitForExistence(timeout: 15))
+                XCTAssertFalse(recommendation.exists)
+                XCTAssertFalse(app.buttons["start-review"].isEnabled)
+            } else if scenario == "resume" {
+                XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+                XCTAssertFalse(recommendation.exists)
+            } else {
+                XCTAssertTrue(recommendation.waitForExistence(timeout: 15))
+                XCTAssertTrue(recommendation.isHittable)
+                XCTAssertTrue(recommendation.label.contains("最大20回答"))
+                XCTAssertTrue(recommendation.label.contains(scenario == "many" ? "復習待ち：200枚" : "復習待ち：1枚"))
+                XCTAssertTrue(recommendation.label.contains(scenario == "many" ? "約8分" : "約1分"))
+                XCTAssertLessThan(recommendation.frame.maxY, app.tabBars.firstMatch.frame.minY)
+                XCTAssertGreaterThan(app.staticTexts["今日の学習（全デッキ）"].frame.minY, recommendation.frame.minY)
+                XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "忘れそうなカードから")).count, scenario == "many" ? 1 : 0)
+            }
+            attach(app, "Issue187-" + scenario)
+            if scenario == "few" || scenario == "many" {
+                recommendation.tap()
+                XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+            }
+            app.terminate()
+        }
     }
 
     func testHomeAnswerLimitChangesLabelsAndKeepsResumeIndependent() {
         let app = app()
         create(app, question: "Home limit question", answer: "Answer")
         app.tabBars.buttons["ホーム"].tap()
-        let start = app.buttons["start-new"]
+        let start = app.buttons["startRecommended"]
         XCTAssertTrue(start.waitForExistence(timeout: 10))
-        XCTAssertTrue(start.label.contains("最大20問"))
-        XCTAssertTrue(start.label.contains("新しく学べるカード：1枚"))
-        for limit in [10, 30, 0, 20] {
+        XCTAssertTrue(start.label.contains("最大20回答"))
+        XCTAssertTrue(start.label.contains("新規カード：1枚"))
+        for limit in [10, 0, 20] {
+            scrollTo(app.buttons["openSessionAnswerLimit"], app: app)
             app.buttons["openSessionAnswerLimit"].tap()
-            let choice = app.buttons[limit == 0 ? "すべて（上限なし）" : "\(limit)問"]
+            let choice = app.buttons[limit == 0 ? "回答上限なし" : "最大\(limit)回答"]
             scrollTo(choice, app: app); choice.tap()
             app.buttons["閉じる"].tap()
-            XCTAssertTrue(start.label.contains(limit == 0 ? "上限なし" : "最大\(limit)問"))
+            XCTAssertTrue(start.label.contains(limit == 0 ? "上限なし" : "最大\(limit)回答"))
             XCTAssertTrue(start.label.contains("1枚"))
             let mixed = app.buttons["start-mixed"]
             scrollTo(mixed, app: app)
-            XCTAssertTrue(mixed.label.contains(limit == 0 ? "上限なし" : "最大\(limit)問"))
+            XCTAssertTrue(mixed.label.contains(limit == 0 ? "上限なし" : "最大\(limit)回答"))
             XCTAssertTrue(mixed.label.contains("1枚"))
             for _ in 0..<3 { app.swipeDown() }
         }
         scrollTo(start, app: app); start.tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        let remainingBeforePause = app.staticTexts["remainingQuestions"].label
         app.buttons["pauseStudy"].tap()
+        scrollTo(app.buttons["openSessionAnswerLimit"], app: app)
         app.buttons["openSessionAnswerLimit"].tap()
-        app.buttons["10問"].tap(); app.buttons["閉じる"].tap()
+        app.buttons["最大10回答"].tap(); app.buttons["閉じる"].tap()
         XCTAssertEqual(app.buttons["resumeStudy"].label, "続きから再開")
+        scrollTo(app.buttons["resumeStudy"], app: app)
         app.buttons["resumeStudy"].tap()
         XCTAssertTrue(app.staticTexts["remainingQuestions"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.staticTexts["remainingQuestions"].label, "残り20問")
+        XCTAssertEqual(app.staticTexts["remainingQuestions"].label, remainingBeforePause)
         attach(app, "Issue88-resume-keeps-original-limit")
     }
     #if targetEnvironment(macCatalyst)

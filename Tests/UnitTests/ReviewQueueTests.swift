@@ -2,6 +2,31 @@ import XCTest
 @testable import AnkiIOS
 
 final class ReviewQueueTests: XCTestCase {
+    func testHomeRecommendationUnitsPolicyAndEstimate() {
+        for count in [1, 20, 200] {
+            for limit in [0, 10, 20] {
+                let value = HomeRecommendation(mode: .review, cardCount: count, answerLimit: limit, medianAnswerSeconds: 24)
+                XCTAssertEqual(value.poolText, "復習待ち：\(count)枚")
+                XCTAssertEqual(value.estimatedAnswers, limit == 0 ? count : min(count, limit))
+                XCTAssertEqual(value.policy, limit > 0 && count > limit ? .forgettingRisk : .traditional)
+                XCTAssertEqual(value.reason.contains("忘れそう"), value.policy == .forgettingRisk)
+                XCTAssertFalse(value.limitText.contains("枚"))
+            }
+        }
+        XCTAssertEqual(HomeRecommendation(mode: .review, cardCount: 200, answerLimit: 0, medianAnswerSeconds: 24).timeText, "約80分")
+        XCTAssertEqual(HomeRecommendation(mode: .review, cardCount: 200, answerLimit: 20, medianAnswerSeconds: 24).timeText, "約8分")
+        for value in [nil, Double.nan, .infinity, 0, 301] as [Double?] {
+            XCTAssertEqual(HomeRecommendation(mode: .review, cardCount: 20, answerLimit: 20, medianAnswerSeconds: value).timeText, "推定不可")
+        }
+        XCTAssertEqual(HomeRecommendation(mode: .new, cardCount: 200, answerLimit: 20, medianAnswerSeconds: nil).policy, .traditional)
+        let base = HomeRecommendation(mode: .review, cardCount: 20, answerLimit: 20, medianAnswerSeconds: nil)
+        XCTAssertNotEqual(base, HomeRecommendation(mode: .review, cardCount: 20, answerLimit: 20, medianAnswerSeconds: nil, scope: LearningScope(deckID: UUID())))
+        XCTAssertNotEqual(base, HomeRecommendation(mode: .review, cardCount: 20, answerLimit: 20, medianAnswerSeconds: nil, responseMode: .typing))
+        XCTAssertNil(AnswerTimeEstimate.median(milliseconds: [0, 1, 999, 300001, Int.max]))
+        XCTAssertNil(AnswerTimeEstimate.median(milliseconds: [1000, 1000, 1000, 1000]))
+        XCTAssertEqual(AnswerTimeEstimate.median(milliseconds: [1000, 2000, 24000, 30000, 300000, Int.max, 0]), 24)
+    }
+
     func testCompactHomeProgressAndSharedConditions() {
         XCTAssertEqual(HomeStudyPresentation.dailyProgress(count: 25, goal: 20), "25枚・目標20枚 達成")
         XCTAssertEqual(HomeStudyPresentation.dailyProgress(count: 12, goal: 20), "12 / 20枚")
@@ -17,7 +42,7 @@ final class ReviewQueueTests: XCTestCase {
     func testHomeLabelsSeparateAnswerLimitFromCardPoolForEveryMode() {
         for mode in StudyMode.allCases {
             for limit in [10, 20, 30, 0] {
-                let expected = mode.title + (limit == 0 ? "・上限なし" : "・最大\(limit)問")
+                let expected = mode.title + (limit == 0 ? "・上限なし" : "・最大\(limit)回答")
                 for count in [0, 3, 80] {
                     let action = HomePrimaryAction.start(mode, count)
                     XCTAssertEqual(action.buttonTitle(answerLimit: limit), expected)
