@@ -1198,45 +1198,49 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertNil(try restored.sessionProgress()) // Legacy session stays intact; no invented count.
     }
 
-    func testVisibleAnswerTotalStaysAtAnswerCapDuringShortRelearning() throws {
-        let repo = try fixture()
-        try create(repo)
-        try repo.start(mode: .new, answerLimit: 20, now: now)
-        let first = try XCTUnwrap(repo.presentation(now: now))
-        XCTAssertEqual(first.sessionProgress?.limit, 20)
-        XCTAssertEqual(first.visibleAnswerTotal, 20)
+    func testVisibleAnswerTotalTracksOneCardAndShortRelearningWithoutChangingAnswerCap() throws {
+        for mode in [StudyMode.new, .mixed] {
+            let repo = try fixture()
+            try create(repo)
+            try repo.start(mode: mode, answerLimit: 20, now: now)
+            let first = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertEqual(first.sessionProgress?.limit, 20)
+            XCTAssertEqual(first.visibleAnswerTotal, 1)
 
-        try revealAndGrade(repo, grade: .again, date: now)
-        let waiting = try XCTUnwrap(repo.presentation(now: now))
-        XCTAssertNil(waiting.card)
-        XCTAssertEqual(waiting.sessionProgress?.answered, 1)
-        XCTAssertEqual(waiting.visibleAnswerTotal, 20)
-        XCTAssertEqual(waiting.emptyState?.reason, .waiting)
+            try revealAndGrade(repo, grade: .again, date: now)
+            let waiting = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertNil(waiting.card)
+            XCTAssertEqual(waiting.sessionProgress?.answered, 1)
+            XCTAssertEqual(waiting.visibleAnswerTotal, 1)
+            XCTAssertEqual(waiting.emptyState?.reason, .waiting)
 
-        let due = try XCTUnwrap(waiting.nextShortDue)
-        try repo.resume(now: due)
-        let repeated = try XCTUnwrap(repo.presentation(now: due))
-        XCTAssertNotNil(repeated.card)
-        XCTAssertEqual(repeated.visibleAnswerTotal, 20)
-        XCTAssertEqual(repeated.sessionProgress?.limit, 20)
-        try repo.undo(now: due)
-        let undone = try XCTUnwrap(repo.presentation(now: due))
-        XCTAssertEqual(undone.sessionProgress?.answered, 0)
-        XCTAssertEqual(undone.visibleAnswerTotal, 20)
+            let due = try XCTUnwrap(waiting.nextShortDue)
+            try repo.resume(now: due)
+            let repeated = try XCTUnwrap(repo.presentation(now: due))
+            XCTAssertNotNil(repeated.card)
+            XCTAssertEqual(repeated.visibleAnswerTotal, 2)
+            XCTAssertEqual(repeated.sessionProgress?.limit, 20)
+            try repo.undo(now: due)
+            let undone = try XCTUnwrap(repo.presentation(now: due))
+            XCTAssertEqual(undone.sessionProgress?.answered, 0)
+            XCTAssertEqual(undone.visibleAnswerTotal, 1)
+        }
     }
 
     func testVisibleAnswerTotalUsesEightAvailableCardsAndConfiguredCap() throws {
-        let repo = try fixture()
-        for _ in 0..<8 { try create(repo) }
-        try repo.start(mode: .new, answerLimit: 20, now: now)
-        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 20)
-        for _ in 0..<8 { try revealAndGrade(repo, grade: .easy, date: now) }
-        let finished = try XCTUnwrap(repo.presentation(now: now))
-        XCTAssertNil(finished.card)
-        XCTAssertEqual(finished.sessionProgress?.answered, 8)
-        XCTAssertEqual(finished.sessionProgress?.limit, 20)
-        XCTAssertEqual(finished.visibleAnswerTotal, 20)
-        XCTAssertEqual(finished.emptyState?.reason, .complete)
+        for mode in [StudyMode.new, .mixed] {
+            let repo = try fixture()
+            for _ in 0..<8 { try create(repo) }
+            try repo.start(mode: mode, answerLimit: 20, now: now)
+            XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 8)
+            for _ in 0..<8 { try revealAndGrade(repo, grade: .easy, date: now) }
+            let finished = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertNil(finished.card)
+            XCTAssertEqual(finished.sessionProgress?.answered, 8)
+            XCTAssertEqual(finished.sessionProgress?.limit, 20)
+            XCTAssertEqual(finished.visibleAnswerTotal, 8)
+            XCTAssertEqual(finished.emptyState?.reason, .complete)
+        }
     }
 
     func testSessionAnswerProgressTracksRemainingAndFinishesAt20RegardlessOfDailyGoal() throws {
@@ -2814,12 +2818,21 @@ extension StudyRepositoryTests {
         options.activeSessionProgress?.answerLimit = 20
         try repo.updateOptions(options)
         let id = try XCTUnwrap(repo.session()?.cardID)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 1)
         try revealAndGrade(repo, grade: .again, date: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 1)
         let due = try XCTUnwrap(repo.card(id)?.dueDate)
         try repo.resume(now: due)
         XCTAssertEqual(try repo.session()?.cardID, id)
         XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 1, limit: 20))
-        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 20)
+        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 2)
+        try repo.undo(now: due)
+        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 1)
+        try revealAndGrade(repo, grade: .easy, date: due)
+        let finished = try XCTUnwrap(repo.presentation(now: due))
+        XCTAssertNil(finished.card)
+        XCTAssertEqual(finished.visibleAnswerTotal, 1)
+        XCTAssertEqual(finished.emptyState?.reason, .complete)
     }
 }
 

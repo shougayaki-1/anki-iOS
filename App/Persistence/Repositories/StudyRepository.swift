@@ -907,8 +907,15 @@ final class StudyRepository {
             OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) ?? (ordering == nil ? OrderingError.invalidDraft.localizedDescription : nil)
         } : nil
         let sessionAnswerProgress = try sessionProgress()
-        // Finite sets and bounded answer sessions have a fixed denominator.
-        let visibleAnswerTotal = sessionAnswerProgress.flatMap { $0.limit > 0 ? $0.limit : nil }
+        let savedProgress = try options().activeSessionProgress
+        let visibleAnswerTotal: Int? = sessionAnswerProgress.flatMap { progress in
+            guard progress.limit > 0 else { return nil }
+            // Only the one-pass review set has a finite, frozen target count.
+            // New, mixed and legacy sessions retain their actual-question estimate.
+            if savedProgress?.reviewSetLimit != nil || progress.isComplete { return progress.limit }
+            if item == nil { return max(1, progress.answered) }
+            return min(progress.limit, max(savedProgress?.initialEligibleCount ?? progress.limit, progress.answered + 1))
+        }
         return ReviewPresentation(card: item, mode: mode,
                                   responseMode: requested == .ordering && reason != nil ? .mental : requested,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
