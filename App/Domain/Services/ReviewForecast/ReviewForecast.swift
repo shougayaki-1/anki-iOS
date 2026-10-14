@@ -17,6 +17,7 @@ struct ReviewForecast: Equatable, Sendable {
     let remainingNew: Int
     let dailyGoal: Int?
     let medianAnswerSeconds: Double?
+    let answerTimeSamples: Int
     let overdue: Int
     var scheduled: Int { days.reduce(0) { $0 + $1.scheduled } }
     var projectedAnswers: Int { days.reduce(0) { $0 + $1.projectedAnswers } }
@@ -36,7 +37,7 @@ struct ReviewForecast: Equatable, Sendable {
         var snapshot: SchedulerSnapshot
         var summary: ScheduleSummary
     }
-    static func calculate(data: BackupData, deckID: UUID?, days count: Int, now: Date, calendar: Calendar, tagIDs: [UUID] = [], until: Date? = nil) throws -> Self {
+    static func calculate(data: BackupData, deckID: UUID?, days count: Int, now: Date, calendar: Calendar, tagIDs: [UUID] = [], until: Date? = nil, newLimit: Int? = nil) throws -> Self {
         guard (1...90).contains(count), let preferences = data.preferences.first else { throw StudyError.invalidContent }
         let options = try data.options.first.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) } ?? StudyOptions()
         let day = StudyDay(calendar: calendar, startHour: preferences.dayStartHour)
@@ -117,7 +118,7 @@ struct ReviewForecast: Equatable, Sendable {
                 let isShort = card.summary.state == "learning" || card.summary.state == "relearning"
                 if options.siblingBuryEnabled && !isShort && usedNotes.contains(card.noteID) { continue }
                 if isNew {
-                    guard globalUsed < preferences.dailyNewLimit,
+                    guard globalUsed < (newLimit ?? preferences.dailyNewLimit),
                           card.limits.allSatisfy({ quotaUsed[$0.key, default: []].count < $0.value }) else { continue }
                     globalUsed += 1
                     for id in card.quotaDecks { quotaUsed[id, default: []].insert(card.source.id) }
@@ -132,7 +133,7 @@ struct ReviewForecast: Equatable, Sendable {
         }
         return ReviewForecast(days: periods, generatedAt: now,
                               remainingNew: cards.filter { $0.scoped && $0.summary.state == "new" }.count,
-                              dailyGoal: preferences.dailyGoal, medianAnswerSeconds: median, overdue: overdue)
+                              dailyGoal: preferences.dailyGoal, medianAnswerSeconds: median, answerTimeSamples: duration.count, overdue: overdue)
     }
 }
 
@@ -223,5 +224,29 @@ struct ExamPlanReport: Sendable {
         result.forecastDays = count
         result.forecast = try ReviewForecast.calculate(data: data, deckID: scope.deckID, days: count, now: now, calendar: calendar, tagIDs: scope.tagIDs, until: end)
         return result
+    }
+}
+
+// Each scenario starts from the same immutable snapshot and uses the existing engine.
+struct ForecastScenario: Identifiable, Sendable {
+    var id: Int { newLimit }
+    let newLimit: Int
+    let title: String
+    let forecast: ReviewForecast
+    let estimatedMinutes: Double?
+    var peakAnswers: Int { forecast.days.map(\.projectedAnswers).max() ?? 0 }
+
+    static func compare(data: BackupData, deckID: UUID?, now: Date, calendar: Calendar,
+                        current: ReviewForecast? = nil) throws -> [Self] {
+        guard let limit = data.preferences.first?.dailyNewLimit else { throw StudyError.invalidContent }
+        var seen = Set<Int>()
+        return try [(limit, "現在の設定"), (limit / 2, "半分（切り捨て）"), (0, "新規なし")].compactMap { value, title in
+            guard seen.insert(value).inserted else { return nil }
+            try Task.checkCancellation()
+            let report = try (value == limit ? current : nil) ?? ReviewForecast.calculate(
+                data: data, deckID: deckID, days: 7, now: now, calendar: calendar, newLimit: value)
+            return Self(newLimit: value, title: title, forecast: report,
+                        estimatedMinutes: report.answerTimeSamples >= 5 ? report.medianAnswerSeconds.map { $0 * Double(report.projectedAnswers) / 60 } : nil)
+        }
     }
 }

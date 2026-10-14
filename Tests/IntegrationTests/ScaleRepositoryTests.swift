@@ -675,3 +675,35 @@ extension ScaleRepositoryTests {
         #endif
     }
 }
+
+extension ScaleRepositoryTests {
+    func testForecastComparisonThreeThousandCardsTenThousandLogsResponsiveness() async throws {
+        #if DEBUG
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let repo = StudyRepository(container: container), now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        try UITestFixtures.populateScale(repo, now: now, multipleDecks: true)
+        try repo.transaction {
+            for log in try repo.logs().prefix(5) { log.reviewedAt = now.addingTimeInterval(-86400) }
+        }
+        let before = try BackupData.capture(repo).canonical()
+        XCTAssertEqual(before.cards.count, 3000); XCTAssertEqual(before.logs.count, 10000)
+        var insufficient = before
+        insufficient.logs = Array(before.logs.filter { $0.reviewedAt >= now.addingTimeInterval(-30 * 86400) }.prefix(4))
+        XCTAssertTrue(try ForecastScenario.compare(data: insufficient, deckID: nil, now: now, calendar: .current).allSatisfy { $0.estimatedMinutes == nil })
+        let reader = ExamPlanReader(container: container)
+        let loaded = try await ImportMemoryProbe.responsive("forecast_comparison_3000_cards_10000_logs") {
+            try await reader.loadForecast(deckID: nil, days: 7, now: now, calendar: .current)
+        }
+        print("FORECAST_COMPARISON capture_ms=\(loaded.captureSeconds * 1000) calculate_ms=\(loaded.calculationSeconds * 1000)")
+        XCTAssertFalse(loaded.capturedOnMainThread)
+        XCTAssertEqual(loaded.scenarios.count, 3)
+        XCTAssertTrue(loaded.scenarios.allSatisfy { $0.estimatedMinutes != nil })
+        for scenario in loaded.scenarios { XCTAssertEqual(scenario.forecast.scheduled, loaded.report.scheduled) }
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        #endif
+    }
+}

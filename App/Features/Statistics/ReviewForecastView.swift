@@ -9,7 +9,8 @@ struct ReviewForecastView: View {
     @State private var report: ReviewForecast?
     @State private var failure: String?
     @State private var loading = false
-    @State private var worker: Task<ReviewForecast, Error>?
+    @State private var scenarios: [ForecastScenario] = []
+    @State private var worker: Task<ForecastLoad, Error>?
     @State private var generation = 0
     @State private var visible = false
     var body: some View {
@@ -19,16 +20,38 @@ struct ReviewForecastView: View {
                     Text("7日").tag(7); Text("30日").tag(30)
                 }.pickerStyle(.segmented).accessibilityIdentifier("forecastPeriod")
                 DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $deckID, nilTitle: "すべてのデッキ", includesDescendants: true).accessibilityIdentifier("forecastDeck")
-                Text("確定済み期日は現在の予定です。見込みは、全デッキで毎日学習日終了前に各カード1回・すべてGoodと仮定した回答数です。2つの数値は重複するため合計しません。")
-                    .font(.footnote)
-                Text("新規は古い順、全体とデッキの上限・兄弟カード抑制を使用します。今日の使用枠を反映します。今日回答済みのカードと短期学習の同日再回答は含まず、実際の学習量は増減します。")
-                    .font(.footnote)
+                Text("見込みは毎日各カード1回・すべてGoodの仮定です。確定済み期日とは合算しません。").font(.footnote)
             }
             if loading { Section { ProgressView("復習量を予測しています…") } }
             if let failure {
                 Section { Text(failure).foregroundStyle(.red); Button("再試行") { refresh() } }
             }
             if let report {
+                Section("新規上限を比較・次の7学習日") {
+                    Text("今日から7日間、仮の全体上限だけを変更します。デッキ別上限と今日の使用枠は共通です。設定は変更しません。")
+                        .font(.footnote)
+                    if let baseline = scenarios.first {
+                        LabeledContent("7日間の確定済み期日（共通）", value: "\(baseline.forecast.scheduled)枚")
+                            .font(.subheadline)
+                    }
+                    ForEach(scenarios) { scenario in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("\(scenario.title) · 1日\(scenario.newLimit)枚まで").font(.headline)
+                            Text("回答見込み \(scenario.forecast.projectedAnswers)回 · 最多日 \(scenario.peakAnswers)回")
+                            if let baseline = scenarios.first {
+                                Text("現在との差 \((scenario.forecast.projectedAnswers - baseline.forecast.projectedAnswers).formatted(.number.sign(strategy: .always())))回 / 7日").foregroundStyle(.secondary)
+                            }
+                            if let minutes = scenario.estimatedMinutes {
+                                Text("合計時間の目安 \(minutes.formatted(.number.precision(.fractionLength(1))))分")
+                            } else {
+                                Text("時間は履歴不足（直近30日に有効な回答5件以上が必要）").foregroundStyle(.secondary)
+                            }
+                        }.font(.subheadline).accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("forecastScenario-\(scenario.newLimit)")
+                    }
+                    Text("確定済み期日は各条件で共通です。以下の期間合計・日別推移は現在の設定です。カードが0枚なら回答見込みは0回です。")
+                        .font(.footnote)
+                }
                 Section("期間の合計") {
                     LabeledContent("確定済み期日", value: "\(report.scheduled)枚").accessibilityIdentifier("forecastScheduled")
                     LabeledContent("現在の期限超過", value: "\(report.overdue)枚")
@@ -64,6 +87,11 @@ struct ReviewForecastView: View {
                     }
                 }
                 Section("計算について") {
+                    Text("確定済み期日は現在の予定です。見込みは、全デッキで毎日学習日終了前に各カード1回・すべてGoodと仮定した回答数です。2つの数値は重複するため合計しません。")
+                    .font(.footnote)
+                    Text("新規は古い順、全体とデッキの上限・兄弟カード抑制を使用します。今日の使用枠を反映します。今日回答済みのカードと短期学習の同日再回答は含まず、実際の学習量は増減します。")
+                    .font(.footnote)
+
                     Text("学習日は\(store.settings.dayStartHour)時で切り替わります。期日超過は今日にまとめます。回答・Undo・新規追加・設定変更後の再訪、期間やデッキの変更、時刻・時間帯の変更後に再計算します。")
                     Text("この画面は復習予定・FSRS・履歴・設定を変更しません。")
                     Text("計算日時: \(report.generatedAt.formatted())")
@@ -95,23 +123,21 @@ struct ReviewForecastView: View {
         worker?.cancel(); generation += 1
         let token = generation
         report = nil; failure = nil; loading = true
-        do {
-            let data = try BackupData.capture(store.repository), now = store.clock(), calendar = Calendar.current
-            let selected = deckID, period = days
-            let task = Task.detached(priority: .utility) {
-                try ReviewForecast.calculate(data: data, deckID: selected, days: period, now: now, calendar: calendar)
+        let reader = ExamPlanReader(container: store.repository.context.container)
+        let now = store.clock(), calendar = Calendar.current, selected = deckID, period = days
+        let task = Task.detached(priority: .utility) {
+            try await reader.loadForecast(deckID: selected, days: period, now: now, calendar: calendar)
+        }
+        worker = task
+        Task { @MainActor in
+            do {
+                let value = try await task.value
+                guard generation == token && !task.isCancelled else { return }
+                report = value.report; scenarios = value.scenarios; loading = false
+            } catch {
+                guard generation == token && !task.isCancelled else { return }
+                failure = error.localizedDescription; loading = false
             }
-            worker = task
-            Task { @MainActor in
-                do {
-                    let value = try await task.value
-                    guard generation == token && !task.isCancelled else { return }
-                    report = value; loading = false
-                } catch {
-                    guard generation == token && !task.isCancelled else { return }
-                    failure = error.localizedDescription; loading = false
-                }
-            }
-        } catch { failure = error.localizedDescription; loading = false }
+        }
     }
 }
