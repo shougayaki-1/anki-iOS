@@ -2,6 +2,71 @@ import XCTest
 import UIKit
 
 final class StudyUITests: XCTestCase {
+    func testCelebrationAfterRealSessionUndoPauseAndRestart() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-celebration-flow", "-study-test-reduce-motion"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))
+        app.buttons["start-new"].tap()
+        for _ in 0..<3 {
+            XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+            app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        }
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["closeCelebration"].exists)
+        app.buttons["pauseStudy"].tap()
+        XCTAssertTrue(app.buttons["showPendingCelebration"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.buttons["closeCelebration"].exists)
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["closeCelebration"].exists)
+        app.buttons["resumeStudy"].tap()
+        XCTAssertTrue(app.buttons["undoReview"].waitForExistence(timeout: 10))
+        app.buttons["undoReview"].tap()
+        for _ in 0..<2 {
+            XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+            app.buttons["revealAnswer"].tap(); app.buttons["grade-4"].tap()
+        }
+        XCTAssertTrue(app.buttons["finishReview"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["undoReview"].isEnabled)
+        XCTAssertFalse(app.buttons["closeCelebration"].exists)
+        app.buttons["finishReview"].tap()
+        XCTAssertTrue(app.buttons["closeCelebration"].waitForExistence(timeout: 10))
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertTrue(app.buttons["closeCelebration"].waitForExistence(timeout: 10))
+        app.buttons["celebrationRecords"].tap()
+        XCTAssertTrue(app.navigationBars["達成履歴"].waitForExistence(timeout: 10))
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 15))
+        XCTAssertFalse(app.buttons["closeCelebration"].exists)
+        XCTAssertFalse(app.buttons["showPendingCelebration"].exists)
+    }
+
+    func testCelebrationScreensAndDismissalToRecords() {
+        for scenario in ["first", "normal", "milestone", "goal", "mature", "multiple"] {
+            let app = XCUIApplication()
+            app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-celebration", scenario]
+            if scenario == "first" { app.launchArguments += ["-study-test-reduce-motion"] }
+            if scenario == "mature" { app.launchArguments += ["-study-test-dark"] }
+            app.launch()
+            XCTAssertTrue(app.buttons["closeCelebration"].waitForExistence(timeout: 15))
+            XCTAssertTrue(app.buttons["celebrationPrimary"].isHittable)
+            XCTAssertGreaterThanOrEqual(app.buttons["celebrationPrimary"].frame.width, app.frame.width * 0.7)
+            XCTAssertGreaterThanOrEqual(app.buttons["celebrationPrimary"].frame.height, 56)
+            XCTAssertEqual(app.buttons["celebrationPrimary"].label, "ホームへ")
+            Thread.sleep(forTimeInterval: 1.7)
+            attach(app, "Issue103-" + scenario)
+            if scenario == "multiple" {
+                app.buttons["celebrationRecords"].tap()
+                XCTAssertTrue(app.navigationBars["達成履歴"].waitForExistence(timeout: 10))
+            } else {
+                app.buttons["closeCelebration"].tap()
+                XCTAssertTrue(app.tabBars.buttons["ホーム"].waitForExistence(timeout: 10))
+            }
+            app.terminate()
+        }
+    }
+
     func testReviewHomeSeparatesAnswerLimitAndCardPoolAndStartsInOneTap() {
         for scenario in ["few", "many", "empty", "resume"] {
             let app = XCUIApplication()

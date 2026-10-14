@@ -10,6 +10,7 @@ struct MainTabs: View {
     @State private var shortcutDeck: ShortcutDeckDestination?
     @State private var shortcutNotice: String?
 
+    @State private var celebrationDestination: CelebrationAction?
     @State private var sidebarDeck: UUID?
     @State private var expandedDecks = Set<UUID>()
     @State private var compactColumn = NavigationSplitViewColumn.detail
@@ -99,7 +100,29 @@ struct MainTabs: View {
             case .progress: shortcutNavigation.submit(.progress)
             }
         }
-        .fullScreenCover(isPresented: $store.showingReview) { ReviewView(store: store) }
+        .fullScreenCover(isPresented: $store.showingReview, onDismiss: {
+            if scenePhase == .active, store.celebrationRequested { store.presentCelebration() }
+        }) { ReviewView(store: store) }
+        .fullScreenCover(item: $store.celebration, onDismiss: {
+            guard let destination = celebrationDestination else { return }
+            celebrationDestination = nil
+            switch destination {
+            case .home: store.selectedTab = 0
+            case .continueStudy: store.selectedTab = 0; store.startRecommended()
+            case .records:
+                store.selectedTab = 2; store.showingAchievementHistory = true; store.refreshStatistics()
+            }
+        }) { summary in
+            CelebrationView(summary: summary, canContinue: store.canContinueAfterCelebration,
+                            haptics: store.haptics, hapticsMode: store.settings.hapticsMode) { action in
+                celebrationDestination = action
+                store.celebration = nil
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .studyAchievementEventsAvailable)) { notification in
+            guard let repository = notification.object as? StudyRepository, repository === store.repository else { return }
+            if store.showingReview { store.achievementNotice = NoteSaveNotice(message: "達成を記録しました。学習が終わったら確認できます。") }
+        }
         // One alert presenter avoids two .alert modifiers competing on TabView.
         .alert(Text(store.failure != nil ? "処理に失敗しました" : "ショートカット"),
                isPresented: Binding(
@@ -222,9 +245,16 @@ struct HomeView: View {
                         case .resume: store.resume()
                         case .start: store.startRecommended()
                         case .addCards: adding = true
-                        case .complete: store.completeSession()
+                        case .complete: store.completeSession(); if store.celebrationRequested { store.presentCelebration() }
                         case .waiting, .unavailable: break
                         }
+                    }
+                }
+                if store.pendingCelebrationCount > 0 {
+                    Section {
+                        Button { store.presentCelebration() } label: {
+                            Label("今日の達成を見る", systemImage: "sparkles")
+                        }.accessibilityIdentifier("showPendingCelebration")
                     }
                 }
                 if store.homeFailure == nil {

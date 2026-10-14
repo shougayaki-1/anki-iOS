@@ -261,6 +261,13 @@ struct ReviewView: View {
                     .background { ReviewFixedAreaGestureShield() }
                 }
             }
+            .safeAreaInset(edge: .top) {
+                if let notice = store.achievementNotice {
+                    NoteSaveNoticeView(notice: notice) {
+                        if store.achievementNotice?.id == notice.id { store.achievementNotice = nil }
+                    }.allowsHitTesting(false)
+                }
+            }
             .scrollDisabled(swiping)
             .onChange(of: typingFocused) { _, focused in
                 if focused { swipePanelExpanded = false; invalidateSwipe() }

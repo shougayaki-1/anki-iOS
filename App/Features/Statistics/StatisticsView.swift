@@ -139,19 +139,7 @@ struct StatisticsView: View {
                         if let goal = store.settings.dailyGoal, goal > 0 {
                             LabeledContent("今日の目標", value: "\(goal)枚")
                         }
-                        NavigationLink("達成履歴") {
-                            List {
-                                if store.achievementHistory.isEmpty { Text("これからの達成がここに残ります。") }
-                                ForEach(store.achievementHistory) { record in
-                                    VStack(alignment: .leading) {
-                                        Text(record.title)
-                                        Text(record.studyDay).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                Text("達成時の記録です。現在の実績はUndo・カードの変更で変わります。長期定着はReview状態かつStabilityが21日以上のFSRS推定で、永久記憶を保証しません。")
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            }.navigationTitle("達成履歴")
-                        }
+                        NavigationLink("達成履歴") { AchievementHistoryView(store: store) }
                     }
                 }
                 Section("集計条件") {
@@ -240,6 +228,7 @@ struct StatisticsView: View {
                     Section { ContentUnavailableView("まだ記録を読み込んでいません", systemImage: "chart.bar") }
                 }
             }
+            .navigationDestination(isPresented: $store.showingAchievementHistory) { AchievementHistoryView(store: store) }
             .navigationTitle("記録")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -507,5 +496,24 @@ private struct MemoryEvidenceCardsView: View {
                 }
             }
         }.navigationTitle("根拠のカード")
+    }
+}
+
+struct AchievementHistoryView: View {
+    @Bindable var store: StudyStore
+    var body: some View {
+        List {
+            if store.statisticsLoading { ProgressView("達成履歴を読み込み中") }
+            if let error = store.statisticsError { Text(error); Button("再試行") { store.refreshStatistics() } }
+            if !store.statisticsLoading && store.achievementHistory.isEmpty { Text("これからの達成がここに残ります。") }
+            ForEach(store.achievementHistory) { record in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(record.title)
+                    Text(record.studyDay).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Text("達成時の記録です。現在の実績はUndo・カードの変更で変わります。長期定着はReview状態かつStabilityが21日以上のFSRS推定で、永久記憶を保証しません。")
+                .font(.footnote).foregroundStyle(.secondary)
+        }.navigationTitle("達成履歴")
     }
 }

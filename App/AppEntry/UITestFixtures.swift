@@ -6,6 +6,41 @@ import SQLite3
 
 // Only explicit UI-test launch arguments create fixtures, in the app's sandbox.
 enum UITestFixtures {
+    @MainActor static func populateCelebrationFlow(_ store: StudyStore) throws {
+        guard try store.repository.notes().isEmpty else { return }
+        let deck = try store.repository.decks()[0].id
+        for index in 1...4 {
+            try store.repository.createNote(NoteInput(deckID: deck, question: "セレブレーション確認 \(index)", answer: "回答 \(index)"), now: store.clock())
+        }
+        var settings = try store.repository.settings(); settings.dailyGoal = 3
+        try store.repository.updateSettings(settings)
+        try store.reload()
+    }
+
+    @MainActor static func celebration(_ scenario: String) -> CelebrationSummary {
+        let now = Date()
+        func event(_ kind: AchievementKind, _ value: Int, threshold: Int = 1) -> AchievementEvent {
+            AchievementEvent(record: AchievementRecord(id: UUID().uuidString, kind: kind,
+                studyDay: AchievementProgress.dayKey(now, calendar: .current, startHour: 4),
+                threshold: threshold, value: value, occurredAt: now, sourceLogID: UUID(),
+                timeZoneID: TimeZone.current.identifier, startHour: 4))
+        }
+        let events: [AchievementEvent]
+        switch scenario {
+        case "normal": events = [event(.streakAdvanced, 12)]
+        case "milestone": events = [event(.streakAdvanced, 7)]
+        case "goal": events = [event(.dailyGoalReached, 20, threshold: 20)]
+        case "mature": events = [event(.matureMilestone, 100, threshold: 100)]
+        case "multiple": events = [event(.firstStudyToday, 1), event(.streakAdvanced, 7), event(.dailyGoalReached, 20, threshold: 20)]
+        default: events = [event(.firstStudyToday, 1)]
+        }
+        let days = (-6...0).map { offset in
+            let date = Calendar.current.date(byAdding: .day, value: offset, to: now)!
+            return CelebrationDay(date: date, studied: true, label: String(Calendar.current.component(.day, from: date)))
+        }
+        return CelebrationSummary(events: events, days: days)!
+    }
+
     @MainActor static func configureAccessibilityScene(largeText: Bool = true) {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             if largeText { scene.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge }
