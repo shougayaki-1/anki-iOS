@@ -121,6 +121,7 @@ struct LibraryView: View {
         return NavigationStack {
             List(selection: $selection) {
                 Section {
+                    NavigationLink("カスタム学習") { CustomStudyView(store: store) }
                     NavigationLink("詳細検索・保存済み検索") { AdvancedLibrarySearchView(store: store) }
                     NavigationLink { FlaggedCardsView(store: store) } label: { Label("フラグ付きカード", systemImage: "flag") }
                 }

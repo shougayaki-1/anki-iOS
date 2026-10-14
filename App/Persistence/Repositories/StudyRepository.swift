@@ -623,15 +623,20 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, now: Date) throws {
         let interval = PerformanceProbe.begin("Repository.start")
         defer { PerformanceProbe.end(interval) }
         try transaction {
-            let normalized = try normalizedScope(scope)
-            let selectedResponse = try responseMode ?? options().sessionResponseMode ?? .cardDefault
+            let currentOptions = try options()
+            guard currentOptions.customPractice == nil else { throw CustomStudyError.sessionActive }
+            if customStudy == nil, currentOptions.activeSessionProgress?.customStudy != nil, try session() != nil {
+                throw CustomStudyError.sessionActive
+            }
+            let normalized = try normalizedScope(customStudy?.scope ?? scope)
+            let selectedResponse = try customStudy != nil ? SessionResponseMode.cardDefault : (responseMode ?? options().sessionResponseMode ?? .cardDefault)
             let cards = try queueCards(), settings = try settings()
             let rankingScheduler = policy == .forgettingRisk ? try? ReviewScheduler(parameters: optimizationState().activeParameters) : nil
-            let available = try ReviewQueueBuilder(calendar: calendar).queue(
+            let normalAvailable = try ReviewQueueBuilder(calendar: calendar).queue(
                 cards: responseEligibleCards(scopedQueueCards(normalized, cards: cards), mode: selectedResponse), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
                 mode: mode, touched: [], reviewStreak: 0, now: now, policy: policy,
                 retrievability: { id in
@@ -641,6 +646,13 @@ final class StudyRepository {
                     guard value.isFinite, (0...1).contains(value) else { self.reviewRankingFailureCount += 1; return nil }
                     return value
                 })
+            let available: [UUID]
+            if let customStudy {
+                guard customStudy.official, mode == .review else { throw StudyError.invalidContent }
+                let existing = try session(), existingCustom = try options().activeSessionProgress?.customStudy
+                if let existing, existing.cardID != nil || existingCustom == nil { throw CustomStudyError.sessionActive }
+                available = try customStudyPreview(customStudy, preferredIDs: customCardIDs, now: now).cardIDs
+            } else { available = normalAvailable }
             // Check before replacing an interrupted draft, even if home counts were stale.
             guard !available.isEmpty else {
                 if selectedResponse == .ordering { throw StudyError.noOrderingCards }
@@ -651,13 +663,13 @@ final class StudyRepository {
             let draft = SessionDraft(mode: mode, now: now)
             context.insert(draft)
             var saved = try options()
-            let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
+            let limit = customStudy?.limit ?? answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
                 startSequence: try lastReviewSequence(), answerLimit: mode == .review ? (limit == 0 ? available.count : min(limit, available.count)) : limit, responseMode: selectedResponse,
                 initialEligibleCount: available.count, reviewOrderPolicy: policy,
                 reviewOrder: mode == .review ? Array(available.prefix(limit == 0 ? available.count : limit)) : (policy == .forgettingRisk ? available : nil),
-                reviewSetLimit: mode == .review ? limit : nil)
+                reviewSetLimit: mode == .review ? limit : nil, customStudy: customStudy)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
@@ -674,6 +686,10 @@ final class StudyRepository {
         let limit = progress?.reviewSetLimit ?? progress?.answerLimit
         // start validates candidates before replacing anything and rolls back a
         // failed save, so an empty/failed restart retains the final Undo.
+        if let condition = progress?.customStudy {
+            try start(mode: .review, scope: condition.scope, customStudy: condition, now: now)
+            return
+        }
         try start(mode: mode, scope: originalScope, answerLimit: limit, responseMode: progress?.responseMode ?? .cardDefault, policy: progress?.reviewOrderPolicy ?? .traditional, now: now)
     }
 
@@ -1173,5 +1189,116 @@ extension StudyRepository {
             try writeOptionsInTransaction(saved)
             return event
         }
+    }
+}
+
+
+extension StudyRepository {
+    func customStudyPreview(_ condition: CustomStudyCondition, preferredIDs: [UUID]? = nil, now: Date) throws -> CustomStudyPreview {
+        guard condition.valid else { throw StudyError.invalidContent }
+        let deckIDs = Set(try decks().map(\.id)), tagIDs = Set(try tags().map(\.id))
+        if condition.scope.deckID.map({ !deckIDs.contains($0) }) == true
+            || !Set(condition.scope.tagIDs).isSubset(of: tagIDs) {
+            return CustomStudyPreview(message: "選択したデッキまたはタグが削除されています。条件を選び直してください。")
+        }
+        let all = try queueCards(), settings = try settings()
+        let today = try todayQueueLogs(cards: all, settings: settings, now: now)
+        var candidates = try scopedQueueCards(condition.scope, cards: all).filter { card in
+            guard !card.suspended, !card.isHidden(at: now) else { return false }
+            if settings.siblingBuryEnabled, let noteID = card.noteID,
+               today.contains(where: { $0.noteID == noteID && $0.cardID != card.id }) { return false }
+            return !condition.official || (card.state != "new" && card.due <= now)
+        }
+        switch condition.criterion {
+        case .todayAgain:
+            let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now)
+            let start = day.start
+            let ids = Set(try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+                $0.reviewedAt >= start && $0.reviewedAt <= now && $0.grade == 1
+            })).map(\.cardID))
+            candidates = candidates.filter { ids.contains($0.id) }.sorted { $0.due < $1.due }
+        case .lowRecall:
+            let scheduler = try ReviewScheduler(parameters: optimizationState().activeParameters)
+            let scores = Dictionary(uniqueKeysWithValues: candidates.compactMap { card -> (UUID, Double)? in
+                guard let state = queueStates[card.id]?.prediction, state.canRankReview else { return nil }
+                let probability = scheduler.retrievability(state, now: now)
+                guard probability.isFinite, probability >= 0, probability < 0.9 else { return nil }
+                return (card.id, probability)
+            })
+            candidates = candidates.filter { scores[$0.id] != nil }.sorted {
+                scores[$0.id]! == scores[$1.id]! ? $0.id.uuidString < $1.id.uuidString : scores[$0.id]! < scores[$1.id]!
+            }
+        case .due: candidates = candidates.filter { $0.state != "new" && $0.due <= now }.sorted { $0.due < $1.due }
+        case .soon:
+            let end = calendar.date(byAdding: .day, value: 7, to: now)!
+            candidates = candidates.filter { $0.state != "new" && $0.due > now && $0.due <= end }.sorted { $0.due < $1.due }
+        case .random: candidates.shuffle()
+        }
+        if let preferredIDs {
+            guard Set(preferredIDs).count == preferredIDs.count else { throw StudyError.invalidContent }
+            let ranks = Dictionary(uniqueKeysWithValues: preferredIDs.enumerated().map { ($0.element, $0.offset) })
+            candidates = candidates.filter { ranks[$0.id] != nil }.sorted { ranks[$0.id]! < ranks[$1.id]! }
+        }
+        var notes = Set<UUID>()
+        let selected = candidates.filter { card in
+            guard settings.siblingBuryEnabled, let noteID = card.noteID else { return true }
+            return notes.insert(noteID).inserted
+        }
+        let ids = Array(selected.prefix(condition.limit == 0 ? selected.count : condition.limit).map(\.id))
+        return CustomStudyPreview(cardIDs: ids, message: ids.isEmpty ? "対象がありません。デッキ・タグ・出題条件を変更してください。停止・一時非表示・兄弟カード抑制も適用されます。正式復習は期限到来カードのみです。" : nil)
+    }
+    func saveCustomPreset(_ preset: CustomStudyPreset) throws {
+        guard preset.condition.valid, !preset.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw StudyError.invalidContent }
+        var saved = try options()
+        var presets = saved.customStudyPresets ?? []
+        if let index = presets.firstIndex(where: { $0.id == preset.id }) { presets[index] = preset }
+        else { presets.append(preset) }
+        saved.customStudyPresets = presets
+        try updateOptions(saved)
+    }
+    func deleteCustomPreset(_ id: UUID) throws {
+        var saved = try options(); saved.customStudyPresets?.removeAll { $0.id == id }; try updateOptions(saved)
+    }
+    func startCustomPractice(_ condition: CustomStudyCondition, ids: [UUID], now: Date) throws {
+        guard !condition.official, condition.valid, try session() == nil,
+              try options().customPractice == nil else { throw CustomStudyError.sessionActive }
+        // Revalidate safety at start, keeping the exact preview order (including random).
+        let available = try customStudyPreview(condition, preferredIDs: ids, now: now)
+        let eligible = Set(available.cardIDs)
+        let selected = ids.filter { eligible.contains($0) }
+        guard !selected.isEmpty, Set(selected).count == selected.count else { throw StudyError.noAvailableCards }
+        var saved = try options()
+        saved.customPractice = CustomPracticeProgress(condition: condition, cardIDs: selected)
+        try updateOptions(saved)
+    }
+    func customPracticeCard(now: Date) throws -> NoteItem? {
+        guard let progress = try options().customPractice, progress.valid else { return nil }
+        let all = try queueCards(), settings = try settings()
+        let today = try todayQueueLogs(cards: all, settings: settings, now: now)
+        let answeredIDs = Set(progress.cardIDs.prefix(progress.index))
+        let answeredNotes = Set(all.filter { answeredIDs.contains($0.id) }.compactMap(\.noteID))
+        let eligible = Set(all.filter { card in
+            !card.suspended && !card.isHidden(at: now) && (!settings.siblingBuryEnabled || card.noteID.map { note in
+                !answeredNotes.contains(note) && !today.contains { $0.noteID == note && $0.cardID != card.id }
+            } ?? true)
+        }.map(\.id))
+        var updated = progress
+        while updated.index < updated.cardIDs.count, !eligible.contains(updated.cardIDs[updated.index]) {
+            updated.index += 1; updated.revealed = false
+        }
+        if updated != progress { var saved = try options(); saved.customPractice = updated; try updateOptions(saved) }
+        guard updated.index < updated.cardIDs.count else { return nil }
+        return try noteItems(cardID: updated.cardIDs[updated.index]).first
+    }
+    func advanceCustomPractice(revealOnly: Bool, now: Date) throws {
+        guard try customPracticeCard(now: now) != nil else { return }
+        var saved = try options()
+        guard var progress = saved.customPractice else { return }
+        if revealOnly { progress.revealed = true }
+        else if progress.revealed { progress.index += 1; progress.revealed = false }
+        saved.customPractice = progress; try updateOptions(saved)
+    }
+    func finishCustomPractice() throws {
+        var saved = try options(); saved.customPractice = nil; try updateOptions(saved)
     }
 }

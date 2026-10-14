@@ -257,3 +257,39 @@ final class OperationsUITests: XCTestCase {
         tab(app, "ライブラリ").tap(); XCTAssertTrue(app.staticTexts["Backup question"].exists)
     }
 }
+
+extension OperationsUITests {
+    func testCustomPracticePresetInterruptionAndCompletion() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-library-tree"]
+        app.launch()
+        XCTAssertTrue(tab(app, "ライブラリ").waitForExistence(timeout: 15))
+        tab(app, "ライブラリ").tap()
+        app.buttons["カスタム学習"].tap()
+        let name = app.textFields["customStudyName"]
+        scrollTo(name, in: app); name.tap(); name.typeText("Tree practice")
+        app.buttons["完了"].tap()
+        let save = app.buttons["saveCustomStudy"]
+        scrollTo(save, in: app); save.tap()
+        attach(app, name: "Issue124-preset")
+        app.swipeDown(); app.swipeDown()
+        let start = app.buttons["startCustomStudy"]
+        scrollTo(start, in: app); XCTAssertTrue(start.isEnabled); start.tap()
+        let reveal = app.buttons["revealCustomPractice"]
+        XCTAssertTrue(reveal.waitForExistence(timeout: 5)); reveal.tap()
+        XCTAssertTrue(app.buttons["nextCustomPractice"].exists)
+        attach(app, name: "Issue124-practice")
+        app.buttons["中断"].tap()
+        app.swipeDown(); app.swipeDown()
+        let resume = app.buttons["resumeCustomPractice"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 5)); resume.tap()
+        XCTAssertTrue(app.buttons["nextCustomPractice"].waitForExistence(timeout: 5))
+        app.buttons["nextCustomPractice"].tap()
+        XCTAssertTrue(reveal.waitForExistence(timeout: 5)); reveal.tap()
+        app.buttons["nextCustomPractice"].tap()
+        XCTAssertTrue(app.staticTexts["カスタム練習が完了しました"].waitForExistence(timeout: 5))
+        app.buttons["finishCustomPractice"].tap()
+        app.swipeDown(); app.swipeDown()
+        XCTAssertFalse(app.buttons["resumeCustomPractice"].exists)
+    }
+}
