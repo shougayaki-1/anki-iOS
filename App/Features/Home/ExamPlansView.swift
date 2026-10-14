@@ -157,10 +157,18 @@ private struct ExamPlanDetailView: View {
     @State private var editing: ExamPlan?
     @State private var generation = 0
     @State private var ending = false
-    @State private var worker: Task<ExamPlanReport, Error>?
+    @State private var worker: Task<ExamPlanLoad, Error>?
+    #if DEBUG
+    @StateObject private var frameProbe = ExamPlanFrameProbe.shared
+    #endif
     @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         List {
+            #if DEBUG
+            if let measurement = frameProbe.measurement {
+                Text(measurement).font(.caption).accessibilityIdentifier("examPlanMeasurement")
+            }
+            #endif
             if let plan {
                 Section {
                     Text(plan.name).font(.headline)
@@ -224,12 +232,18 @@ private struct ExamPlanDetailView: View {
                     if plan.isActive { Button("計画を終了") { ending = true }.accessibilityIdentifier("endExamPlan") }
                 }
             }
+            if plan == nil && failure == nil { ProgressView("見通しを計算中…") }
             if let failure { Text(failure).foregroundStyle(.red); Button("再試行") { refresh() } }
         }
         .navigationTitle("試験・目標の詳細")
         .toolbar { Button("更新", systemImage: "arrow.clockwise") { refresh() } }
         .onAppear { refresh() }
-        .onDisappear { generation += 1; worker?.cancel() }
+        .onDisappear {
+            generation += 1; worker?.cancel()
+            #if DEBUG
+            frameProbe.cancel()
+            #endif
+        }
         .onChange(of: store.dataRevision) { _, _ in refresh() }
         .onChange(of: scenePhase) { _, phase in if phase == .active { refresh() } else { worker?.cancel() } }
         .onReceive(NotificationCenter.default.publisher(for: .NSSystemTimeZoneDidChange)) { _ in refresh() }
@@ -263,23 +277,29 @@ private struct ExamPlanDetailView: View {
     private func refresh() {
         worker?.cancel(); generation += 1
         let token = generation; report = nil; failure = nil
-        do {
-            guard let selected = try store.repository.options().examPlans?.first(where: { $0.id == planID }) else { throw StudyError.missingRecord }
-            plan = selected
-            let data = try BackupData.capture(store.repository), scope = try store.repository.homeScope()
-            let now = store.clock(), calendar = Calendar.current
-            let task = Task.detached(priority: .utility) { try ExamPlanReport.calculate(plan: selected, data: data, homeScope: scope, now: now, calendar: calendar) }
-            worker = task
-            Task { @MainActor in
-                do {
-                    let value = try await task.value
-                    guard token == generation, !task.isCancelled else { return }
-                    report = value
-                } catch {
-                    guard token == generation, !task.isCancelled else { return }
-                    failure = error.localizedDescription
-                }
+        #if DEBUG
+        frameProbe.begin()
+        #endif
+        // No SwiftData fetch runs on this synchronous navigation/UI turn.
+        let reader = ExamPlanReader(container: store.repository.context.container)
+        let id = planID, now = store.clock(), calendar = Calendar.current
+        let task = Task.detached(priority: .utility) { try await reader.load(planID: id, now: now, calendar: calendar) }
+        worker = task
+        Task { @MainActor in
+            do {
+                let value = try await task.value
+                guard token == generation, !task.isCancelled else { return }
+                plan = value.plan; report = value.report
+                #if DEBUG
+                frameProbe.finish(value)
+                #endif
+            } catch {
+                guard token == generation, !task.isCancelled else { return }
+                failure = error.localizedDescription
+                #if DEBUG
+                frameProbe.cancel()
+                #endif
             }
-        } catch { failure = error.localizedDescription }
+        }
     }
 }

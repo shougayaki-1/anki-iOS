@@ -182,6 +182,11 @@ struct AppRootView: View {
                 }
                 if studyURL != nil, (args.contains("-study-test-scale") || args.contains("-study-test-scale-basic")), let store {
                     try UITestFixtures.populateScale(store.repository, now: store.clock(), basic: args.contains("-study-test-scale-basic"), multipleDecks: args.contains("-study-performance"))
+                    if args.contains("-study-test-exam-scale"), try store.repository.options().examPlans == nil {
+                        let date = Calendar.current.date(byAdding: .day, value: 30, to: store.clock())!
+                        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
+                        try store.repository.saveExamPlan(ExamPlan(name: "性能確認", year: parts.year!, month: parts.month!, day: parts.day!, scope: LearningScope()))
+                    }
                     try store.reload()
                 }
                 if studyURL != nil, args.contains("-study-test-custom-media"), let store {

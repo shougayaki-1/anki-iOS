@@ -432,3 +432,48 @@ enum PerformanceProbe {
         #endif
     }
 }
+
+#if DEBUG
+import Combine
+
+// Enabled only for isolated profiling launches. Samples the UI's frame callback
+// gap from detail onAppear through the first frame after report publication.
+@MainActor
+final class ExamPlanFrameProbe: NSObject, ObservableObject {
+    static let shared = ExamPlanFrameProbe()
+    @Published private(set) var measurement: String?
+    private var link: CADisplayLink?
+    private var started = 0.0
+    private var previous = 0.0
+    private var maximumGap = 0.0
+    private var frames = 0
+    private var completed: ExamPlanLoad?
+    private var publicationSeconds = 0.0
+    private var enabled: Bool {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-study-performance"), let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 else { return false }
+        return UUID(uuidString: args[index + 1]) != nil
+    }
+    func begin() {
+        guard enabled, link == nil else { return }
+        measurement = nil; completed = nil; maximumGap = 0; frames = 0
+        started = ProcessInfo.processInfo.systemUptime; previous = started
+        let displayLink = CADisplayLink(target: self, selector: #selector(tick))
+        displayLink.add(to: .main, forMode: .common); link = displayLink
+    }
+    func finish(_ value: ExamPlanLoad) {
+        guard link != nil else { return }
+        completed = value; publicationSeconds = ProcessInfo.processInfo.systemUptime - started
+    }
+    func cancel() { link?.invalidate(); link = nil; completed = nil }
+    @objc private func tick() {
+        let now = ProcessInfo.processInfo.systemUptime
+        maximumGap = max(maximumGap, now - previous); previous = now; frames += 1
+        guard let value = completed else { return }
+        let text = String(format: "EXAM_PLAN cards=%d logs=%d capture_ms=%.2f calculate_ms=%.2f main_frame_max_gap_ms=%.2f publication_ms=%.2f frames=%d",
+                          value.cardCount, value.logCount, value.captureSeconds * 1000, value.calculationSeconds * 1000,
+                          maximumGap * 1000, publicationSeconds * 1000, frames)
+        cancel(); measurement = text; print(text)
+    }
+}
+#endif

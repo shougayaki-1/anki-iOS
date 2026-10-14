@@ -3168,3 +3168,29 @@ extension StudyRepositoryTests {
         plan.month = 2; plan.day = 30; XCTAssertFalse(plan.valid)
     }
 }
+
+extension StudyRepositoryTests {
+    func testExamPlanReaderUsesCommittedFreshValuesAndCancellation() async throws {
+        let repo = try fixture(); try create(repo)
+        var plan = ExamPlan(name: "非同期", year: 2026, month: 10, day: 20, scope: LearningScope())
+        try repo.saveExamPlan(plan)
+        let before = try BackupData.capture(repo).canonical()
+        let reader = ExamPlanReader(container: repo.context.container)
+        let value = try await reader.load(planID: plan.id, now: now, calendar: repo.calendar)
+        XCTAssertFalse(value.capturedOnMainThread)
+        XCTAssertEqual(value.plan, plan); XCTAssertEqual(value.report.total, 1)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        // A second context must see saves without retaining a stale snapshot.
+        plan.name = "編集済み"; try repo.saveExamPlan(plan)
+        try repo.applyHomeScope(LearningScope(tagIDs: [UUID()])) // Deleted tags normalize away.
+        let updated = try await reader.load(planID: plan.id, now: now, calendar: repo.calendar)
+        XCTAssertEqual(updated.plan.name, "編集済み"); XCTAssertEqual(updated.report.total, 1)
+        let clock = now, id = plan.id
+        let task = Task.detached { () async throws -> ExamPlanLoad in
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await reader.load(planID: id, now: clock, calendar: .current)
+        }
+        do { _ = try await task.value; XCTFail("Cancelled reads must not publish") }
+        catch is CancellationError { }
+    }
+}

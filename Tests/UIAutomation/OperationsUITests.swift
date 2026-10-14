@@ -367,3 +367,19 @@ extension OperationsUITests {
         XCTAssertTrue(app.staticTexts["終了した計画"].waitForExistence(timeout: 5))
     }
 }
+
+extension OperationsUITests {
+    func testExamPlanScaleNavigationFrameGaps() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-scale", "-study-test-exam-scale", "-study-performance"]
+        app.launch()
+        XCTAssertTrue(app.buttons["openExamPlans"].waitForExistence(timeout: 30)); app.buttons["openExamPlans"].tap()
+        let row = app.staticTexts["性能確認"]
+        XCTAssertTrue(row.waitForExistence(timeout: 10)); row.tap()
+        let measurement = app.staticTexts["examPlanMeasurement"]
+        XCTAssertTrue(measurement.waitForExistence(timeout: 30))
+        print("EXAM_PLAN_UI " + measurement.label)
+        XCTAssertTrue(measurement.label.contains("cards=3000 logs=10000"))
+        XCTAssertTrue(app.navigationBars["試験・目標の詳細"].exists)
+    }
+}
