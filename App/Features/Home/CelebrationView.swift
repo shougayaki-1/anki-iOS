@@ -80,8 +80,6 @@ enum CelebrationAction { case continueStudy, home, records }
 struct CelebrationView: View {
     let summary: CelebrationSummary
     let canContinue: Bool
-    let haptics: HapticsService
-    let hapticsMode: HapticsMode
     let action: (CelebrationAction) -> Void
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -175,16 +173,15 @@ struct CelebrationView: View {
         }
             .task {
                 guard !played else { return }; played = true
+                // Completion feedback belongs to the saved grade, not achievement presentation.
                 if motionReduced {
                     appeared = true; numberAppeared = true; accentAppeared = true
-                    haptics.play(.sessionCompleted, mode: hapticsMode)
                     return
                 }
                 withAnimation(.easeOut(duration: 0.35)) { appeared = true }
                 do {
                     try await Task.sleep(for: .milliseconds(400))
                     withAnimation(.easeOut(duration: 0.4)) { numberAppeared = true }
-                    if scenePhase == .active { haptics.play(.sessionCompleted, mode: hapticsMode) }
                     try await Task.sleep(for: .milliseconds(summary.isSpecial ? 500 : 250))
                     withAnimation(.easeOut(duration: summary.isSpecial ? 0.55 : 0.3)) { accentAppeared = true }
                 } catch { appeared = true; numberAppeared = true; accentAppeared = true }

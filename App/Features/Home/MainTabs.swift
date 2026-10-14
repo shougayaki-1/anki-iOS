@@ -113,8 +113,7 @@ struct MainTabs: View {
                 store.selectedTab = 2; store.showingAchievementHistory = true; store.refreshStatistics()
             }
         }) { summary in
-            CelebrationView(summary: summary, canContinue: store.canContinueAfterCelebration,
-                            haptics: store.haptics, hapticsMode: store.settings.hapticsMode) { action in
+            CelebrationView(summary: summary, canContinue: store.canContinueAfterCelebration) { action in
                 celebrationDestination = action
                 store.celebration = nil
             }
