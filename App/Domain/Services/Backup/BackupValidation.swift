@@ -160,9 +160,15 @@ struct BackupValidation {
                 throw BackupError.invalidData
             }
             if let progress = options.activeSessionProgress {
-                guard progress.startSequence >= 0, (0...500).contains(progress.answerLimit),
+                guard progress.startSequence >= 0, progress.answerLimit >= 0,
+                      (progress.reviewSetLimit != nil || progress.answerLimit <= 500),
                       progress.startSequence <= (data.logs.map(\.sequence).max() ?? 0)
                 else { throw BackupError.invalidData }
+            }
+            if let progress = options.activeSessionProgress, let cap = progress.reviewSetLimit {
+                guard (0...500).contains(cap), let order = progress.reviewOrder, !order.isEmpty,
+                      Set(order).count == order.count, progress.answerLimit == order.count,
+                      cap == 0 || order.count <= cap else { throw BackupError.invalidData }
             }
             if let home = options.homeScope {
                 // Stale home references are repaired on load; active session scope remains strict.

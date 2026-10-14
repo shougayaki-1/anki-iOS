@@ -180,7 +180,7 @@ enum UITestFixtures {
     @MainActor static func populateHomeRecommendation(_ store: StudyStore, scenario: String) throws {
         let repository = store.repository, now = store.clock()
         guard try repository.notes().isEmpty else { return }
-        let count = scenario == "many" ? 200 : 1
+        let count = scenario == "many" ? 200 : (scenario == "five" ? 5 : 1)
         let deck = try repository.decks()[0].id
         for index in 0..<count {
             try repository.createNote(NoteInput(deckID: deck, question: "今日の復習 \(index + 1)", answer: "回答"), now: now)

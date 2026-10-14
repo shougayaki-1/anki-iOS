@@ -641,9 +641,10 @@ final class StudyRepository {
             let limit = answerLimit ?? saved.sessionAnswerLimit ?? 20
             guard limit >= 0 && limit <= 500 else { throw StudyError.invalidContent }
             saved.activeSessionProgress = StudySessionProgressSnapshot(
-                startSequence: try lastReviewSequence(), answerLimit: limit, responseMode: selectedResponse,
+                startSequence: try lastReviewSequence(), answerLimit: mode == .review ? (limit == 0 ? available.count : min(limit, available.count)) : limit, responseMode: selectedResponse,
                 initialEligibleCount: available.count, reviewOrderPolicy: policy,
-                reviewOrder: policy == .forgettingRisk ? available : nil)
+                reviewOrder: mode == .review ? Array(available.prefix(limit == 0 ? available.count : limit)) : (policy == .forgettingRisk ? available : nil),
+                reviewSetLimit: mode == .review ? limit : nil)
             if let row = try context.fetch(FetchDescriptor<ExtraPreferences>()).first {
                 row.payload = try JSONEncoder().encode(saved)
             } else { context.insert(try ExtraPreferences(options: saved)) }
@@ -657,7 +658,7 @@ final class StudyRepository {
               let mode = StudyMode(rawValue: draft.mode) else { throw StudyError.noSession }
         let originalScope = try scope()
         let progress = try options().activeSessionProgress
-        let limit = progress?.answerLimit
+        let limit = progress?.reviewSetLimit ?? progress?.answerLimit
         // start validates candidates before replacing anything and rolls back a
         // failed save, so an empty/failed restart retains the final Undo.
         try start(mode: mode, scope: originalScope, answerLimit: limit, responseMode: progress?.responseMode ?? .cardDefault, policy: progress?.reviewOrderPolicy ?? .traditional, now: now)
@@ -683,7 +684,9 @@ final class StudyRepository {
             guard let draft = try session() else { throw StudyError.noSession }
             if let id = draft.cardID, try isStudyPaused(cardID: id) { throw StudyError.deckStudyPaused }
             let held = try draft.cardID.flatMap { try cardMark($0)?.hiddenUntil }.map { now < $0 } ?? false
-            if draft.cardID == nil || held {
+            let fixedSet = try options().activeSessionProgress?.reviewSetLimit != nil
+            let unavailable = try draft.cardID.map { try card($0).map { $0.isSuspended } ?? true } ?? false
+            if draft.cardID == nil || held || (fixedSet && unavailable) {
                 try selectNext(draft: draft, now: now)
             }
             else { draft.activeSince = now }
@@ -704,12 +707,20 @@ final class StudyRepository {
     private func nextCardIDs(draft: SessionDraft, now: Date, cards: [QueueCard]? = nil) throws -> [UUID] {
         if let progress = try sessionProgress(), progress.isComplete { return [] }
         let cards = try cards ?? queueCards(), settings = try settings()
-        return try ReviewQueueBuilder(calendar: calendar).queue(
-            cards: responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: options().activeSessionProgress?.responseMode ?? .cardDefault), logs: todayQueueLogs(cards: cards, settings: settings, now: now), settings: settings,
+        let saved = try options().activeSessionProgress
+        let eligible = try responseEligibleCards(scopedQueueCards(scope(), cards: cards), mode: saved?.responseMode ?? .cardDefault)
+        let logs = try todayQueueLogs(cards: cards, settings: settings, now: now)
+        if let saved, saved.reviewSetLimit != nil, let order = saved.reviewOrder {
+            return ReviewQueueBuilder(calendar: calendar).queue(
+                cards: eligible, logs: logs, settings: settings, mode: .review,
+                touched: Set(draft.touchedCardIDs), reviewStreak: 0, now: now, fixedReviewOrder: order)
+        }
+        return ReviewQueueBuilder(calendar: calendar).queue(
+            cards: eligible, logs: logs, settings: settings,
             mode: StudyMode(rawValue: draft.mode) ?? .review, touched: Set(draft.touchedCardIDs),
             reviewStreak: draft.reviewStreak, now: now,
-            policy: options().activeSessionProgress?.reviewOrderPolicy ?? .traditional,
-            reviewOrder: options().activeSessionProgress?.reviewOrder)
+            policy: saved?.reviewOrderPolicy ?? .traditional,
+            reviewOrder: saved?.reviewOrder)
     }
     func selectNext(draft: SessionDraft, now: Date) throws {
         try selectCard(nextCardIDs(draft: draft, now: now).first, draft: draft, now: now)
@@ -860,7 +871,10 @@ final class StudyRepository {
             draft.elapsedMs = 0; draft.activeSince = now; draft.updatedAt = now
             draft.reviewStreak = 0
             try prepareOrderingDraft(draft)
-            if latest.wasNew { draft.touchedCardIDs.removeAll { $0 == card.id } }
+            let fixedSet = try options().activeSessionProgress?.reviewSetLimit != nil
+            if latest.wasNew || fixedSet {
+                draft.touchedCardIDs.removeAll { $0 == card.id }
+            }
             if let answer = try context.fetch(FetchDescriptor<SavedTypedAnswer>(predicate: #Predicate { $0.id == logID })).first { context.delete(answer) }
             var saved = try options()
             saved.deckNewUsage?.removeAll { $0.sequence == latest.sequence }
@@ -893,16 +907,8 @@ final class StudyRepository {
             OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) ?? (ordering == nil ? OrderingError.invalidDraft.localizedDescription : nil)
         } : nil
         let sessionAnswerProgress = try sessionProgress()
-        let initialEligibleCount = try options().activeSessionProgress?.initialEligibleCount
-        // Use the starting queue size as the on-screen target, extending it only
-        // if short-term relearning creates another actual question. The configured
-        // answer limit remains the hard cap, regardless of this display estimate.
-        let visibleAnswerTotal: Int? = sessionAnswerProgress.flatMap { progress in
-            guard progress.limit > 0 else { return nil }
-            if progress.isComplete { return progress.limit }
-            if item == nil { return max(1, progress.answered) }
-            return min(progress.limit, max(initialEligibleCount ?? progress.limit, progress.answered + 1))
-        }
+        // Finite sets and bounded answer sessions have a fixed denominator.
+        let visibleAnswerTotal = sessionAnswerProgress.flatMap { $0.limit > 0 ? $0.limit : nil }
         return ReviewPresentation(card: item, mode: mode,
                                   responseMode: requested == .ordering && reason != nil ? .mental : requested,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
@@ -915,7 +921,11 @@ final class StudyRepository {
         let sessionCount = try sessionProgress()
         if let progress = sessionCount, progress.isComplete {
             return ReviewEmptyState(reason: .complete, title: "今回の\(progress.limit)問を完了しました",
-                                    message: "予定の\(progress.limit)回の回答を終えました。復習予定は保存されています。")
+                                    message: "今回の対象への回答を終えました。復習予定は保存されています。短期復習は期限到来後の次の学習で出題されます。")
+        }
+        if try options().activeSessionProgress?.reviewSetLimit != nil {
+            return ReviewEmptyState(reason: .complete, title: "今回はここまで",
+                                    message: "\(sessionCount?.answered ?? 0)問回答しました。開始時に選んだ残りのカードは現在出題できません。復習予定は保存されています。")
         }
         let scoped = try scopedQueueCards(scope(), cards: all)
         let response = try options().activeSessionProgress?.responseMode ?? .cardDefault
