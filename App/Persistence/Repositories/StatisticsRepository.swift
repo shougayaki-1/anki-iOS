@@ -397,3 +397,64 @@ extension StudyRepository {
         return WeakPracticeSession(cards: selected)
     }
 }
+
+struct ExamPlanLoad: Sendable {
+    let plan: ExamPlan
+    let report: ExamPlanReport
+    let captureSeconds: Double
+    let calculationSeconds: Double
+    let cardCount: Int
+    let logCount: Int
+    let capturedOnMainThread: Bool
+}
+
+// A fresh context reads committed values on this actor, never the UI context.
+// Only the report's required tables are read; drafts, media and imports are untouched.
+actor ExamPlanReader {
+    private let container: ModelContainer
+    init(container: ModelContainer) { self.container = container }
+
+    func load(planID: UUID, now: Date, calendar: Calendar) throws -> ExamPlanLoad {
+        try Task.checkCancellation()
+        let capturedOnMainThread = Thread.isMainThread
+        let start = ProcessInfo.processInfo.systemUptime
+        let readInterval = PerformanceProbe.begin("ExamPlan.read")
+        let data: BackupData
+        do {
+            let context = ModelContext(container)
+            context.autosaveEnabled = false
+            var snapshot = BackupData()
+            snapshot.decks = try context.fetch(FetchDescriptor<Deck>()).map(BackupDeck.init)
+            try Task.checkCancellation()
+            snapshot.notes = try context.fetch(FetchDescriptor<Note>()).map(BackupNote.init)
+            try Task.checkCancellation()
+            snapshot.cards = try context.fetch(FetchDescriptor<StudyCard>()).map(BackupStudyCard.init)
+            try Task.checkCancellation()
+            snapshot.logs = try context.fetch(FetchDescriptor<StudyReviewLog>()).map(BackupStudyReviewLog.init)
+            try Task.checkCancellation()
+            snapshot.preferences = try context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
+            snapshot.options = try context.fetch(FetchDescriptor<ExtraPreferences>()).map(BackupExtraPreferences.init)
+            snapshot.tags = try context.fetch(FetchDescriptor<Tag>()).map(BackupTag.init)
+            data = snapshot
+        } catch { PerformanceProbe.end(readInterval); throw error }
+        PerformanceProbe.end(readInterval)
+        let captureSeconds = ProcessInfo.processInfo.systemUptime - start
+        try Task.checkCancellation()
+        let options = try data.options.first.map { try JSONDecoder().decode(StudyOptions.self, from: $0.payload) } ?? StudyOptions()
+        guard let plan = options.examPlans?.first(where: { $0.id == planID }) else { throw StudyError.missingRecord }
+        // Match homeScope normalization without fetching the main context's decks/tags.
+        var scope = options.homeScope ?? LearningScope()
+        guard scope.schemaVersion == 1 else { throw StudyError.unsupportedContent }
+        let deckIDs = Set(data.decks.map(\.id)), tagIDs = Set(data.tags.map(\.id))
+        scope.deckID = scope.deckID.flatMap { deckIDs.contains($0) ? $0 : nil }
+        scope.tagIDs = Array(Set(scope.tagIDs).intersection(tagIDs))
+        let calculateStart = ProcessInfo.processInfo.systemUptime
+        let calculateInterval = PerformanceProbe.begin("ExamPlan.calculate")
+        defer { PerformanceProbe.end(calculateInterval) }
+        let report = try ExamPlanReport.calculate(plan: plan, data: data, homeScope: scope, now: now, calendar: calendar)
+        try Task.checkCancellation()
+        return ExamPlanLoad(plan: plan, report: report, captureSeconds: captureSeconds,
+                            calculationSeconds: ProcessInfo.processInfo.systemUptime - calculateStart,
+                            cardCount: data.cards.count, logCount: data.logs.count, capturedOnMainThread: capturedOnMainThread)
+    }
+}

@@ -1,6 +1,6 @@
 import Foundation
 
-struct LearningScope: Codable, Equatable {
+struct LearningScope: Codable, Equatable, Sendable {
     var schemaVersion = 1
     var deckID: UUID?
     var tagIDs: [UUID] = []
@@ -26,6 +26,7 @@ struct StudyOptions: Codable, Equatable {
     var deckNewUsage: [DeckNewUsage]? = nil
     var sessionResponseMode: SessionResponseMode? = nil
     var librarySearch: LibrarySearchPreferences? = nil
+    var examPlans: [ExamPlan]? = nil
     var customStudyPresets: [CustomStudyPreset]? = nil
     var customPractice: CustomPracticeProgress? = nil
     var activeSessionProgress: StudySessionProgressSnapshot? = nil
@@ -831,5 +832,38 @@ enum CustomStudyError: LocalizedError {
         case .sessionActive: return "進行中の学習を再開・終了してから開始してください。"
         case .dataChanged: return "カードが更新されました。対象を再構築してください。"
         }
+    }
+}
+
+// Calendar date, independent of the absolute FSRS deadlines and timezone at creation.
+struct ExamPlan: Codable, Equatable, Identifiable, Sendable {
+    var id = UUID()
+    var name: String
+    var year: Int
+    var month: Int
+    var day: Int
+    var scope: LearningScope
+    var dailyMinutes: Int? = nil
+    var isActive = true
+
+    func date(calendar source: Calendar = .current) -> Date? {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = source.timeZone
+        return calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))
+    }
+    var valid: Bool {
+        guard (1...9999).contains(year), (1...12).contains(month), (1...31).contains(day),
+              !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              scope.schemaVersion == 1, Set(scope.tagIDs).count == scope.tagIDs.count,
+              dailyMinutes.map({ (1...1440).contains($0) }) ?? true,
+              let date = date() else { return false }
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = .current
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return parts.year == year && parts.month == month && parts.day == day
+    }
+    func daysRemaining(now: Date, calendar source: Calendar = .current) -> Int {
+        var calendar = Calendar(identifier: .gregorian); calendar.timeZone = source.timeZone
+        guard let date = date(calendar: calendar) else { return 0 }
+        return calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: date)).day ?? 0
     }
 }

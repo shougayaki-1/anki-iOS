@@ -612,3 +612,66 @@ extension ScaleRepositoryTests {
         }
     }
 }
+
+extension ScaleRepositoryTests {
+    func testExamPlanThreeThousandCardsReadOnly() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id, scheduler = try ReviewScheduler()
+        let content = try JSONEncoder().encode(TextContent(question: "Exam", answer: "A", explanation: ""))
+        let snapshot = try JSONEncoder().encode(scheduler.newCard(now: now))
+        try repo.transaction {
+            for _ in 0..<3000 {
+                let note = Note(input: NoteInput(deckID: deck, question: "Exam", answer: "A"), content: content, now: now)
+                repo.context.insert(note)
+                repo.context.insert(StudyCard(noteID: note.id, variantKey: "basic:front", payload: snapshot, now: now))
+            }
+        }
+        let before = try BackupData.capture(repo).canonical()
+        let date = Calendar.current.date(byAdding: .day, value: 30, to: now)!
+        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
+        let plan = ExamPlan(name: "試験", year: parts.year!, month: parts.month!, day: parts.day!, scope: LearningScope(deckID: deck))
+        let start = Date()
+        let report = try ExamPlanReport.calculate(plan: plan, data: before, homeScope: LearningScope(), now: now, calendar: .current)
+        print("Issue #190: 3000 cards / exam forecast: \(Date().timeIntervalSince(start))s")
+        XCTAssertEqual(report.total, 3000); XCTAssertEqual(report.newCards, 3000)
+        XCTAssertNotNil(report.forecast)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+    }
+}
+
+extension ScaleRepositoryTests {
+    func testExamPlanReaderThreeThousandCardsTenThousandLogsResponsiveness() async throws {
+        #if DEBUG
+        let root = URL.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let repo = StudyRepository(container: container)
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        try repo.initialize(now: now)
+        try UITestFixtures.populateScale(repo, now: now, multipleDecks: true)
+        let date = Calendar.current.date(byAdding: .day, value: 30, to: now)!
+        let parts = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
+        let plan = ExamPlan(name: "性能確認", year: parts.year!, month: parts.month!, day: parts.day!, scope: LearningScope())
+        try repo.saveExamPlan(plan)
+        let baselineStart = ProcessInfo.processInfo.systemUptime
+        let snapshot = try BackupData.capture(repo)
+        print("EXAM_PLAN_BASELINE main_capture_ms=\((ProcessInfo.processInfo.systemUptime - baselineStart) * 1000)")
+        let before = snapshot.canonical()
+        XCTAssertEqual(before.cards.count, 3000); XCTAssertEqual(before.logs.count, 10000)
+        let reader = ExamPlanReader(container: container)
+        let loaded = try await ImportMemoryProbe.responsive("exam_plan_3000_cards_10000_logs") {
+            try await reader.load(planID: plan.id, now: now, calendar: .current)
+        }
+        print("EXAM_PLAN_READER capture_ms=\(loaded.captureSeconds * 1000) calculate_ms=\(loaded.calculationSeconds * 1000)")
+        XCTAssertFalse(loaded.capturedOnMainThread)
+        XCTAssertEqual(loaded.cardCount, 3000); XCTAssertEqual(loaded.logCount, 10000)
+        let expected = try ExamPlanReport.calculate(plan: plan, data: before, homeScope: LearningScope(), now: now, calendar: .current)
+        XCTAssertEqual(loaded.report.forecast, expected.forecast)
+        XCTAssertEqual(loaded.report.total, expected.total)
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before)
+        #endif
+    }
+}
