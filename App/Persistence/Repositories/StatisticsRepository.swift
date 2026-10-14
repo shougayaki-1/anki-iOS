@@ -193,6 +193,9 @@ actor StatisticsReader {
             calendar: calendar, startHour: startHour)
         report.achievements = try achievements(material: material, now: now, calendar: calendar,
                                                startHour: startHour, day: day)
+        for days in [0, 7, 30, 90] {
+            report.insights[days] = StudyInsight.generate(stats: report, days: days, now: now, calendar: calendar, startHour: startHour)
+        }
         try Task.checkCancellation()
         return report
     }
