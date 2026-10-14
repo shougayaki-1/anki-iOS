@@ -21,6 +21,11 @@ struct ReviewForecast: Equatable, Sendable {
     var scheduled: Int { days.reduce(0) { $0 + $1.scheduled } }
     var projectedAnswers: Int { days.reduce(0) { $0 + $1.projectedAnswers } }
 
+    // Shared saved-deadline bucketing: overdue cards join today's bucket.
+    static func scheduledIndex(due: Date, days: [ForecastDay]) -> Int? {
+        days.firstIndex { due < $0.end }
+    }
+
     private struct LiveCard {
         let source: BackupStudyCard
         let noteID: UUID
@@ -68,7 +73,7 @@ struct ReviewForecast: Equatable, Sendable {
                                   scheduler: try ReviewScheduler(desiredRetention: retention, parameters: options.fsrsOptimization?.activeParameters),
                                   snapshot: snapshot, summary: summary))
             if scoped && summary.state != "new" {
-                if let bucket = periods.indices.first(where: { max(card.dueDate, holds[card.id] ?? card.dueDate) < periods[$0].end }) { periods[bucket].scheduled += 1 }
+                if let bucket = scheduledIndex(due: max(card.dueDate, holds[card.id] ?? card.dueDate), days: periods) { periods[bucket].scheduled += 1 }
             }
         }
         let overdue = cards.filter { $0.scoped && $0.summary.state != "new" && $0.source.dueDate < now }.count

@@ -6,6 +6,39 @@ import SQLite3
 
 // Only explicit UI-test launch arguments create fixtures, in the app's sandbox.
 enum UITestFixtures {
+    @MainActor static func populateDashboard(_ store: StudyStore) throws {
+        let repo = store.repository, now = store.clock()
+        guard try repo.notes().isEmpty else { return }
+        let root = try repo.createDeck(name: "英語", now: now)
+        let child = try repo.createDeck(name: "日常のことば", parentID: root, now: now)
+        let other = try repo.createDeck(name: "読書", now: now)
+        for index in 0..<90 {
+            try repo.createNote(NoteInput(deckID: index < 65 ? child : other,
+                question: "記憶のサンプル \(index + 1)", answer: "意味と使い方", tagNames: index.isMultiple(of: 2) ? ["日常", "重点"] : ["日常"]), now: now)
+        }
+        let scheduler = try ReviewScheduler()
+        try repo.transaction {
+            var sequence = 0
+            for (index, card) in try repo.cards().enumerated() where index < 72 {
+                for offset in stride(from: 110 - index % 5, through: index % 8, by: -7) {
+                    let date = Calendar.current.date(byAdding: .day, value: -offset, to: now)!.addingTimeInterval(-1800)
+                    let before = try repo.snapshot(card)
+                    let grade: ReviewGrade = index % 11 == 0 ? .again : index % 7 == 0 ? .hard : index % 3 == 0 ? .easy : .good
+                    let transition = try scheduler.review(before, grade: grade, now: date)
+                    let payload = try JSONEncoder().encode(transition.after)
+                    sequence += 1
+                    repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload, after: payload,
+                        mode: .mental, durationMs: 12000 + index * 200, wasNew: try scheduler.summary(before).state == "new", sequence: sequence))
+                    card.fsrsPayload = payload
+                }
+                card.dueDate = Calendar.current.date(byAdding: .day, value: index % 24 - 3, to: now)!
+            }
+        }
+        var settings = try repo.settings(); settings.dailyGoal = 20
+        try repo.updateSettings(settings)
+        try store.reload()
+    }
+
     @MainActor static func populateCelebrationFlow(_ store: StudyStore) throws {
         guard try store.repository.notes().isEmpty else { return }
         let deck = try store.repository.decks()[0].id

@@ -1,11 +1,101 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testDashboardInteractionsAndScreenshots() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]
+        app.launch()
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 20))
+        attach(app, name: "issue100-first-view")
+        app.segmentedControls["dashboardPeriod"].buttons["30日"].tap()
+        attach(app, name: "issue100-30-days")
+        func reveal(_ element: XCUIElement) {
+            for _ in 0..<12 where !element.isHittable { app.swipeUp(velocity: .slow) }
+            XCTAssertTrue(element.isHittable)
+        }
+        let growth = app.buttons["growth-長期定着"]
+        reveal(growth)
+        attach(app, name: "issue100-growth")
+        growth.tap()
+        XCTAssertTrue(app.navigationBars["長期定着"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        let day = app.buttons["calendarDay-2"]
+        reveal(day); day.tap()
+        let details = app.descendants(matching: .any)["calendarDetails"].firstMatch
+        reveal(details)
+        attach(app, name: "issue100-calendar-selected")
+        let nextMonth = app.buttons["前の月"]
+        if !nextMonth.isHittable { app.swipeDown() }
+        nextMonth.tap()
+        attach(app, name: "issue100-calendar-previous-month")
+        let forecast = app.buttons["forecastDay-1"]
+        reveal(forecast); forecast.tap()
+        attach(app, name: "issue100-forecast-selected")
+        let period = app.segmentedControls["dashboardForecastPeriod"]
+        if !period.isHittable { app.swipeDown() }
+        period.buttons["次の30日間"].tap()
+        XCTAssertTrue(app.staticTexts["forecastSelection"].exists)
+        attach(app, name: "issue100-forecast-30-days")
+        let memory = app.buttons["openMemoryAnalysis"]
+        reveal(memory)
+        attach(app, name: "issue100-insights")
+        memory.tap()
+        XCTAssertTrue(app.navigationBars["記憶の状態"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        let more = app.buttons["openStatisticsDetails"]
+        reveal(more)
+        attach(app, name: "issue100-details-links")
+        more.tap()
+        XCTAssertTrue(app.navigationBars["学習の詳細"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        for _ in 0..<14 where !app.buttons["dashboardDeck"].isHittable { app.swipeDown(velocity: .fast) }
+        app.buttons["dashboardDeck"].tap()
+        let deck = app.buttons.matching(NSPredicate(format: "label == %@", "英語")).firstMatch
+        XCTAssertTrue(deck.waitForExistence(timeout: 5)); deck.tap()
+        XCTAssertTrue(app.buttons["dashboardTags"].waitForExistence(timeout: 5)); app.buttons["dashboardTags"].tap()
+        let tag = app.switches.containing(NSPredicate(format: "label CONTAINS %@", "重点")).firstMatch
+        XCTAssertTrue(tag.waitForExistence(timeout: 5)); tag.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        app.buttons["適用"].tap()
+        let applied = NSPredicate(format: "label CONTAINS %@", "重点")
+        expectation(for: applied, evaluatedWith: app.buttons["dashboardTags"])
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 10))
+        attach(app, name: "issue100-filtered")
+    }
+
+    func testDashboardDeckAndTagFilterSnapshot() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]
+        app.launch()
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 20))
+        app.buttons["dashboardDeck"].tap()
+        let deck = app.buttons.matching(NSPredicate(format: "label == %@", "英語")).firstMatch
+        XCTAssertTrue(deck.waitForExistence(timeout: 5)); deck.tap()
+        app.buttons["dashboardTags"].tap()
+        let tag = app.switches.containing(NSPredicate(format: "label CONTAINS %@", "重点")).firstMatch
+        XCTAssertTrue(tag.waitForExistence(timeout: 5))
+        tag.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).tap()
+        app.buttons["適用"].tap()
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "重点"), evaluatedWith: app.buttons["dashboardTags"])
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 10))
+        attach(app, name: "issue100-filtered")
+    }
+
+    func testDashboardEmptyState() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-shortcut", "progress"]
+        app.launch()
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.staticTexts["0"].firstMatch.exists)
+        attach(app, name: "issue100-empty")
+    }
+
     func testMemoryAnalysisOpensDistributionEvidence() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-new-review-due", "-study-test-shortcut", "progress"]
         app.launch()
-        XCTAssertTrue(app.staticTexts["今日の記録"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 15))
         let link = app.buttons["openMemoryAnalysis"]
         for _ in 0..<7 where !link.isHittable { app.swipeUp() }
         XCTAssertTrue(link.waitForExistence(timeout: 15)); link.tap()

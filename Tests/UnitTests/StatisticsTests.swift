@@ -2,6 +2,36 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testDashboardPeriodsDeduplicateAcrossDaysAndUseStudyBoundary() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 4))!
+        let card = UUID(), deck = UUID(), tag = UUID()
+        let logs = [
+            StatisticLog(cardID: card, date: now, grade: .good, durationMs: 1000, deckID: deck, tagIDs: [tag]),
+            StatisticLog(cardID: card, date: now.addingTimeInterval(-1), grade: .again, durationMs: 2000, deckID: deck, tagIDs: [tag]),
+            StatisticLog(cardID: UUID(), date: now.addingTimeInterval(-8 * 86400), grade: .hard, durationMs: 3000, deckID: deck, tagIDs: [tag]),
+            StatisticLog(cardID: UUID(), date: now.addingTimeInterval(1), grade: .easy, durationMs: 4000)
+        ]
+        let stats = StudyStatistics.calculate(logs: logs, retrievabilities: [], now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(stats.dashboardPeriods[7]?.cards, 1)
+        XCTAssertEqual(stats.dashboardPeriods[7]?.answers, 2)
+        XCTAssertEqual(stats.dashboardPeriods[30]?.cards, 2)
+        XCTAssertEqual(stats.dashboardPeriods[0]?.durationMs, 6000)
+        XCTAssertEqual(stats.calendarDays[now]?.answers, 1)
+        XCTAssertEqual(stats.calendarDays.count, 3)
+        let empty = StudyStatistics.calculate(logs: logs, retrievabilities: [], now: now, calendar: calendar, startHour: 4, selectedTagIDs: [UUID()])
+        XCTAssertEqual(empty.dashboardPeriods[0]?.cards, 0)
+        XCTAssertTrue(empty.calendarDays.isEmpty)
+        let periods = (0..<7).map { offset -> ForecastDay in
+            let start = calendar.date(byAdding: .day, value: offset, to: now)!
+            return ForecastDay(start: start, end: calendar.date(byAdding: .day, value: 1, to: start)!)
+        }
+        XCTAssertEqual(ReviewForecast.scheduledIndex(due: now.addingTimeInterval(-1), days: periods), 0)
+        XCTAssertEqual(ReviewForecast.scheduledIndex(due: periods[0].end, days: periods), 1)
+        XCTAssertNil(ReviewForecast.scheduledIndex(due: periods.last!.end, days: periods))
+    }
+
     func testAchievementStatisticsUsesEventTimeAndKeepsShownReceipts() throws {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!

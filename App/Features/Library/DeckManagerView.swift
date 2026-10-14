@@ -528,6 +528,8 @@ struct DeckSelectionField: View {
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Image(systemName: "chevron.right").font(.caption)
             }
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
             .foregroundStyle(.primary)
         }
         .accessibilityLabel(title + "、" + (selected?.name ?? (selection == nil ? nilTitle ?? "選択してください" : "選択先が見つかりません")))
