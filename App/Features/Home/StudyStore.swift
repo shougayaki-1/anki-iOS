@@ -74,6 +74,8 @@ final class StudyStore {
     var selectedTab = 0
     var dataRevision = 0
     var mediaDisplayNamespace = UUID()
+    var achievementProgress: AchievementProgress?
+    var achievementHistory: [AchievementRecord] = []
     var statistics: StudyStatistics?
     var statisticsLoading = false
     var statisticsError: String?
@@ -165,6 +167,7 @@ final class StudyStore {
                 statisticsTask?.cancel()
                 statisticsGeneration += 1
                 statistics = nil
+                achievementProgress = nil; achievementHistory = []
                 statisticsLoading = false
                 statisticsError = nil
                 // A visible statistics tab must reload after grade/Undo, edits and restore.
@@ -241,17 +244,23 @@ final class StudyStore {
         let calendar = Calendar.current
         let startHour = settings.dayStartHour
         let scope = statisticsScope
-        let revision = statisticsRevision
+        // Includes direct repository writes such as claiming an event, in addition
+        // to Store refreshes and failures after a successful save.
+        let revision = statisticsRevision &+ repository.mutationRevision
         statisticsTask = Task { [weak self] in
             do {
                 let report = try await reader.load(now: now, calendar: calendar,
                                                    startHour: startHour, scope: scope, revision: revision)
                 guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
                 self?.statistics = report
+                self?.achievementProgress = report.achievements?.progress
+                self?.achievementHistory = report.achievements?.history ?? []
                 self?.statisticsLoading = false
             } catch {
                 guard !Task.isCancelled, self?.statisticsGeneration == generation else { return }
                 self?.statisticsError = error.localizedDescription
+                self?.achievementProgress = nil
+                self?.achievementHistory = []
                 self?.statisticsLoading = false
             }
         }
@@ -651,6 +660,7 @@ final class StudyStore {
             statisticsTask?.cancel()
             statisticsGeneration += 1
             statistics = nil
+            achievementProgress = nil; achievementHistory = []
             statisticsLoading = false
             statisticsError = nil
             statisticsScope = LearningScope()

@@ -12,6 +12,134 @@ final class StudyRepositoryTests: XCTestCase {
         try repo.initialize(now: now)
         return repo
     }
+    func testAchievementsSaveFailureUndoRestartAndClaim() throws {
+        let repo = try fixture()
+        try create(repo)
+        var settings = try repo.settings(); settings.dailyGoal = 1
+        try repo.updateSettings(settings)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.grade(.again, now: now))
+        XCTAssertTrue(try repo.pendingAchievementEvents().isEmpty)
+        XCTAssertFalse(try repo.achievementProgress(now: now).studiedToday)
+        repo.save = { try $0.save() }
+        try repo.grade(.again, now: now)
+        let pending = try repo.pendingAchievementEvents()
+        XCTAssertEqual(Set(pending.map(\.kind)), [.firstStudyToday, .streakAdvanced, .dailyGoalReached])
+        XCTAssertEqual(try repo.achievementProgress(now: now).uniqueCardsToday, 1)
+        let restarted = StudyRepository(container: repo.context.container, calendar: repo.calendar)
+        XCTAssertEqual(try restarted.pendingAchievementEvents().map(\.id), pending.map(\.id))
+        try repo.undo(now: now)
+        XCTAssertTrue(try repo.pendingAchievementEvents().isEmpty)
+        XCTAssertEqual(try repo.achievementProgress(now: now).currentStreak, 0)
+        try revealAndGrade(repo, grade: .again, date: now)
+        let event = try XCTUnwrap(repo.pendingAchievementEvents().first)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.claimAchievementEvent(id: event.id, now: now))
+        repo.save = { try $0.save() }
+        XCTAssertNotNil(try repo.claimAchievementEvent(id: event.id, now: now))
+        XCTAssertNil(try repo.claimAchievementEvent(id: event.id, now: now))
+        let afterClaim = StudyRepository(container: repo.context.container, calendar: repo.calendar)
+        XCTAssertNil(try afterClaim.claimAchievementEvent(id: event.id, now: now))
+        try repo.undo(now: now)
+        XCTAssertFalse(try repo.achievementProgress(now: now).studiedToday)
+        try revealAndGrade(repo, grade: .again, date: now)
+        XCTAssertFalse(try repo.pendingAchievementEvents().contains { $0.id == event.id })
+    }
+
+    func testDailyGoalCountsUniqueCardsRatherThanTwentyAnswers() throws {
+        let repeated = try fixture()
+        try create(repeated)
+        try repeated.start(mode: .new, answerLimit: 0, now: now)
+        for index in 0..<20 {
+            let date = now.addingTimeInterval(Double(index * 120))
+            if index > 0 { try repeated.resume(now: date) }
+            try revealAndGrade(repeated, grade: .again, date: date)
+        }
+        XCTAssertEqual(try repeated.logs().count, 20)
+        XCTAssertEqual(try repeated.achievementProgress(now: now.addingTimeInterval(2400)).uniqueCardsToday, 1)
+        XCTAssertFalse(try repeated.pendingAchievementEvents().contains { $0.kind == .dailyGoalReached })
+
+        let unique = try fixture()
+        for _ in 0..<21 { try create(unique) }
+        var settings = try unique.settings(); settings.dailyNewLimit = 30; settings.dailyGoal = 20
+        try unique.updateSettings(settings)
+        try unique.start(mode: .new, answerLimit: 20, now: now)
+        for _ in 0..<20 { try revealAndGrade(unique, grade: .easy, date: now) }
+        XCTAssertEqual(try unique.achievementProgress(now: now).uniqueCardsToday, 20)
+        XCTAssertEqual(try unique.pendingAchievementEvents().filter { $0.kind == .dailyGoalReached }.count, 1)
+        try unique.startAnotherSession(now: now)
+        try revealAndGrade(unique, grade: .easy, date: now)
+        XCTAssertEqual(try unique.achievementProgress(now: now).uniqueCardsToday, 21)
+        XCTAssertEqual(try unique.pendingAchievementEvents().filter { $0.kind == .dailyGoalReached }.count, 1)
+    }
+
+    func testMatureMilestoneCrossingUndoAndImportedBaseline() throws {
+        let repo = try fixture(), scheduler = try ReviewScheduler()
+        let matureDeck = try repo.createDeck(name: "既存定着", now: now)
+        for index in 0..<9 {
+            try repo.createNote(NoteInput(deckID: matureDeck, question: "M\(index)", answer: "A"), now: now)
+        }
+        let candidateNote = try create(repo)
+        let candidate = try XCTUnwrap(repo.cards().first { $0.noteID == candidateNote })
+        let base = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now).after
+        try repo.transaction {
+            for card in try repo.cards() {
+                var raw = try XCTUnwrap(JSONSerialization.jsonObject(with: base.cardData) as? [String: Any])
+                raw["stability"] = card.id == candidate.id ? 20.0 : 21.0
+                let state = SchedulerSnapshot(schemaVersion: base.schemaVersion, algorithmVersion: base.algorithmVersion,
+                    cardData: try JSONSerialization.data(withJSONObject: raw))
+                card.fsrsPayload = try JSONEncoder().encode(state)
+                card.dueDate = try scheduler.summary(state).dueDate
+            }
+        }
+        XCTAssertEqual(try repo.matureCardCount(), 9)
+        let date = now.addingTimeInterval(100 * 86400)
+        try repo.start(mode: .review, scope: LearningScope(deckID: repo.decks()[0].id), now: date)
+        XCTAssertEqual(try repo.session()?.cardID, candidate.id)
+        try revealAndGrade(repo, grade: .easy, date: date)
+        XCTAssertEqual(try repo.matureCardCount(), 10)
+        let event = try XCTUnwrap(repo.pendingAchievementEvents().first { $0.kind == .matureMilestone })
+        XCTAssertEqual(event.record.threshold, 10)
+        try repo.undo(now: date)
+        XCTAssertEqual(try repo.matureCardCount(), 9)
+        XCTAssertFalse(try repo.pendingAchievementEvents().contains { $0.kind == .matureMilestone })
+        try revealAndGrade(repo, grade: .easy, date: date)
+        XCTAssertNotNil(try repo.claimAchievementEvent(id: event.id, now: date))
+        try repo.undo(now: date)
+        try revealAndGrade(repo, grade: .easy, date: date)
+        XCTAssertFalse(try repo.pendingAchievementEvents().contains { $0.kind == .matureMilestone })
+        // Installing over already mature/imported cards silently establishes a baseline.
+        var options = try repo.options(); options.achievements = nil; options.matureAchievementBaseline = nil
+        try repo.updateOptions(options)
+        try repo.initialize(now: date)
+        XCTAssertEqual(try repo.options().matureAchievementBaseline, [10])
+        XCTAssertTrue(try repo.pendingAchievementEvents().isEmpty)
+    }
+
+    func testAchievementsGoalChangesAndLegacyHistoryRestore() throws {
+        let repo = try fixture()
+        try create(repo)
+        var settings = try repo.settings(); settings.dailyGoal = nil
+        try repo.updateSettings(settings)
+        try repo.start(mode: .new, now: now)
+        try revealAndGrade(repo, grade: .good, date: now)
+        XCTAssertFalse(try repo.pendingAchievementEvents().contains { $0.kind == .dailyGoalReached })
+        settings.dailyGoal = 1; try repo.updateSettings(settings)
+        XCTAssertFalse(try repo.pendingAchievementEvents().contains { $0.kind == .dailyGoalReached })
+        // Simulate an old backup: original FSRS/Card IDs and logs, no achievement JSON.
+        var options = try repo.options(); options.achievements = nil
+        try repo.updateOptions(options)
+        let restarted = StudyRepository(container: repo.context.container, calendar: repo.calendar)
+        XCTAssertEqual(try restarted.achievementProgress(now: now).currentStreak, 1)
+        XCTAssertEqual(try restarted.achievementProgress(now: now).longestStreak, 1)
+        XCTAssertTrue(try restarted.pendingAchievementEvents().isEmpty)
+        XCTAssertEqual(try restarted.logs().count, 1)
+        let oldJSON = Data("{\"schemaVersion\":2,\"siblingBuryEnabled\":true}".utf8)
+        XCTAssertNil(try JSONDecoder().decode(StudyOptions.self, from: oldJSON).achievements)
+    }
+
     func testRecommendationStartRevalidatesAndPreservesDraftAndUndo() throws {
         let store = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), clock: { self.now })
         try create(store.repository)
@@ -150,7 +278,7 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(try changed.repository.options().activeSessionProgress?.reviewOrderPolicy, .traditional)
     }
 
-    func testRecommendationTimeCacheScopeAndThreeThousandCardHome() throws {
+    func testRecommendationTimeCacheScopeAndThreeThousandCardHome() async throws {
         let repo = try fixture(), deck = try repo.decks()[0].id
         let scheduler = try ReviewScheduler()
         let transition = try scheduler.review(scheduler.newCard(now: now), grade: .easy, now: now)
@@ -194,6 +322,21 @@ final class StudyRepositoryTests: XCTestCase {
         repo.calendar.timeZone = TimeZone(secondsFromGMT: 3600)!
         _ = try repo.homeSnapshot(now: date.addingTimeInterval(86400), cards: cards, logs: [])
         XCTAssertEqual(repo.homeAnswerTimeFetchCount, fetches + 2)
+        // Reuse the existing 3,000-card / 10,000-log fixture for the records tab.
+        let store = try StudyStore(container: repo.context.container, clock: { date })
+        let mainActorFetches = store.repository.fullHistoryFetchCount
+        store.refreshStatistics()
+        XCTAssertEqual(store.repository.fullHistoryFetchCount, mainActorFetches)
+        for _ in 0..<1000 {
+            if !store.statisticsLoading { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertFalse(store.statisticsLoading)
+        XCTAssertNil(store.statisticsError)
+        XCTAssertEqual(store.repository.fullHistoryFetchCount, mainActorFetches)
+        XCTAssertEqual(store.achievementProgress?.longestStreak, 1)
+        XCTAssertEqual(store.statistics?.ratings.values.reduce(0, +), 10000)
+        XCTAssertEqual(store.achievementHistory, [])
         print("Issue187 3000 cards / 10000 logs cold=\(coldSeconds)s warm=\(warmSeconds)s historyFetches=0 extraDecodes=0")
     }
 
@@ -356,6 +499,9 @@ final class StudyRepositoryTests: XCTestCase {
             XCTAssertEqual(cached.days.map(\.answers), uncached.days.map(\.answers))
             XCTAssertEqual(cached.ratings, uncached.ratings)
             XCTAssertEqual(cached.streak, uncached.streak)
+            XCTAssertEqual(cached.achievements?.progress.currentStreak, uncached.achievements?.progress.currentStreak)
+            XCTAssertEqual(cached.achievements?.progress.uniqueCardsToday, uncached.achievements?.progress.uniqueCardsToday)
+            XCTAssertEqual(cached.achievements?.history, uncached.achievements?.history)
             XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
         }
         for _ in 0..<8 {
@@ -380,12 +526,18 @@ final class StudyRepositoryTests: XCTestCase {
         try await report()
         XCTAssertNil(store.statisticsError)
         XCTAssertEqual(store.statistics?.days.first?.answers, 0)
+        XCTAssertEqual(store.achievementProgress?.currentStreak, 0)
+        XCTAssertTrue(store.achievementHistory.isEmpty)
         store.start(.new); store.draft(revealed: true); store.grade(.good)
         try await report()
         XCTAssertEqual(store.statistics?.days.first?.answers, 1)
+        XCTAssertEqual(store.achievementProgress?.uniqueCardsToday, 1)
+        XCTAssertEqual(Set(store.achievementHistory.map(\.kind)), [.firstStudyToday, .streakAdvanced])
         store.undo()
         try await report()
         XCTAssertEqual(store.statistics?.days.first?.answers, 0)
+        XCTAssertEqual(store.achievementProgress?.currentStreak, 0)
+        XCTAssertTrue(store.achievementHistory.isEmpty)
         // Save succeeds, then queue projection fails. A cached report from the
         // old revision must not hide the newly persisted invalid FSRS data.
         let id = try XCTUnwrap(store.review?.card?.cardID)
@@ -412,6 +564,14 @@ final class StudyRepositoryTests: XCTestCase {
         let cold = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 1)
         let warm = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(deckID: root, tagIDs: [tag]), revision: 1)
         XCTAssertEqual(cold.days.first?.answers, warm.days.first?.answers)
+        let excluded = try await reader.load(now: now, calendar: repo.calendar, startHour: 4,
+            scope: LearningScope(deckID: UUID()), revision: 1)
+        XCTAssertEqual(excluded.days.first?.answers, 0)
+        XCTAssertEqual(excluded.achievements?.progress.uniqueCardsToday, 1)
+        XCTAssertEqual(excluded.achievements?.history, try repo.achievementHistory())
+        XCTAssertEqual(cold.achievements?.history, warm.achievements?.history)
+        let achievementAggregations = await reader.achievementAggregations
+        XCTAssertEqual(achievementAggregations, 1)
         let reads = await reader.materialReads
         XCTAssertEqual(reads, 1)
         var calendar = repo.calendar
@@ -423,10 +583,15 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(cached.days.map(\.answers), uncached.days.map(\.answers))
         XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
         XCTAssertNotEqual(cached.meanRetrievability, cold.meanRetrievability)
+        XCTAssertEqual(cached.achievements?.progress.currentStreak, 0)
+        XCTAssertEqual(cached.achievements?.history, uncached.achievements?.history)
+        XCTAssertEqual(cached.achievements?.progress.longestStreak, uncached.achievements?.progress.longestStreak)
         try repo.undo(now: now)
         let undone = try await reader.load(now: now, calendar: repo.calendar, startHour: 4, scope: LearningScope(), revision: 2)
         XCTAssertEqual(undone.days.first?.answers, 0)
         XCTAssertNil(undone.meanRetrievability)
+        XCTAssertEqual(undone.achievements?.progress.longestStreak, 0)
+        XCTAssertTrue(undone.achievements?.history.isEmpty == true)
         let afterUndoReads = await reader.materialReads
         XCTAssertEqual(afterUndoReads, 2)
         let bounded = StatisticsReader(container: container, maximumCacheCost: 0)
@@ -862,11 +1027,21 @@ final class StudyRepositoryTests: XCTestCase {
         try revealAndGrade(repo, grade: .easy, date: boundary)
         XCTAssertEqual(try repo.sessionProgress()?.answered, 2)
         XCTAssertEqual(Set(try repo.logs().map(\.cardID)).count, 1)
+        let event = try XCTUnwrap(repo.pendingAchievementEvents().first)
+        XCTAssertNotNil(try repo.claimAchievementEvent(id: event.id, now: boundary))
+        let achievementRecords = try repo.options().achievements
         let backup = try BackupArchive.decode(await BackupService.export(repository: repo, now: boundary, appVersion: "audit"))
         let location = StudyStorageLocation(canonicalStore: root.appendingPathComponent("Restored.store"))
         let restoredContainer = try BackupService.restore(backup, location: location, mediaStore: media, now: boundary)
         let restored = StudyRepository(container: restoredContainer, mediaStore: media)
         try restored.initialize(now: boundary)
+        XCTAssertEqual(try restored.options().achievements, achievementRecords)
+        let restoredReport = try await StatisticsReader(container: restoredContainer).load(now: boundary,
+            calendar: restored.calendar, startHour: 4, scope: LearningScope())
+        XCTAssertEqual(restoredReport.achievements?.history, try restored.achievementHistory())
+        XCTAssertEqual(restoredReport.achievements?.progress.currentStreak, 2)
+        XCTAssertNil(try restored.claimAchievementEvent(id: event.id, now: boundary))
+        XCTAssertEqual(try restored.achievementProgress(now: boundary).currentStreak, 2)
         XCTAssertEqual(try restored.sessionProgress(), SessionAnswerProgress(answered: 2, limit: 10))
         try restored.undo(now: boundary)
         XCTAssertEqual(try restored.sessionProgress()?.answered, 1)

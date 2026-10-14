@@ -130,6 +130,30 @@ struct StatisticsView: View {
                     NavigationLink("復習負荷予測・学習計画") { ReviewForecastView(store: store) }
                         .accessibilityIdentifier("openReviewForecast")
                 }
+                if let progress = store.achievementProgress {
+                    Section("続けた記録（全デッキ）") {
+                        LabeledContent("現在の連続学習", value: "\(progress.currentStreak)日")
+                        LabeledContent("最長記録", value: "\(progress.longestStreak)日")
+                        LabeledContent("今日", value: progress.studiedToday ? "学習済み" : "これから学習できます")
+                        LabeledContent("今日学習したカード", value: "\(progress.uniqueCardsToday)枚")
+                        if let goal = store.settings.dailyGoal, goal > 0 {
+                            LabeledContent("今日の目標", value: "\(goal)枚")
+                        }
+                        NavigationLink("達成履歴") {
+                            List {
+                                if store.achievementHistory.isEmpty { Text("これからの達成がここに残ります。") }
+                                ForEach(store.achievementHistory) { record in
+                                    VStack(alignment: .leading) {
+                                        Text(record.title)
+                                        Text(record.studyDay).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Text("達成時の記録です。現在の実績はUndo・カードの変更で変わります。長期定着はReview状態かつStabilityが21日以上のFSRS推定で、永久記憶を保証しません。")
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }.navigationTitle("達成履歴")
+                        }
+                    }
+                }
                 Section("集計条件") {
                     DeckSelectionField("デッキ（子孫を含む）", decks: store.decks, selection: $store.statisticsScope.deckID, nilTitle: "すべてのデッキ", includesDescendants: true)
                     NavigationLink {
@@ -157,7 +181,7 @@ struct StatisticsView: View {
                             .accessibilityIdentifier("todayAnswerCount")
                         LabeledContent("新規の回答", value: "\(today.newAnswers)回")
                         LabeledContent("復習の回答", value: "\(today.reviewAnswers)回")
-                        LabeledContent("継続日数", value: "\(stats.streak)日")
+                        LabeledContent("集計対象の継続日数", value: "\(stats.streak)日")
                         Text("学習日は\(store.settings.dayStartHour)時を境界とします（24時間表記）。今日の目標や、進行中セッションの残り回答数とは異なります。")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
@@ -192,6 +216,9 @@ struct StatisticsView: View {
                     Section("現在の定着状況（推定）") {
                         NavigationLink("記憶の状態を詳しく見る") { MemoryAnalysisView(store: store) }
                             .accessibilityIdentifier("openMemoryAnalysis")
+                        if let memory = stats.memory {
+                            LabeledContent("長期定着カード（推定）", value: "\(memory.matureCardCount)枚")
+                        }
                         if let retention = stats.meanRetrievability {
                             LabeledContent("FSRS予測保持率",
                                            value: retention.formatted(.percent.precision(.fractionLength(1))))
@@ -224,6 +251,17 @@ struct StatisticsView: View {
                 guard store.selectedTab == 2 else { return }
                 // TabView may retain this view across reloads and tab changes.
                 store.refreshStatistics()
+                var day = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
+                var zone = TimeZone.current.identifier
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(30))
+                    guard !Task.isCancelled else { return }
+                    let next = StudyDay(startHour: store.settings.dayStartHour).interval(containing: store.clock()).start
+                    if next != day || zone != TimeZone.current.identifier {
+                        day = next; zone = TimeZone.current.identifier
+                        store.refreshStatistics()
+                    }
+                }
             }
             .onChange(of: store.statisticsScope) { _, _ in store.refreshStatistics() }
         }

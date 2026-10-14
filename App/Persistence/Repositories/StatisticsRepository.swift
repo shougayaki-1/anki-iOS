@@ -15,6 +15,7 @@ actor StatisticsReader {
         let deckID: UUID?
         let tagIDs: [UUID]
         let isSuspended: Bool
+        let isCardSuspended: Bool
         let dueDate: Date
         let state: ReviewScheduler.PredictionState
     }
@@ -24,6 +25,7 @@ actor StatisticsReader {
         let decks: [DeckLink]
         let parameters: [Double]?
         let targets: [UUID: Double]
+        let achievements: [AchievementRecord]
         let cost: Int
     }
     private var cached: (revision: Int, material: Material)?
@@ -37,6 +39,15 @@ actor StatisticsReader {
         let report: StudyStatistics
     }
     private var histories: [HistoryEntry] = []
+    private struct AchievementEntry {
+        let calendar: Calendar
+        let startHour: Int
+        let day: Date
+        let evaluatedAt: Date
+        let nextFutureLog: Date?
+        let report: AchievementStatistics
+    }
+    private var achievementReport: AchievementEntry?
     private var expiry: Task<Void, Never>?
     private var cacheGeneration = 0
     private let maximumCacheCost: Int
@@ -45,6 +56,7 @@ actor StatisticsReader {
     private(set) var materialReads = 0
     private(set) var fsrsDecodes = 0
     private(set) var historyAggregations = 0
+    private(set) var achievementAggregations = 0
     var cachedHistoryCount: Int { histories.count }
     var cachedCost: Int { (cached?.material.cost ?? 0) + histories.count * 65536 }
     #endif
@@ -56,7 +68,7 @@ actor StatisticsReader {
     }
 
     func clearCache() {
-        cached = nil; histories = []; expiry?.cancel(); expiry = nil
+        cached = nil; histories = []; achievementReport = nil; expiry?.cancel(); expiry = nil
         cacheGeneration += 1
     }
 
@@ -147,7 +159,7 @@ actor StatisticsReader {
         let memoryCards = zip(material.cards, states).compactMap { card, state -> MemoryCard? in
             guard included(card.deckID, card.tagIDs), !card.isSuspended, !card.state.isNew,
                   let probability = state.retrievability else { return nil }
-            return MemoryCard(id: card.id, title: card.title, stability: card.stability,
+            return MemoryCard(state: card.state.state, id: card.id, title: card.title, stability: card.stability,
                               difficulty: card.difficulty, retrievability: probability)
         }
         let scopedLogs = material.logs.filter { included($0.deckID, $0.tagIDs) }
@@ -155,7 +167,32 @@ actor StatisticsReader {
         report.memory = MemoryAnalysis.calculate(cards: memoryCards, logs: scopedLogs,
             targets: targetDecks.compactMap { material.targets[$0] }, now: now,
             calendar: calendar, startHour: startHour)
+        report.achievements = try achievements(material: material, now: now, calendar: calendar,
+                                               startHour: startHour, day: day)
         try Task.checkCancellation()
+        return report
+    }
+
+    private func achievements(material: Material, now: Date, calendar: Calendar,
+                              startHour: Int, day: Date) throws -> AchievementStatistics {
+        if let entry = achievementReport, entry.calendar == calendar, entry.startHour == startHour,
+           entry.day == day, now >= entry.evaluatedAt, (entry.nextFutureLog.map { now < $0 } ?? true) {
+            return entry.report
+        }
+        // All decks, including paused decks: the achievement definition excludes
+        // card suspension only. Filtered statistics have their own eligibility.
+        let matureCount = material.cards.filter {
+            MatureCards.contains(state: $0.state.state, stability: $0.stability, suspended: $0.isCardSuspended)
+        }.count
+        let report = try AchievementStatistics.calculate(logs: material.logs, records: material.achievements,
+            matureCount: matureCount, now: now, calendar: calendar, startHour: startHour)
+        #if DEBUG
+        achievementAggregations += 1
+        #endif
+        if cached != nil {
+            achievementReport = AchievementEntry(calendar: calendar, startHour: startHour, day: day,
+                evaluatedAt: now, nextFutureLog: material.logs.filter { $0.date > now }.map(\.date).min(), report: report)
+        }
         return report
     }
 
@@ -180,7 +217,7 @@ actor StatisticsReader {
             try Task.checkCancellation()
             guard let grade = ReviewGrade(rawValue: row.grade) else { return nil }
             let note = noteIDByCardID[row.cardID].flatMap { notesByID[$0] }
-            return StatisticLog(cardID: row.cardID, date: row.reviewedAt, grade: grade,
+            return StatisticLog(reviewLogID: row.id, cardID: row.cardID, date: row.reviewedAt, grade: grade,
                                 durationMs: row.durationMs,
                                 beforeState: try baseScheduler.summary(JSONDecoder().decode(SchedulerSnapshot.self, from: row.fsrsBefore)).state,
                                 sequence: row.sequence, wasNew: row.wasNew,
@@ -216,16 +253,18 @@ actor StatisticsReader {
             let title = try note.map { try JSONDecoder().decode(TextContent.self, from: $0.contentPayload).question } ?? "カード"
             cost += title.utf8.count
             return PreparedCard(id: card.id, title: title, stability: summary.stability, difficulty: summary.difficulty, deckID: note?.deckID, tagIDs: note?.tagIDs ?? [],
-                                isSuspended: card.isSuspended || note.map { paused.contains($0.deckID) } == true, dueDate: card.dueDate, state: state)
+                                isSuspended: card.isSuspended || note.map { paused.contains($0.deckID) } == true, isCardSuspended: card.isSuspended, dueDate: card.dueDate, state: state)
         }
         #if DEBUG
         materialReads += 1
         fsrsDecodes += cards.count
         #endif
-        cost += decks.count * 64
+        // Reserve space for the optional record payload and one derived achievement
+        // report, within the existing material/cache budget.
+        cost += decks.count * 64 + (extra?.payload.count ?? 0) * 2 + (options?.achievements?.count ?? 0) * 512 + 256
         return Material(logs: logs, cards: prepared,
                         decks: decks.map { DeckLink(id: $0.id, parentID: $0.parentID) },
-                        parameters: optimization?.activeParameters, targets: targets, cost: cost)
+                        parameters: optimization?.activeParameters, targets: targets, achievements: options?.achievements ?? [], cost: cost)
     }
 }
 
