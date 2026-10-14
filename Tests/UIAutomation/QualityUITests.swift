@@ -1,6 +1,26 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testInsightEvidenceNavigationAndSnapshots() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]
+        app.launch()
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 20))
+        let insight = app.buttons["insight-forecastPeak"]
+        XCTAssertTrue(insight.waitForExistence(timeout: 10))
+        for _ in 0..<5 where !insight.isHittable { app.swipeUp(velocity: .slow) }
+        attach(app, name: "issue105-insights")
+        insight.tap()
+        XCTAssertTrue(app.navigationBars["気づきの根拠"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["次の7日間の保存済み期日"].exists)
+        attach(app, name: "issue105-forecast-evidence")
+        app.navigationBars.buttons.firstMatch.tap()
+        for _ in 0..<5 where !app.segmentedControls["dashboardPeriod"].isHittable { app.swipeDown(velocity: .slow) }
+        app.segmentedControls["dashboardPeriod"].buttons["30日"].tap()
+        XCTAssertTrue(app.buttons["insight-forecastPeak"].exists)
+        app.terminate()
+    }
+
     func testDashboardInteractionsAndScreenshots() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]

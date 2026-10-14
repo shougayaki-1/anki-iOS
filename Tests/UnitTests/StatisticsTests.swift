@@ -2,6 +2,88 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    private var insightCalendar: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        return calendar
+    }
+    private var insightNow: Date {
+        insightCalendar.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 12))!
+    }
+    private func insightStats(_ logs: [StatisticLog] = []) -> StudyStatistics {
+        StudyStatistics.calculate(logs: logs, retrievabilities: [], now: insightNow, calendar: insightCalendar, startHour: 4)
+    }
+    private func insights(_ stats: StudyStatistics, days: Int = 7) -> [StudyInsight] {
+        StudyInsight.generate(stats: stats, days: days, now: insightNow, calendar: insightCalendar, startHour: 4)
+    }
+    func testInsightsRequireEvidenceAndReserveUsefulAndGrowthSlots() {
+        XCTAssertTrue(insights(insightStats()).isEmpty)
+        var stats = insightStats()
+        let today = StudyDay(calendar: insightCalendar, startHour: 4).interval(containing: insightNow).start
+        stats.scheduledDays = (0..<7).map { offset in
+            let start = insightCalendar.date(byAdding: .day, value: offset, to: today)!
+            return ForecastDay(start: start, end: insightCalendar.date(byAdding: .day, value: 1, to: start)!, scheduled: offset == 2 || offset == 4 ? 42 : 0)
+        }
+        XCTAssertEqual(insights(stats).map(\.rule), [.forecastPeak])
+        if case .forecast(_, let peak) = insights(stats)[0].evidence { XCTAssertEqual(peak, stats.scheduledDays[2].start) } else { XCTFail() }
+        stats.comparisons[7] = StudyVolumeComparison(days: 7, previousStart: today.addingTimeInterval(-14 * 86400), recentStart: today.addingTimeInterval(-7 * 86400), end: today, previous: 0, recent: 5)
+        let memory = MemoryAnalysis.calculate(cards: [], logs: [], targets: [0.9], now: insightNow, calendar: insightCalendar, startHour: 4)
+        stats.memory = MemoryAnalysis(generatedAt: insightNow, distributions: memory.distributions,
+            retention: [ObservedRetention(days: 7, start: today, end: insightNow, successes: 18, trials: 20, cardIDs: [])], targets: [0.9])
+        stats.achievements = AchievementStatistics(progress: AchievementProgress(currentStreak: 7, longestStreak: 7, studiedToday: true, uniqueCardsToday: 5), history: [])
+        XCTAssertEqual(insights(stats).map(\.rule), [.forecastPeak, .streak])
+        XCTAssertEqual(StudyInsight.select(insights(stats) + insights(stats)).count, 2)
+        stats.achievements = nil
+        XCTAssertEqual(insights(stats).map(\.rule), [.forecastPeak, .volume])
+        XCTAssertFalse(insights(stats)[1].title.contains("%"))
+        XCTAssertEqual(insights(stats, days: 30).map(\.rule), [.forecastPeak])
+        stats.scheduledDays = []
+        XCTAssertEqual(insights(stats).map(\.rule), [.volume, .retention])
+        stats.comparisons = [:]
+        XCTAssertEqual(insights(stats).map(\.rule), [.retention])
+        stats.memory = MemoryAnalysis(generatedAt: insightNow, distributions: memory.distributions,
+            retention: [ObservedRetention(days: 7, start: today, end: insightNow, successes: 18, trials: 19, cardIDs: [])], targets: [0.9])
+        XCTAssertTrue(insights(stats).isEmpty)
+        stats.memory = MemoryAnalysis(generatedAt: insightNow, distributions: memory.distributions,
+            retention: [ObservedRetention(days: 7, start: today, end: insightNow, successes: 18, trials: 20, cardIDs: [])], targets: [0.85, 0.9])
+        XCTAssertTrue(insights(stats).isEmpty)
+    }
+    func testInsightVolumeDeduplicatesAndReevaluatesScopeDeletionAndBoundary() {
+        let calendar = insightCalendar, now = insightNow, deck = UUID(), tag = UUID(), card = UUID()
+        let today = StudyDay(calendar: calendar, startHour: 4).interval(containing: now).start
+        func log(_ offset: Int, id: UUID = UUID()) -> StatisticLog {
+            StatisticLog(cardID: id, date: calendar.date(byAdding: .day, value: offset, to: today)!, grade: .good, durationMs: 0, deckID: deck, tagIDs: [tag])
+        }
+        let logs = [log(-14), log(-1, id: card), log(-2, id: card), log(-7), log(0), log(1)]
+        let stats = insightStats(logs)
+        XCTAssertEqual(stats.comparisons[7]?.previous, 1)
+        XCTAssertEqual(stats.comparisons[7]?.recent, 2)
+        XCTAssertEqual(insights(stats).map(\.rule), [.volume])
+        XCTAssertTrue(insights(insightStats(Array(logs.dropFirst()))).isEmpty)
+        XCTAssertTrue(insights(insightStats([logs[0], logs[1]])).isEmpty)
+        for (decks, tags) in [(Set([UUID()]), Set<UUID>()), (Set([deck]), Set([UUID()]))] {
+            let scoped = StudyStatistics.calculate(logs: logs, retrievabilities: [], now: now, calendar: calendar, startHour: 4, selectedDeckIDs: decks, selectedTagIDs: tags)
+            XCTAssertTrue(insights(scoped).isEmpty)
+        }
+        let before = StudyStatistics.calculate(logs: logs, retrievabilities: [], now: today.addingTimeInterval(-1), calendar: calendar, startHour: 4)
+        XCTAssertNil(before.comparisons[7]) // The earlier prior window is not covered.
+        var other = calendar; other.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let changed = StudyStatistics.calculate(logs: logs, retrievabilities: [], now: now, calendar: other, startHour: 4)
+        XCTAssertNotEqual(changed.dashboardPeriods[7]?.date, stats.dashboardPeriods[7]?.date)
+        XCTAssertEqual(stats.updatingCurrentCards([], now: now, selectedDeckIDs: nil, selectedTagIDs: []).comparisons[7]?.recent, 2)
+    }
+    func testStreakInsightAppearsOnlyOnStudiedMilestoneDay() throws {
+        let calendar = insightCalendar, now = insightNow
+        let logs = (0..<7).map { StatisticLog(cardID: UUID(), date: calendar.date(byAdding: .day, value: -$0, to: now)!, grade: .good, durationMs: 0) }
+        var stats = insightStats()
+        stats.achievements = try AchievementStatistics.calculate(logs: logs, records: [], matureCount: 0, now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(insights(stats).map(\.rule), [.streak])
+        stats.achievements = try AchievementStatistics.calculate(logs: Array(logs.dropFirst()), records: [], matureCount: 0, now: now, calendar: calendar, startHour: 4)
+        XCTAssertTrue(insights(stats).isEmpty)
+        stats.achievements = try AchievementStatistics.calculate(logs: Array(logs.dropLast()), records: [], matureCount: 0, now: now, calendar: calendar, startHour: 4)
+        XCTAssertTrue(insights(stats).isEmpty)
+    }
+
     func testDashboardPeriodsDeduplicateAcrossDaysAndUseStudyBoundary() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!

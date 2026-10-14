@@ -643,6 +643,11 @@ final class StudyRepositoryTests: XCTestCase {
             XCTAssertEqual(cached.achievements?.progress.uniqueCardsToday, uncached.achievements?.progress.uniqueCardsToday)
             XCTAssertEqual(cached.achievements?.history, uncached.achievements?.history)
             XCTAssertEqual(cached.meanRetrievability, uncached.meanRetrievability)
+            for days in [0, 7, 30, 90] {
+                XCTAssertEqual(cached.insights[days]?.map(\.title), uncached.insights[days]?.map(\.title))
+                XCTAssertEqual(cached.insights[days]?.map(\.start), uncached.insights[days]?.map(\.start))
+                XCTAssertEqual(cached.comparisons[days]?.recent, uncached.comparisons[days]?.recent)
+            }
         }
         for _ in 0..<8 {
             _ = try await reader.load(now: now, calendar: calendar, startHour: 4, scope: LearningScope(tagIDs: [UUID()]), revision: 1)
@@ -679,6 +684,7 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(store.statistics?.days.first?.answers, 0)
         XCTAssertEqual(store.achievementProgress?.currentStreak, 0)
         XCTAssertEqual(store.statistics?.dashboardPeriods[7]?.cards, 0)
+        XCTAssertTrue(store.statistics?.insights[7]?.isEmpty == true)
         XCTAssertTrue(store.achievementHistory.isEmpty)
         // Save succeeds, then queue projection fails. A cached report from the
         // old revision must not hide the newly persisted invalid FSRS data.
@@ -2108,6 +2114,8 @@ final class StudyRepositoryTests: XCTestCase {
         let noteID = try repo.createNote(NoteInput(deckID: child, question: "Q", answer: "A"), now: now)
         try repo.start(mode: .new, scope: LearningScope(deckID: child), now: now)
         try revealAndGrade(repo, grade: .easy, date: now.addingTimeInterval(3))
+        // The scheduler may place Easy beyond the insight's seven-day horizon.
+        try repo.transaction { try XCTUnwrap(repo.cards().first).dueDate = now.addingTimeInterval(2 * 86400) }
 
         let reader = StatisticsReader(container: container)
         let calendar = Calendar.current
@@ -2118,6 +2126,10 @@ final class StudyRepositoryTests: XCTestCase {
         let excluded = try await reader.load(now: now.addingTimeInterval(60), calendar: calendar,
                                              startHour: 4, scope: LearningScope(deckID: other))
         XCTAssertEqual(all.days[0].answers, 1)
+        XCTAssertEqual(all.insights[7]?.map(\.rule), [.forecastPeak])
+        XCTAssertEqual(descendant.insights[7]?.map(\.rule), [.forecastPeak])
+        XCTAssertTrue(excluded.insights[7]?.isEmpty == true)
+        XCTAssertEqual(try repo.logs().count, 1)
         XCTAssertEqual(descendant.days[0].answers, 1)
         XCTAssertEqual(excluded.days[0].answers, 0)
 
@@ -2129,6 +2141,8 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertEqual(orphan.days[0].answers, 1)
         XCTAssertEqual(orphan.unattributedAnswers, 1)
         XCTAssertEqual(orphanScoped.days[0].answers, 0)
+        XCTAssertTrue(orphan.insights[7]?.isEmpty == true)
+        XCTAssertTrue(orphanScoped.insights[7]?.isEmpty == true)
     }
 
 }

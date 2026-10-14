@@ -61,6 +61,8 @@ private struct StatisticsAccumulator {
 
 struct StudyStatistics {
     // Compact value projections built with the existing history pass, never in body.
+    var insights: [Int: [StudyInsight]] = [:]
+    var comparisons: [Int: StudyVolumeComparison] = [:]
     var dashboardPeriods: [Int: StatisticsBucket] = [:] // 0 = all history
     var calendarDays: [Date: StatisticsBucket] = [:]
     var growth: [MemoryGrowthGroup] = []
@@ -104,9 +106,16 @@ struct StudyStatistics {
         var periods: [Int: StatisticsAccumulator] = [:]
         let periodStarts = [7, 30, 90].map { ($0, calendar.date(byAdding: .day, value: -($0 - 1), to: today)!) }
         var unattributedAnswers = 0
+        var comparisonIDs: [Int: [Int: Set<UUID>]] = [:]
+        var earliest: Date?
+        let comparisonStarts = [7, 30, 90].map { ($0, calendar.date(byAdding: .day, value: -$0, to: today)!, calendar.date(byAdding: .day, value: -2 * $0, to: today)!) }
 
         for log in logs where log.date <= now && included(deckID: log.deckID, tags: log.tagIDs) {
             let studyDate = studyDay.interval(containing: log.date).start
+            earliest = min(earliest ?? studyDate, studyDate)
+            for (count, recent, previous) in comparisonStarts where studyDate >= previous && studyDate < today {
+                comparisonIDs[count, default: [:]][studyDate >= recent ? 1 : 0, default: []].insert(log.cardID)
+            }
             let week = calendar.dateInterval(of: .weekOfYear, for: studyDate)!.start
             let month = calendar.dateInterval(of: .month, for: studyDate)!.start
             daily[studyDate, default: StatisticsAccumulator()].record(log)
@@ -152,6 +161,9 @@ struct StudyStatistics {
             ($0, (periods[$0] ?? StatisticsAccumulator()).bucket(at: today))
         })
         report.dashboardPeriods[0] = all.bucket(at: today)
+        for (count, recent, previous) in comparisonStarts where earliest.map({ $0 <= previous }) == true {
+            report.comparisons[count] = StudyVolumeComparison(days: count, previousStart: previous, recentStart: recent, end: today, previous: comparisonIDs[count]?[0]?.count ?? 0, recent: comparisonIDs[count]?[1]?.count ?? 0)
+        }
         // Keep each bucket's true study-day key, including DST changes.
         report.calendarDays = Dictionary(uniqueKeysWithValues: daily.map { ($0.key, $0.value.bucket(at: $0.key)) })
         return report.updatingCurrentCards(cards, now: now, selectedDeckIDs: selectedDeckIDs,
@@ -177,6 +189,8 @@ struct StudyStatistics {
                     ratings: ratings, durationMs: durationMs,
                     meanRetrievability: mean, overdueCount: overdue,
                     unattributedAnswers: unattributedAnswers)
+        result.comparisons = comparisons
+        result.insights = insights
         result.dashboardPeriods = dashboardPeriods
         result.calendarDays = calendarDays
         return result
@@ -512,4 +526,81 @@ struct MemoryGrowthGroup: Identifiable {
     let id: String
     let explanation: String
     let cards: [MemoryCard]
+}
+
+
+// Evidence is a value snapshot from StatisticsReader, never a persistence command.
+struct StudyVolumeComparison {
+    let days: Int
+    let previousStart: Date
+    let recentStart: Date
+    let end: Date
+    let previous: Int
+    let recent: Int
+}
+
+struct StudyInsight: Identifiable {
+    enum Rule: String { case volume, forecastPeak, retention, streak }
+    enum Family { case useful, growth }
+    enum Evidence {
+        case volume(StudyVolumeComparison)
+        case forecast(days: [ForecastDay], peak: Date)
+        case retention(ObservedRetention, target: Double)
+        case streak(days: Int, todayCards: Int, date: Date)
+    }
+    let rule: Rule
+    let title: String
+    let explanation: String
+    let start: Date
+    let end: Date
+    let evidence: Evidence
+    var id: String { rule.rawValue }
+    var family: Family { rule == .volume || rule == .streak ? .growth : .useful }
+    var priority: Int {
+        switch rule { case .forecastPeak: return 0; case .streak: return 1; case .volume: return 2; case .retention: return 3 }
+    }
+    var global: Bool { rule == .streak }
+    var icon: String {
+        switch rule { case .volume: return "chart.bar"; case .forecastPeak: return "calendar"; case .retention: return "brain.head.profile"; case .streak: return "flame" }
+    }
+    static func select(_ candidates: [Self]) -> [Self] {
+        let sorted = candidates.sorted { $0.priority == $1.priority ? $0.id < $1.id : $0.priority < $1.priority }
+        var result: [Self] = []
+        for candidate in sorted where !result.contains(where: { $0.family == candidate.family || $0.rule == candidate.rule }) {
+            result.append(candidate)
+        }
+        return Array(result.prefix(2))
+    }
+    static func generate(stats: StudyStatistics, days: Int, now: Date, calendar: Calendar, startHour: Int) -> [Self] {
+        var candidates: [Self] = []
+        if let comparison = stats.comparisons[days], comparison.recent > comparison.previous {
+            candidates.append(Self(rule: .volume, title: "前の\(days)日間より\(comparison.recent - comparison.previous)枚多く学習",
+                explanation: "完了した\(days)日間のユニークカード数を比較しています。", start: comparison.previousStart, end: comparison.end,
+                evidence: .volume(comparison)))
+        }
+        let scheduled = Array(stats.scheduledDays.prefix(7))
+        if let peak = scheduled.max(by: { $0.scheduled < $1.scheduled }), peak.scheduled > 0,
+           let first = scheduled.first, let last = scheduled.last {
+            // Equal peaks resolve to the earliest day, independently of sort stability.
+            let firstPeak = scheduled.first { $0.scheduled == peak.scheduled }!
+            candidates.append(Self(rule: .forecastPeak, title: "\(firstPeak.start.formatted(.dateTime.month().day()))は復習予定\(peak.scheduled)枚",
+                explanation: "次の7日間で最多の予定です。学習すると予定は変わります。", start: first.start, end: last.end,
+                evidence: .forecast(days: scheduled, peak: firstPeak.start)))
+        }
+        if let memory = stats.memory, memory.targets.count == 1, let target = memory.targets.first,
+           let retention = memory.retention.first(where: { $0.days == days }), retention.trials >= 20, let rate = retention.rate {
+            candidates.append(Self(rule: .retention, title: "実測保持率\(Int((rate * 100).rounded()))%・目標\(Int((target * 100).rounded()))%",
+                explanation: "\(retention.trials)対象試行の観測値です。目標は現在の設定値です。", start: retention.start, end: retention.end,
+                evidence: .retention(retention, target: target)))
+        }
+        if let progress = stats.achievements?.progress, progress.studiedToday,
+           [3, 7, 14, 30, 100].contains(progress.currentStreak) {
+            let today = StudyDay(calendar: calendar, startHour: startHour).interval(containing: now).start
+            candidates.append(Self(rule: .streak, title: "\(progress.currentStreak)日連続で学習しました",
+                explanation: "今日の学習は\(progress.uniqueCardsToday)枚。全デッキ共通の実績です。",
+                start: calendar.date(byAdding: .day, value: 1 - progress.currentStreak, to: today)!, end: now,
+                evidence: .streak(days: progress.currentStreak, todayCards: progress.uniqueCardsToday, date: today)))
+        }
+        return select(candidates)
+    }
 }

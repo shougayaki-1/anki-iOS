@@ -19,6 +19,7 @@ struct StatisticsView: View {
                         Button("再試行") { store.refreshStatistics() }
                     } else if let stats = store.statistics {
                         LearningSummarySection(store: store, stats: stats, days: historyDays)
+                        StudyInsightsSection(store: store, insights: stats.insights[historyDays] ?? [])
                         MemoryGrowthSection(store: store, groups: stats.growth)
                         StudyCalendarSection(store: store, stats: stats)
                         DashboardForecastSection(store: store, stats: stats)
@@ -380,5 +381,109 @@ struct MemoryInsightsSection: View {
             Text("安定度・覚えにくさは中央値。想起確率はFSRS推定、保持率は保存済み評価からの実測です。試行なしは「—」。")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+}
+
+
+struct StudyInsightsSection: View {
+    let store: StudyStore
+    let insights: [StudyInsight]
+    private var scope: String {
+        let deck = store.statisticsScope.deckID.flatMap { id in store.decks.first { $0.id == id }?.name } ?? "すべてのデッキ"
+        let tags = store.tags.filter { store.statisticsScope.tagIDs.contains($0.id) }.map(\.name)
+        return deck + "（子孫を含む） · " + (tags.isEmpty ? "すべてのタグ" : tags.joined(separator: "、") + "（すべてを含む）")
+    }
+    var body: some View {
+        if !insights.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("記録からの気づき").font(.headline)
+                ForEach(insights) { insight in
+                    NavigationLink {
+                        StudyInsightEvidenceView(store: store, insight: insight, scope: insight.global ? "全デッキ共通・タグ絞り込みなし" : scope)
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: insight.icon).foregroundStyle(Color.accentColor).accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(insight.title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                Text(insight.explanation).font(.subheadline).foregroundStyle(.secondary)
+                                Text(insight.global ? "全デッキ共通" : scope).font(.caption).foregroundStyle(.secondary)
+                                Text(insight.start.formatted(.dateTime.month().day()) + "〜" + insight.end.formatted(.dateTime.month().day()))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                        }.padding(16).frame(minHeight: 44)
+                            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                            .contentShape(RoundedRectangle(cornerRadius: 16))
+                    }.buttonStyle(.plain).accessibilityIdentifier("insight-" + insight.id)
+                }
+            }
+        }
+    }
+}
+
+struct StudyInsightEvidenceView: View {
+    let store: StudyStore
+    let insight: StudyInsight
+    let scope: String
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                DashboardCard(title: insight.title, subtitle: scope) {
+                    Text(insight.explanation)
+                    Text("参考期間：" + insight.start.formatted(.dateTime.year().month().day().hour().minute()) + "〜" + insight.end.formatted(.dateTime.year().month().day().hour().minute()))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("タップ時の集計結果です。最新の結果は記録画面の更新で確認できます。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                evidence
+            }.padding(20)
+        }.background(Color(.systemGroupedBackground)).navigationTitle("気づきの根拠").navigationBarTitleDisplayMode(.inline)
+    }
+    @ViewBuilder private var evidence: some View {
+        switch insight.evidence {
+        case .volume(let comparison):
+            DashboardCard(title: "同じ長さの期間で比較", subtitle: "期間内のユニークCard ID数") {
+                Chart {
+                    BarMark(x: .value("期間", "前の期間"), y: .value("枚数", comparison.previous))
+                    BarMark(x: .value("期間", "直近の期間"), y: .value("枚数", comparison.recent)).foregroundStyle(.teal)
+                }.frame(height: 180)
+                Text("前の期間：\(comparison.previous)枚（" + interval(comparison.previousStart, comparison.recentStart) + "）")
+                Text("直近の期間：\(comparison.recent)枚（" + interval(comparison.recentStart, comparison.end) + "）")
+                Text("各期間で同じカードへの回答は1枚と数えます。今日の未完了の学習日は除外し、両期間より前から記録がある場合だけ比較します。記録の削除後は残っている記録で再集計します。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .forecast(let days, let peak):
+            DashboardCard(title: "次の7日間の保存済み期日", subtitle: "停止カード・休止デッキを除外") {
+                Chart(days) { day in
+                    BarMark(x: .value("学習日", day.start, unit: .day), y: .value("枚数", day.scheduled))
+                        .foregroundStyle(day.start == peak ? Color.accentColor : .teal)
+                }.frame(height: 180)
+                ForEach(days) { day in
+                    Text(day.start.formatted(.dateTime.month().day()) + "：\(day.scheduled)枚" + (day.start == peak ? "（最多）" : ""))
+                }
+                Text("期限超過は今日に含みます。将来の回答による追加復習は含みません。同数の最多日は最初の日を表示します。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .retention(let retention, let target):
+            DashboardCard(title: "実測と設定目標", subtitle: "過去\(retention.days)日・\(retention.trials)対象試行") {
+                Chart {
+                    BarMark(x: .value("種類", "実測"), y: .value("割合", retention.rate ?? 0)).foregroundStyle(.teal)
+                    BarMark(x: .value("種類", "設定目標"), y: .value("割合", target))
+                }.chartYScale(domain: 0...1).frame(height: 180)
+                Text("成功：\(retention.successes) / \(retention.trials)試行・対象カード\(retention.cardIDs.count)枚")
+                Text("回答前がReview状態の、各カード・学習日の最初の回答だけが対象です。Hard / Good / Easyを成功とし、Againを含む全対象試行が分母です。20試行未満や複数の設定目標が混在する対象では表示しません。目標は現在の設定で、過去の設定やFSRS推定値ではありません。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        case .streak(let days, let cards, let date):
+            DashboardCard(title: "連続学習の節目", subtitle: "全デッキ共通") {
+                Text("\(days)日連続・" + date.formatted(.dateTime.month().day()) + "は\(cards)枚")
+                Text("1回以上の保存済み回答がある学習日を連続で数えます。今日も学習し、3 / 7 / 14 / 30 / 100日になった当日だけ表示します。Undo・削除後は残る回答で再集計します。")
+                    .font(.caption).foregroundStyle(.secondary)
+                NavigationLink("日ごとの回答・達成履歴を確認") { AchievementHistoryView(store: store) }
+            }
+        }
+    }
+    private func interval(_ start: Date, _ end: Date) -> String {
+        start.formatted(.dateTime.month().day().hour().minute()) + "〜" + end.formatted(.dateTime.month().day().hour().minute()) + "未満"
     }
 }
