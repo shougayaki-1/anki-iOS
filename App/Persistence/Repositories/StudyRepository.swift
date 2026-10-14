@@ -49,7 +49,7 @@ final class StudyRepository {
         }
         return AnswerTimeEstimate.median(milliseconds: samples.filter { cardIDs.contains($0.0) && (responseMode.override == nil || $0.2 == responseMode.rawValue) }.map { $0.1 })
     }
-    let context: ModelContext
+    private(set) var context: ModelContext
     var calendar: Calendar
     var mediaStore: MediaStore
     private var queueStates: [UUID: (payload: Data, state: String, prediction: ReviewScheduler.PredictionState)] = [:]
@@ -157,7 +157,20 @@ final class StudyRepository {
         self.calendar = calendar; self.save = save; self.mediaStore = mediaStore
     }
 
+    var importCommitWorking = false
+
+    func refreshAfterImportCommit() {
+        context = ModelContext(context.container)
+        context.autosaveEnabled = false
+        clearOperationQueue()
+        scopeNotes = nil
+        queueStates = [:]
+        homeAnswerTimeCache = nil
+        mutationRevision += 1
+    }
+
     func transaction<T>(_ body: () throws -> T) throws -> T {
+        guard !importCommitWorking else { throw ImportCommitError.busy }
         // A second transaction in an operation must not see earlier snapshots.
         clearOperationQueue()
         scopeNotes = nil

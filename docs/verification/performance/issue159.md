@@ -38,3 +38,22 @@ CSVプレビューのサンプリング上のメモリ増加は11.32MB→約2.7M
 B（未完了・Open）。実機API各3回：CSV3,000確定中央値739.59ms、studydeck3,000確定541.87ms、重複画像ZIP200行230.30ms、現行APKG1,900確定387.58ms。10msサンプルphys_footprintと直後RAMをREADME/CSVへ記録。失敗rollback/メディア原子性/現行旧APKG/取消の既存回帰成功。独立写真ZIP・メディア付き大容量APKG・取込UIの停止/テンポラリ最大使用量・容量不足/途中終了は未確認。同期確定処理の懸念を残し、API値だけでUI hang測定済みとは扱わない。
 
 環境はiPhone 15 Pro / iOS 27.0.1 / Xcode 27 / Debug、専用Bundle ID・隔離ストア。実機データ・全標本・未確認条件・再現方法は[共通実機レポート](README.md)と[CSV](device-20261012.csv)を参照。先行Simulatorの値との改善率は算出しない。
+
+## 保存worker（2026-10-14）
+
+テキスト/CSV/TSV/TXT/貼付の確定を独立したModelContextのworkerへ移動。同期APIと書き込みロジックを共有し、最後の1回だけsaveする。途中エラー・save前の取消はrollback。save開始後の取消は、成功した保存を未保存と報告しない。未保存の編集がある場合は開始を拒否し、worker中のRepository transactionも拒否する。成功後だけUI側contextと投影キャッシュを更新し、既存の表示再読込へ進む。スキーマ・メディア形式は変更しない。
+
+Debug、空のUUID別SQLite、3,000 basic行、同一プロセスで同期→worker各1回。10msのMainActor heartbeatの最大実行間隔をAPI壁時計と別に記録した。描画フレームやInstruments Hangsの測定ではなく、定期処理の応答性の参考値。生成/準備/バックアップは区間外。温度・低電力モードは未採取、順序/キャッシュ条件も一致しないため改善率とRAM削減は断定しない。
+
+| 環境・経路 | API ms | MainActor最大間隔 ms | 保存中heartbeat回数 | RAM 開始/10msサンプルpeak/終了 MB |
+| --- | ---: | ---: | ---: | --- |
+| Simulator iPhone 17 Pro / iOS 26.5 同期 | 433.98 | 433.95 | 0 | 36.56 / 43.73 / 36.57 |
+| 同 worker | 464.63 | 17.56 | 41 | 36.54 / 43.67 / 36.54 |
+| iPhone 15 Pro / iOS 27.0.1 同期 | 508.24 | 508.19 | 0 | 47.07 / 81.64 / 61.18 |
+| 同 worker | 504.82 | 25.80 | 43 | 67.86 / 75.84 / 47.88 |
+
+実機は専用Bundle ID `dev.shoug.AnkiIOS.Issue159Audit`、空のApp Group権限、UUID別fixtureストア。本番アプリ・学習データを変更しない。通常アプリの署名/Bundle ID変更はPRに含めない。実機のホーム生成APIは同期後170.07ms、worker後181.05msであり、表示再読込の同期処理は残る。
+
+検証: Simulator関連11件（保存失敗・取消・重複・件数・cloze・FSRS/UUID保持と既存CSV/画像ZIP/studydeck/APKG計測）、実機関連4件、iPhone 15 Proサイズの既存CSV3,000行UI 1件成功。Debugビルド成功。workerのsave中にMainActorが実行できること、競合transactionを拒否すること、失敗時のNote/Card/Tag/Batch原子性と成功後の更新内容再読込を確認。全テスト未実行。
+
+未完了: 独立大量写真ZIP、大容量メディア付きAPKG、各形式のtemp最大量、容量不足/プロセス途中終了、取込UIの連続描画/実機Hangs。既存画像ZIP計測は200パスが同一画像を共有し、APKGは既存1,900ノートfixture。メディア形式の保存は引き続き同期。Draft PR、Issue #159はOpenを維持し、#173の進捗UI要件全体の達成とは扱わない。

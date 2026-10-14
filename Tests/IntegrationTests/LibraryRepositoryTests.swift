@@ -16,6 +16,7 @@ final class LibraryRepositoryTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
         let writer = StudyRepository(container: container)
         try writer.initialize(now: now)
@@ -467,6 +468,103 @@ final class LibraryRepositoryTests: XCTestCase {
         XCTAssertThrowsError(try repo.importPreparedRows(prepared, action: .add, source: "csv", now: now))
         XCTAssertTrue(try repo.notes().isEmpty)
         XCTAssertTrue(try repo.cards().isEmpty)
+    }
+
+    func testBackgroundImportPreservesUpdatedCardAndRollsBackSaveFailure() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let container = try PersistenceController.makeStudyContainer(storeURL: root.appendingPathComponent("Study.store"))
+        let repo = StudyRepository(container: container)
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id
+        let row = ImportRow(line: 1, question: "Q", answer: "A")
+        _ = try repo.importRows([row], deckID: deck, kind: .basic, tagNames: [], action: .add, source: "csv", now: now)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.easy, now: now)
+        let historyIDs = try repo.logs().map(\.id)
+        let original = try XCTUnwrap(repo.cards().first)
+        let cardID = original.id, noteID = original.noteID, payload = original.fsrsPayload
+        var updated = row; updated.explanation = "updated"
+        let prepared = try PreparedTextImport.make([updated, ImportRow(line: 2, question: "new", answer: "A")],
+            deckID: deck, kind: .basic, tagNames: ["tag"])
+        let oldContext = repo.context
+        do {
+            _ = try await repo.importPreparedRowsInBackground(prepared, action: .update, source: "csv", now: now,
+                save: { _ in throw Failure.save })
+            XCTFail("Expected save failure")
+        } catch { XCTAssertTrue(error is Failure) }
+        let reader = StudyRepository(container: container)
+        XCTAssertEqual(try reader.cards().map(\.id), [cardID])
+        XCTAssertTrue(try reader.tags().isEmpty)
+        XCTAssertEqual(try reader.context.fetch(FetchDescriptor<ImportBatch>()).count, 1)
+        XCTAssertEqual(try JSONDecoder().decode(TextContent.self, from: XCTUnwrap(reader.notes().first).contentPayload).explanation, "")
+        XCTAssertTrue(repo.context === oldContext)
+        do {
+            _ = try await repo.importPreparedRowsInBackground(prepared, action: .update, source: "csv", now: now,
+                save: { _ in throw CancellationError() })
+            XCTFail("Expected cancellation before save")
+        } catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertEqual(try repo.logs().map(\.id), historyIDs)
+        XCTAssertEqual(try repo.cards().map(\.id), [cardID])
+        let result = try await repo.importPreparedRowsInBackground(prepared, action: .update, source: "csv", now: now,
+            save: { context in
+                XCTAssertFalse(Thread.isMainThread)
+                try context.save()
+            })
+        XCTAssertEqual(result.createdCards, 1); XCTAssertEqual(result.maintainedCards, 1)
+        XCTAssertFalse(repo.context === oldContext)
+        let retained = try XCTUnwrap(repo.cards().first { $0.id == cardID })
+        XCTAssertEqual(retained.noteID, noteID); XCTAssertEqual(retained.fsrsPayload, payload)
+        XCTAssertEqual(try JSONDecoder().decode(TextContent.self, from: XCTUnwrap(repo.notes().first { $0.id == noteID }).contentPayload).explanation, "updated")
+        XCTAssertEqual(try repo.tags().count, 1)
+        XCTAssertEqual(try repo.logs().map(\.id), historyIDs)
+    }
+
+    func testBackgroundSaveAllowsMainActorAndRejectsConcurrentMutation() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let prepared = try PreparedTextImport.make([ImportRow(line: 1, question: "Q", answer: "A")],
+            deckID: deck, kind: .basic, tagNames: [])
+        let released = DispatchSemaphore(value: 0)
+        var ranOnMainActor = false
+        _ = try await repo.importPreparedRowsInBackground(prepared, action: .add, source: "csv", now: now,
+            save: { context in
+                _ = Task { @MainActor in
+                    ranOnMainActor = true
+                    XCTAssertThrowsError(try repo.createDeck(name: "concurrent", parentID: nil, now: Date()))
+                    released.signal()
+                }
+                XCTAssertEqual(released.wait(timeout: .now() + 5), .success)
+                try context.save()
+            })
+        XCTAssertTrue(ranOnMainActor)
+        XCTAssertEqual(try repo.decks().count, 1)
+        XCTAssertEqual(try repo.cards().count, 1)
+    }
+
+    func testBackgroundImportCancellationAndPendingEditsAreSafe() async throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        let prepared = try PreparedTextImport.make([ImportRow(line: 1, question: "Q", answer: "A")],
+            deckID: deck, kind: .basic, tagNames: ["tag"])
+        let pending = Deck(name: "unsaved", now: now)
+        repo.context.insert(pending)
+        do {
+            _ = try await repo.importPreparedRowsInBackground(prepared, action: .add, source: "csv", now: now)
+            XCTFail("Expected pending edits rejection")
+        } catch { XCTAssertTrue(error is ImportCommitError) }
+        XCTAssertTrue(repo.context.hasChanges)
+        XCTAssertTrue(try repo.decks().contains { $0.id == pending.id })
+        repo.context.rollback()
+        let task = Task { try await repo.importPreparedRowsInBackground(prepared, action: .add, source: "csv", now: now) }
+        task.cancel()
+        do { _ = try await task.value; XCTFail("Expected cancellation") }
+        catch { XCTAssertTrue(error is CancellationError) }
+        XCTAssertTrue(try repo.notes().isEmpty)
+        XCTAssertTrue(try repo.cards().isEmpty)
+        XCTAssertTrue(try repo.tags().isEmpty)
+        XCTAssertTrue(try repo.context.fetch(FetchDescriptor<ImportBatch>()).isEmpty)
+        XCTAssertFalse(repo.importCommitWorking)
     }
 
     func testFailedImportLeavesNoNotesCardsTagsOrBatch() throws {
