@@ -213,7 +213,7 @@ struct DailyCardWidget: Widget {
     }
 }
 @main struct StudyWidgets: WidgetBundle {
-    var body: some Widget { StudyProgressWidget(); DailyCardWidget(); StudyStreakWidget() }
+    var body: some Widget { StudyProgressWidget(); DailyCardWidget(); StudyStreakWidget(); StudySessionActivity() }
 }
 
 #Preview("今日の1枚・Small", as: .systemSmall) {

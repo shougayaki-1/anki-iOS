@@ -93,6 +93,7 @@ struct MainTabs: View {
             }
         }
         .onOpenURL { url in
+            if let id = StudyActivityLink.sessionID(url) { store.openActivitySession(id); return }
             guard let destination = WidgetDestination.parse(url) else { return }
             switch destination {
             case let .card(id, answer):

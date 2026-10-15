@@ -30,6 +30,12 @@ struct SettingsView: View {
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
                 StudySettingsSection(store: store)
+                Section("Live Activity") {
+                    Toggle("学習の進捗を表示", isOn: Binding(get: { store.liveActivityEnabled }, set: { store.setLiveActivityEnabled($0) }))
+                        .accessibilityIdentifier("liveActivityEnabled")
+                    Text("ロック画面とDynamic Islandに現在のセッションを表示します。問題・答え・デッキ名・経過時間は表示しません。表示にはiOS側のLive Activity許可も必要です。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("ウィジェット") {
                     Text("ホーム画面の追加メニューから「暗記ノート」を選べます。全デッキの件数と進捗のみ共有し、問題文・答えは共有しません。更新の頻度や時刻はiOSが制御します。")
                         .font(.footnote)

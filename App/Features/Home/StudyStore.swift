@@ -184,6 +184,33 @@ final class StudyStore {
     @ObservationIgnored private var statisticsGeneration = 0
     @ObservationIgnored private var statisticsRevision = 0
     var notificationPermission = NotificationPermission.unknown
+    @ObservationIgnored private let liveActivities: StudyActivityCoordinator?
+    @ObservationIgnored private var activityForeground = false
+    var liveActivityEnabled = UserDefaults.standard.object(forKey: "study.liveActivity.enabled") as? Bool ?? true
+    func setLiveActivityEnabled(_ enabled: Bool) {
+        liveActivityEnabled = enabled
+        UserDefaults.standard.set(enabled, forKey: "study.liveActivity.enabled")
+        syncLiveActivity(reconcile: true)
+    }
+    func syncLiveActivity(reconcile: Bool = false) {
+        guard let liveActivities else { return }
+        do {
+            let snapshot = try repository.activitySnapshot(now: clock(), foreground: activityForeground)
+            liveActivities.sync(snapshot, enabled: liveActivityEnabled, foreground: activityForeground, reconcile: reconcile)
+        } catch {
+            // A failed display read must not leave stale active progress on screen.
+            liveActivities.sync(nil, enabled: liveActivityEnabled, foreground: activityForeground)
+        }
+    }
+    func openActivitySession(_ id: String) {
+        selectedTab = 0
+        guard (try? repository.activitySessionID()) == id,
+              (try? repository.activitySnapshot(now: clock(), foreground: activityForeground)) != nil else {
+            syncLiveActivity(reconcile: true); return
+        }
+        if !showingReview { resume() }
+        syncLiveActivity(reconcile: true)
+    }
     var widgetFailure: String?
     @ObservationIgnored private let widgetSnapshots: WidgetSnapshotPublisher?
     var notificationFailure: String?
@@ -192,7 +219,8 @@ final class StudyStore {
     let haptics = HapticsService()
     @ObservationIgnored private var notificationJob: Task<Void, Never>?
 
-    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil, widgetSnapshots: WidgetSnapshotPublisher? = nil) throws {
+    init(container: ModelContainer, clock: @escaping () -> Date = Date.init, mediaStore: MediaStore = MediaStore(), storageLocation: StudyStorageLocation = StudyStorageLocation(canonicalStore: StudyStorageLocation.defaultStore), notifications: NotificationService? = nil, widgetSnapshots: WidgetSnapshotPublisher? = nil, liveActivities: StudyActivityCoordinator? = nil) throws {
+        self.liveActivities = liveActivities
         self.widgetSnapshots = widgetSnapshots
         repository = StudyRepository(container: container, mediaStore: mediaStore)
         statisticsReader = StatisticsReader(container: container)
@@ -224,6 +252,7 @@ final class StudyStore {
     private func refreshStudy(metadata: Bool = false, changed: Bool = true, forceWidget: Bool = false) throws {
         // Invalidate even if post-save display reads fail. A successful mutation
         // must never reuse the material from before that mutation.
+        defer { syncLiveActivity() }
         homeCards = nil
         if changed { statisticsRevision += 1 }
         let interval = PerformanceProbe.begin("Store.refreshStudy")
@@ -423,6 +452,8 @@ final class StudyStore {
     }
 
     func sceneChanged(active: Bool) {
+        activityForeground = active
+        defer { syncLiveActivity(reconcile: true) }
         if !active { Task { await libraryReader.clearContents() } }
         if !active {
             let reader = statisticsReader
@@ -463,7 +494,7 @@ final class StudyStore {
     @discardableResult
     func perform(metadata: Bool = true, changed: Bool = true, _ work: () throws -> Void) -> Bool {
         guard flushTypedDraft() else { return false }
-        do { try work() }
+        do { try work(); syncLiveActivity() }
         catch { failure = error.localizedDescription; return false }
         do { try refreshStudy(metadata: metadata, changed: changed); return true }
         catch { homeFailure = error.localizedDescription; failure = "処理は完了しましたが画面を更新できません。再表示してください。\n" + error.localizedDescription; return false }
@@ -551,6 +582,7 @@ final class StudyStore {
         let normalEnd = review?.emptyState?.reason == .complete
         do { try repository.completeSession(now: clock()) }
         catch { failure = error.localizedDescription; return }
+        syncLiveActivity()
         review = nil; showingReview = false; selectedTab = destination
         celebrationRequested = normalEnd && destination == 0
         achievementNotice = nil
@@ -638,6 +670,7 @@ final class StudyStore {
             let previouslyComplete = review?.sessionProgress?.isComplete == true
             do { try repository.grade(grade, now: clock()) }
             catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
+            syncLiveActivity()
             captureGardenGrowth()
             do { try refreshStudy() }
             catch { gardenGrowth.removeAll(); review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
@@ -658,6 +691,7 @@ final class StudyStore {
             achievementNotice = nil
             do { try repository.undo(now: clock()) }
             catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
+            syncLiveActivity()
             gardenGrowth.removeAll()
             do { try refreshStudy() }
             catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
@@ -681,7 +715,8 @@ final class StudyStore {
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
                                            canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable,
                                            emptyState: old.emptyState, sessionProgress: old.sessionProgress,
-                                           visibleAnswerTotal: old.visibleAnswerTotal)
+                                           visibleAnswerTotal: old.visibleAnswerTotal,
+                                           sessionProgressUsesCards: old.sessionProgressUsesCards)
             }
             if revealed == true && !wasRevealed && !swipePrepared { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
@@ -713,7 +748,8 @@ final class StudyStore {
                                    typedDraft: pending.text, answerRevealed: old.answerRevealed,
                                    canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering,
                                    orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState,
-                                   sessionProgress: old.sessionProgress, visibleAnswerTotal: old.visibleAnswerTotal)
+                                   sessionProgress: old.sessionProgress, visibleAnswerTotal: old.visibleAnswerTotal,
+                                   sessionProgressUsesCards: old.sessionProgressUsesCards)
     }
     @discardableResult
     func flushTypedDraft() -> Bool {

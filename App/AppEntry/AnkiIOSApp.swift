@@ -83,7 +83,7 @@ struct AppRootView: View {
         // The commit already happened: do not call load() and potentially repeat migration of the broken store.
         do {
             store = try StudyStore(container: restored, mediaStore: recoveryMediaStore, storageLocation: storageLocation,
-                                   widgetSnapshots: WidgetSnapshotPublisher(file: .shared()))
+                                   widgetSnapshots: WidgetSnapshotPublisher(file: .shared()), liveActivities: .system())
             container = (try? PersistenceController.makeContainer()) ?? restored
             diagnosticOnly = false; failure = nil
             store?.scheduleNotifications()
@@ -143,7 +143,7 @@ struct AppRootView: View {
                 #endif
                 storageLocation = StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore)
                 recoveryMediaStore = mediaStore
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || (ProcessInfo.processInfo.arguments.contains("-study-test-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-daily-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget-empty"))) ? WidgetSnapshotPublisher(file: .shared()) : nil)
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || (ProcessInfo.processInfo.arguments.contains("-study-test-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-daily-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget-empty"))) ? WidgetSnapshotPublisher(file: .shared()) : nil, liveActivities: .system())
                 #if DEBUG
                 if studyURL != nil, args.contains("-study-test-deck-update"), let store,
                    let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {

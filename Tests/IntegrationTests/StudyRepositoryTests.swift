@@ -1211,25 +1211,25 @@ final class StudyRepositoryTests: XCTestCase {
             try repo.start(mode: mode, answerLimit: 20, now: now)
             let first = try XCTUnwrap(repo.presentation(now: now))
             XCTAssertEqual(first.sessionProgress?.limit, 20)
-            XCTAssertEqual(first.visibleAnswerTotal, 1)
+            XCTAssertEqual(first.visibleAnswerTotal, 20)
 
             try revealAndGrade(repo, grade: .again, date: now)
             let waiting = try XCTUnwrap(repo.presentation(now: now))
             XCTAssertNil(waiting.card)
             XCTAssertEqual(waiting.sessionProgress?.answered, 1)
-            XCTAssertEqual(waiting.visibleAnswerTotal, 1)
+            XCTAssertEqual(waiting.visibleAnswerTotal, 20)
             XCTAssertEqual(waiting.emptyState?.reason, .waiting)
 
             let due = try XCTUnwrap(waiting.nextShortDue)
             try repo.resume(now: due)
             let repeated = try XCTUnwrap(repo.presentation(now: due))
             XCTAssertNotNil(repeated.card)
-            XCTAssertEqual(repeated.visibleAnswerTotal, 2)
+            XCTAssertEqual(repeated.visibleAnswerTotal, 20)
             XCTAssertEqual(repeated.sessionProgress?.limit, 20)
             try repo.undo(now: due)
             let undone = try XCTUnwrap(repo.presentation(now: due))
             XCTAssertEqual(undone.sessionProgress?.answered, 0)
-            XCTAssertEqual(undone.visibleAnswerTotal, 1)
+            XCTAssertEqual(undone.visibleAnswerTotal, 20)
         }
     }
 
@@ -1238,14 +1238,21 @@ final class StudyRepositoryTests: XCTestCase {
             let repo = try fixture()
             for _ in 0..<8 { try create(repo) }
             try repo.start(mode: mode, answerLimit: 20, now: now)
-            XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 8)
+            XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 20)
+            let initial = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertFalse(initial.sessionProgressUsesCards)
+            XCTAssertEqual(initial.sessionProgressHeadline, "上限まであと20回答")
+            XCTAssertEqual(initial.sessionProgressLabel, "0回答 / 上限20回答")
             for _ in 0..<8 { try revealAndGrade(repo, grade: .easy, date: now) }
             let finished = try XCTUnwrap(repo.presentation(now: now))
             XCTAssertNil(finished.card)
             XCTAssertEqual(finished.sessionProgress?.answered, 8)
             XCTAssertEqual(finished.sessionProgress?.limit, 20)
-            XCTAssertEqual(finished.visibleAnswerTotal, 8)
+            XCTAssertEqual(finished.visibleAnswerTotal, 20)
             XCTAssertEqual(finished.emptyState?.reason, .complete)
+            XCTAssertEqual(finished.sessionProgressHeadline, "8回答を記録")
+            XCTAssertEqual(finished.sessionProgressLabel, "8回答 / 上限20回答")
+            XCTAssertFalse(finished.sessionProgressAccessibilityValue.contains("残り"))
         }
     }
 
@@ -1272,6 +1279,8 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertNil(finished.card)
         XCTAssertEqual(finished.emptyState?.reason, .complete)
         XCTAssertEqual(try repo.logs().count, 20)
+        XCTAssertEqual(finished.sessionProgressHeadline, "上限の20回答に到達")
+        XCTAssertEqual(finished.emptyState?.title, "上限の20回答に達しました")
         XCTAssertTrue(finished.canUndo)
         try repo.undo(now: now)
         XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.remaining, 1)
@@ -2876,20 +2885,20 @@ extension StudyRepositoryTests {
         options.activeSessionProgress?.answerLimit = 20
         try repo.updateOptions(options)
         let id = try XCTUnwrap(repo.session()?.cardID)
-        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 1)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 20)
         try revealAndGrade(repo, grade: .again, date: now)
-        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 1)
+        XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 20)
         let due = try XCTUnwrap(repo.card(id)?.dueDate)
         try repo.resume(now: due)
         XCTAssertEqual(try repo.session()?.cardID, id)
         XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 1, limit: 20))
-        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 2)
+        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 20)
         try repo.undo(now: due)
-        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 1)
+        XCTAssertEqual(try repo.presentation(now: due)?.visibleAnswerTotal, 20)
         try revealAndGrade(repo, grade: .easy, date: due)
         let finished = try XCTUnwrap(repo.presentation(now: due))
         XCTAssertNil(finished.card)
-        XCTAssertEqual(finished.visibleAnswerTotal, 1)
+        XCTAssertEqual(finished.visibleAnswerTotal, 20)
         XCTAssertEqual(finished.emptyState?.reason, .complete)
     }
 }
@@ -3295,5 +3304,266 @@ extension StudyRepositoryTests {
         let buried = try ForecastScenario.compare(data: siblings, deckID: deck, now: beforeFour, calendar: calendar)
         XCTAssertEqual(buried[0].forecast.days[0].newCards, 6) // One of each pair, not both siblings.
         XCTAssertEqual(try BackupData.capture(repo).canonical(), before) // Includes active session and settings.
+    }
+}
+
+@MainActor private final class RecordingActivityDriver: StudyActivityDriver {
+    var authorized = true
+    var activities: [StudyActivityHandle] = []
+    var states: [StudyActivityState] = []
+    var starts = 0
+    var ends: [String] = []
+    var failStart = false
+    var ignoreUpdate = false
+    var ignoreEnd = false
+    func start(_ snapshot: StudyActivitySnapshot) throws {
+        starts += 1
+        if failStart { throw StudyRepositoryTests.Failure.save }
+        activities.append(StudyActivityHandle(id: UUID().uuidString, sessionID: snapshot.sessionID))
+        states.append(snapshot.state)
+    }
+    func update(_ id: String, state: StudyActivityState) async { if !ignoreUpdate { states.append(state) }; await Task.yield() }
+    func end(_ id: String) async { ends.append(id); if !ignoreEnd { activities.removeAll { $0.id == id } }; await Task.yield() }
+}
+
+extension StudyRepositoryTests {
+    func testLiveActivitySavedAnswersUndoPauseFinishAndFailure() async throws {
+        let repo = try fixture()
+        try create(repo); try create(repo)
+        let driver = RecordingActivityDriver()
+        let coordinator = StudyActivityCoordinator(driver: driver)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now }, liveActivities: coordinator)
+        store.liveActivityEnabled = true
+        store.sceneChanged(active: true)
+        store.start(.new)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.starts, 1)
+        XCTAssertEqual(driver.states.last?.answered, 0)
+        XCTAssertEqual(driver.states.last?.total, store.review?.visibleAnswerTotal)
+        XCTAssertEqual(driver.states.last?.fixedCards, false)
+        store.draft(revealed: true); store.grade(.easy)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.states.last?.answered, 1)
+        store.undo()
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.states.last?.answered, 0)
+        store.draft(revealed: true)
+        store.repository.save = { _ in throw Failure.save }
+        store.grade(.easy)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.states.last?.answered, 0)
+        XCTAssertEqual(try store.repository.sessionProgress()?.answered, 0)
+        store.repository.save = { try $0.save() }
+        store.pause(); await coordinator.waitForSync()
+        XCTAssertEqual(driver.states.last?.paused, true)
+        let total = driver.states.last?.total
+        store.resume(); await coordinator.waitForSync()
+        XCTAssertEqual(driver.states.last?.paused, false)
+        XCTAssertEqual(driver.states.last?.total, total)
+        store.sceneChanged(active: false); await coordinator.waitForSync()
+        XCTAssertEqual(driver.states.last?.paused, true)
+        store.sceneChanged(active: true)
+        for _ in 0..<2 { store.draft(revealed: true); store.grade(.easy) }
+        await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty) // End at completion, before final Undo is discarded.
+        store.undo(); await coordinator.waitForSync()
+        XCTAssertEqual(driver.activities.count, 1)
+        XCTAssertEqual(driver.states.last?.answered, 1)
+        store.draft(revealed: true); store.grade(.easy); store.completeSession()
+        await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty)
+        XCTAssertNil(try store.repository.session())
+    }
+
+    func testLiveActivityFixedSetUnlimitedRelearningAndRelaunchIdentity() throws {
+        let repo = try dueReviewFixture(3)
+        try repo.start(mode: .review, answerLimit: 20, now: now)
+        let initial = try XCTUnwrap(repo.activitySnapshot(now: now, foreground: true))
+        XCTAssertTrue(initial.state.fixedCards)
+        XCTAssertEqual(initial.state.total, 3)
+        XCTAssertEqual(initial.state.progress, "0 / 3枚")
+        let fixedDisplay = try XCTUnwrap(repo.presentation(now: now))
+        XCTAssertTrue(fixedDisplay.sessionProgressUsesCards)
+        XCTAssertEqual(fixedDisplay.sessionProgressHeadline, "残り3枚")
+        XCTAssertEqual(fixedDisplay.sessionProgressLabel, "今回 0 / 3枚")
+        try revealAndGrade(repo, grade: .again, date: now)
+        XCTAssertEqual(try repo.activitySnapshot(now: now, foreground: true)?.state.answered, 1)
+        let reopened = StudyRepository(container: repo.context.container)
+        XCTAssertEqual(try reopened.activitySessionID(), initial.sessionID)
+        try repo.setSessionActive(false, now: now)
+        XCTAssertEqual(try repo.activitySnapshot(now: now, foreground: true)?.state.total, 3)
+        try repo.resume(now: now)
+        XCTAssertEqual(try repo.activitySnapshot(now: now, foreground: true)?.state.total, 3)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.activitySnapshot(now: now, foreground: true)?.state.answered, 0)
+        let fresh = try fixture(); try create(fresh)
+        try fresh.start(mode: .new, answerLimit: 0, now: now)
+        try revealAndGrade(fresh, grade: .again, date: now)
+        let waiting = try XCTUnwrap(fresh.presentation(now: now))
+        let due = try XCTUnwrap(waiting.nextShortDue)
+        try fresh.resume(now: due)
+        try revealAndGrade(fresh, grade: .again, date: due)
+        let repeated = try XCTUnwrap(fresh.activitySnapshot(now: due, foreground: true))
+        XCTAssertNil(repeated.state.total)
+        XCTAssertFalse(repeated.state.fixedCards)
+        XCTAssertEqual(repeated.state.progress, "2回答")
+        let unlimitedDisplay = try XCTUnwrap(fresh.presentation(now: due))
+        XCTAssertEqual(unlimitedDisplay.sessionProgressHeadline, "今回2回答を記録")
+        XCTAssertEqual(unlimitedDisplay.sessionProgressLabel, "2回答")
+        XCTAssertEqual(repeated.state.answered, try fresh.sessionProgress()?.answered)
+    }
+
+    func testLiveActivityDeduplicatesSerializesAndHandlesDisabledUnavailableFailure() async {
+        let driver = RecordingActivityDriver(), id = "persisted-session"
+        driver.activities = [StudyActivityHandle(id: "old", sessionID: "old"),
+                             StudyActivityHandle(id: "keep", sessionID: id),
+                             StudyActivityHandle(id: "duplicate", sessionID: id)]
+        let coordinator = StudyActivityCoordinator(driver: driver)
+        let state = StudyActivityState(mode: "復習", answered: 8, total: 15, fixedCards: true, paused: false)
+        let snapshot = StudyActivitySnapshot(sessionID: id, state: state)
+        coordinator.sync(snapshot, enabled: true, foreground: true, reconcile: true)
+        var paused = state; paused.paused = true
+        coordinator.sync(StudyActivitySnapshot(sessionID: id, state: paused), enabled: true, foreground: false)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.activities.map(\.id), ["keep"])
+        XCTAssertEqual(Set(driver.ends), ["old", "duplicate"])
+        XCTAssertEqual(driver.states.last?.paused, true)
+        XCTAssertEqual(driver.starts, 0)
+        coordinator.sync(snapshot, enabled: false, foreground: true)
+        await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty)
+        driver.authorized = false
+        coordinator.sync(snapshot, enabled: true, foreground: true)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.starts, 0)
+        driver.authorized = true; driver.failStart = true
+        coordinator.sync(snapshot, enabled: true, foreground: true, reconcile: true)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.starts, 1)
+        coordinator.sync(snapshot, enabled: true, foreground: true)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.starts, 1) // No automatic retry loop.
+        driver.failStart = false
+        coordinator.sync(snapshot, enabled: true, foreground: false)
+        await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty) // Starting requires foreground.
+        coordinator.sync(snapshot, enabled: true, foreground: true, reconcile: true)
+        await coordinator.waitForSync()
+        XCTAssertEqual(driver.activities.count, 1)
+        coordinator.sync(nil, enabled: true, foreground: true)
+        await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty)
+    }
+
+    func testLiveActivityOldDeepLinkNeverStartsOrReplacesSession() throws {
+        let repo = try fixture(); try create(repo); try create(repo)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now })
+        store.start(.new)
+        let id = try XCTUnwrap(store.repository.activitySessionID())
+        XCTAssertEqual(StudyActivityLink.sessionID(StudyActivityLink.url(sessionID: id)), id)
+        store.pause(); store.openActivitySession(id)
+        XCTAssertTrue(store.showingReview)
+        XCTAssertEqual(try store.repository.activitySessionID(), id)
+        let activeSince = try store.repository.session()?.activeSince
+        store.clock = { self.now.addingTimeInterval(10) }
+        store.openActivitySession(id)
+        XCTAssertEqual(try store.repository.session()?.activeSince, activeSince)
+        store.clock = { self.now }
+        store.pause(); store.openActivitySession("expired-session")
+        XCTAssertFalse(store.showingReview)
+        XCTAssertEqual(try store.repository.activitySessionID(), id)
+        store.resume()
+        for _ in 0..<2 { store.draft(revealed: true); store.grade(.easy) }
+        store.pause(); store.openActivitySession(id)
+        XCTAssertFalse(store.showingReview) // Completed draft may retain Undo, but old links stay home.
+        store.completeSession(); store.openActivitySession(id)
+        XCTAssertNil(try store.repository.session())
+        XCTAssertFalse(store.showingReview)
+    }
+}
+
+
+extension StudyRepositoryTests {
+    func testLiveActivitySystemFailureAndPreferenceNeverBlockLearning() async throws {
+        let key = "study.liveActivity.enabled", previous = UserDefaults.standard.object(forKey: "study.liveActivity.enabled")
+        defer { UserDefaults.standard.set(previous, forKey: key) }
+        let repo = try fixture(); for _ in 0..<3 { try create(repo) }
+        let driver = RecordingActivityDriver()
+        driver.failStart = true
+        let coordinator = StudyActivityCoordinator(driver: driver)
+        let store = try StudyStore(container: repo.context.container, clock: { self.now }, liveActivities: coordinator)
+        store.liveActivityEnabled = true; store.sceneChanged(active: true); store.start(.new)
+        await coordinator.waitForSync()
+        XCTAssertTrue(store.showingReview)
+        XCTAssertNil(store.failure)
+        store.draft(revealed: true); store.grade(.easy)
+        await coordinator.waitForSync()
+        XCTAssertEqual(try store.repository.sessionProgress()?.answered, 1)
+        XCTAssertNil(store.failure)
+        driver.failStart = false
+        store.syncLiveActivity(reconcile: true); await coordinator.waitForSync()
+        XCTAssertEqual(driver.activities.count, 1)
+        driver.ignoreUpdate = true
+        store.draft(revealed: true); store.grade(.easy)
+        await coordinator.waitForSync()
+        XCTAssertEqual(try store.repository.sessionProgress()?.answered, 2)
+        XCTAssertNil(store.failure)
+        driver.ignoreEnd = true
+        store.setLiveActivityEnabled(false); await coordinator.waitForSync()
+        let starts = driver.starts
+        // A stale activity that refuses to disappear must prevent a replacement.
+        let other = StudyActivitySnapshot(sessionID: "replacement", state: driver.states.last!)
+        coordinator.sync(other, enabled: true, foreground: true); await coordinator.waitForSync()
+        XCTAssertEqual(driver.starts, starts)
+        driver.ignoreEnd = false
+        store.setLiveActivityEnabled(false); await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty)
+        store.draft(revealed: true); store.grade(.easy)
+        await coordinator.waitForSync()
+        XCTAssertTrue(driver.activities.isEmpty)
+        XCTAssertEqual(try store.repository.sessionProgress()?.answered, 3)
+        XCTAssertNil(store.failure)
+    }
+}
+
+
+extension StudyRepositoryTests {
+    func testTypedDraftPreservesFixedCardAndAnswerLimitProgressClassification() throws {
+        for mode in [StudyMode.review, .new] {
+            let repo = try mode == .review ? dueReviewFixture(5) : fixture()
+            if mode == .new { for _ in 0..<5 { try create(repo, mode: .typing) } }
+            let store = try StudyStore(container: repo.context.container, clock: { self.now })
+            store.start(mode)
+            store.draft(mode: .typing)
+            let sessionID = try XCTUnwrap(store.repository.activitySessionID())
+            let fixed = mode == .review
+            func assertProgress(file: StaticString = #filePath, line: UInt = #line) {
+                XCTAssertEqual(store.review?.sessionProgressUsesCards, fixed, file: file, line: line)
+                XCTAssertEqual(store.review?.sessionProgressHeadline, fixed ? "残り5枚" : "上限まであと20回答", file: file, line: line)
+                XCTAssertEqual(store.review?.sessionProgressLabel, fixed ? "今回 0 / 5枚" : "0回答 / 上限20回答", file: file, line: line)
+            }
+            assertProgress()
+            store.draft(text: "あ") // Immediate buffer -> applyPendingTypedDraft reconstruction.
+            XCTAssertEqual(store.review?.typedDraft, "あ")
+            assertProgress()
+            try store.reload() // Pending input is reapplied to a fresh presentation.
+            assertProgress()
+            store.repository.save = { _ in throw Failure.save }
+            XCTAssertFalse(store.flushTypedDraft()) // Failed save also reapplies the buffer.
+            XCTAssertEqual(store.review?.typedDraft, "あ")
+            assertProgress()
+            store.repository.save = { try $0.save() }
+            XCTAssertTrue(store.flushTypedDraft())
+            XCTAssertEqual(try store.repository.session()?.typedDraft, "あ")
+            assertProgress()
+            store.draft() // The separate draft(...) presentation reconstruction.
+            assertProgress()
+            store.pause(); store.resume()
+            XCTAssertEqual(store.review?.typedDraft, "あ")
+            assertProgress()
+            XCTAssertEqual(try store.repository.activitySessionID(), sessionID)
+            XCTAssertEqual(try store.repository.sessionProgress()?.answered, 0)
+            XCTAssertTrue(try store.repository.logs().isEmpty)
+        }
     }
 }

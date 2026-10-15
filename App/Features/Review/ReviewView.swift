@@ -186,15 +186,12 @@ struct ReviewView: View {
                     let total = review.visibleAnswerTotal ?? progress.limit
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .firstTextBaseline) {
-                            Text(progress.limit == 0 ? "今回回答済み \(progress.answered)問" :
-                                 progress.isComplete ? "今回の\(progress.limit)問を完了" :
-                                 review.card == nil ? "回答済み \(progress.answered)問" :
-                                 "残り\(max(0, total - progress.answered))問")
+                            Text(review.sessionProgressHeadline)
                                 .font(.headline)
                                 .accessibilityIdentifier("remainingQuestions")
                             Spacer(minLength: 8)
                             if progress.limit > 0 {
-                                Text("今回 \(progress.answered) / \(total)問")
+                                Text(review.sessionProgressLabel)
                                     .font(.subheadline).foregroundStyle(.secondary)
                                     .accessibilityIdentifier("sessionProgress")
                             }
@@ -203,7 +200,7 @@ struct ReviewView: View {
                             ProgressView(value: Double(min(progress.answered, total)), total: Double(total))
                                 .accessibilityIdentifier("sessionProgressBar")
                                 .accessibilityLabel("今回の学習進捗")
-                                .accessibilityValue("\(progress.answered)問回答済み、現時点の出題分は残り\(max(0, total - progress.answered))問")
+                                .accessibilityValue(review.sessionProgressAccessibilityValue)
                         }
                     }
                     .padding(.horizontal, 24).padding(.vertical, 12)
