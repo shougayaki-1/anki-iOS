@@ -2709,6 +2709,50 @@ extension StudyRepositoryTests {
         return repo
     }
 
+    func testPreferredCardOutsideReviewCapBelongsToFixedSetThroughUndoAndResume() throws {
+        // Distinct due dates make the ordinary queue deterministic; the requested
+        // widget/deep-link card is outside both the 3-card and default 20-card caps.
+        let repo = try dueReviewFixture(25)
+        let ordered = try repo.cards().sorted { $0.dueDate < $1.dueDate }.map(\.id)
+        let target = try XCTUnwrap(ordered.last)
+        XCTAssertFalse(ordered.prefix(20).contains(target))
+        try repo.start(mode: .review, answerLimit: 3, preferredCardID: target, now: now)
+        let saved = try XCTUnwrap(repo.options().activeSessionProgress)
+        let expected = [target] + Array(ordered.prefix(2))
+        XCTAssertEqual(saved.reviewOrder, expected)
+        XCTAssertEqual(saved.reviewOrder?.filter { $0 == target }.count, 1)
+        XCTAssertEqual(saved.reviewOrder?.count, 3)
+        XCTAssertEqual(saved.answerLimit, 3)
+        XCTAssertEqual(saved.reviewSetLimit, 3)
+        XCTAssertEqual(saved.initialEligibleCount, 25)
+        XCTAssertEqual(try repo.session()?.cardID, target)
+        XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 0, limit: 3))
+        try repo.setSessionActive(false, now: now)
+        try repo.resume(now: now)
+        XCTAssertEqual(try repo.session()?.cardID, target)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrder, expected)
+        for (index, id) in expected.enumerated() {
+            XCTAssertEqual(try repo.session()?.cardID, id)
+            XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 3)
+            try revealAndGrade(repo, grade: .good, date: now)
+            XCTAssertEqual(try repo.sessionProgress()?.answered, index + 1)
+        }
+        XCTAssertNil(try repo.session()?.cardID)
+        XCTAssertEqual(try repo.logs().map(\.cardID), expected)
+        XCTAssertEqual(try repo.presentation(now: now)?.emptyState?.reason, .complete)
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.session()?.cardID, expected.last)
+        XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 2, limit: 3))
+        try repo.setSessionActive(false, now: now)
+        try repo.resume(now: now)
+        XCTAssertEqual(try repo.options().activeSessionProgress?.reviewOrder, expected)
+        XCTAssertEqual(try repo.session()?.cardID, expected.last)
+        try revealAndGrade(repo, grade: .good, date: now)
+        XCTAssertEqual(try repo.sessionProgress(), SessionAnswerProgress(answered: 3, limit: 3))
+        XCTAssertNil(try repo.session()?.cardID)
+        XCTAssertEqual(try repo.logs().map(\.cardID), expected)
+    }
+
     func testFixedReviewSetCountsAndCapsForBothPolicies() throws {
         for count in [0, 1, 5, 20, 200] {
             let repo = try dueReviewFixture(count)

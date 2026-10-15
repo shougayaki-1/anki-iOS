@@ -162,11 +162,83 @@ final class WidgetSnapshotTests: XCTestCase {
         let snapshot = try XCTUnwrap(file.read())
         XCTAssertEqual(snapshot.dailyGoal, 50); XCTAssertEqual(snapshot.points.first?.newAvailable, 1)
         XCTAssertGreaterThan(reloads, 0); XCTAssertEqual(try BackupData.capture(store.repository), before)
-        XCTAssertFalse(String(decoding: try Data(contentsOf: file.url!), as: UTF8.self).contains("Private secret"))
+        XCTAssertEqual(snapshot.dailyCard?.question, "Private secret")
+        XCTAssertFalse(String(decoding: try Data(contentsOf: file.url!), as: UTF8.self).contains("Never shared"))
         let failed = try StudyStore(container: PersistenceController.makeStudyContainer(inMemory: true), widgetSnapshots: WidgetSnapshotPublisher(file: WidgetSnapshotFile(url: nil)))
         XCTAssertNotNil(failed.widgetFailure)
         XCTAssertTrue(failed.perform { try failed.repository.createNote(NoteInput(deckID: failed.repository.decks()[0].id, question: "Q", answer: "A"), now: now) })
         XCTAssertEqual(try failed.repository.notes().count, 1)
         XCTAssertTrue(try failed.repository.logs().isEmpty)
     }
+    @MainActor func testDailyCardSelectionPreviewAndTargetedReviewPreserveData() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date()
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Question", answer: "Answer"), now: now)
+        try repo.createNote(NoteInput(deckID: deck, question: "Other", answer: "Other answer"), now: now)
+        let cards = try repo.queueCards(), settings = try repo.settings()
+        let before = try BackupData.capture(repo)
+        let value = try XCTUnwrap(repo.dailyWidgetCard(cards: cards, logs: [], settings: settings, now: now))
+        XCTAssertEqual(try repo.dailyWidgetCard(cards: Array(cards.reversed()), logs: [], settings: settings, now: now), value)
+        XCTAssertNotNil(try repo.widgetCard(value.id, now: now)?.content.answer)
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        XCTAssertEqual(WidgetDestination.parse(value.url()), .card(value.id, answer: false))
+        XCTAssertEqual(WidgetDestination.parse(value.url(answer: true)), .card(value.id, answer: true))
+        XCTAssertNil(WidgetDestination.parse(URL(string: "ankistudy://widget/card/not-a-uuid")!))
+        // Choose the second candidate explicitly: normal queue must open that exact ID.
+        let target = try XCTUnwrap(repo.dailyWidgetIDs(cards: cards, logs: [], settings: settings, now: now).last)
+        try repo.startWidgetCard(target, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.card?.cardID, target)
+        XCTAssertFalse(try XCTUnwrap(repo.presentation(now: now)).answerRevealed)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        let started = try BackupData.capture(repo)
+        XCTAssertThrowsError(try repo.startWidgetCard(value.id, now: now))
+        XCTAssertEqual(try BackupData.capture(repo), started)
+        try repo.updateDraft(revealed: true, now: now)
+        try repo.grade(.good, now: now)
+        XCTAssertEqual(try repo.logs().count, 1)
+        try repo.undo(now: now)
+        XCTAssertTrue(try repo.logs().isEmpty)
+        for card in cards {
+            XCTAssertEqual(try repo.card(card.id)?.dueDate, card.due)
+        }
+    }
+    @MainActor func testDailyCardStartSaveFailureRollsBack() throws {
+        enum Failure: Error { case save }
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date()
+        try repo.initialize(now: now)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        let id = try XCTUnwrap(repo.cards().first?.id)
+        let before = try BackupData.capture(repo)
+        repo.save = { _ in throw Failure.save }
+        XCTAssertThrowsError(try repo.startWidgetCard(id, now: now))
+        XCTAssertNil(try repo.session())
+        XCTAssertEqual(try BackupData.capture(repo), before)
+    }
+    @MainActor func testDailyCardRespectsQueueFiltersAndScope() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        let now = Date()
+        try repo.initialize(now: now)
+        let deck = try repo.decks()[0].id
+        let other = try repo.createDeck(name: "Other", now: now)
+        try repo.createNote(NoteInput(deckID: deck, question: "Q", answer: "A"), now: now)
+        try repo.createNote(NoteInput(deckID: other, question: "Other", answer: "A"), now: now)
+        try repo.applyHomeScope(LearningScope(deckID: deck))
+        let settings = try repo.settings(), cards = try repo.queueCards()
+        let id = try XCTUnwrap(repo.dailyWidgetCard(cards: cards, logs: [], settings: settings, now: now)?.id)
+        let blocked = cards.map { value -> QueueCard in
+            var value = value
+            if value.id == id { value.studyPaused = true }
+            return value
+        }
+        XCTAssertNil(try repo.dailyWidgetCard(cards: blocked, logs: [], settings: settings, now: now))
+        let due = cards.map { value -> QueueCard in
+            QueueCard(id: value.id, state: value.id == id ? "review" : "new", due: now.addingTimeInterval(-60), createdAt: value.createdAt, suspended: false, noteID: value.noteID)
+        }
+        XCTAssertEqual(try repo.dailyWidgetIDs(cards: due, logs: [], settings: settings, now: now).first, id)
+        XCTAssertNil(try repo.widgetCard(UUID(), now: now))
+    }
+
 }

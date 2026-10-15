@@ -58,6 +58,8 @@ enum WidgetProjection {
         let goal: Int?
         let calendar: Calendar
         let settings: WidgetProjectionSettings
+        let revision: Int
+        let scope: LearningScope
         let cards: [UUID: QueueCard]
         let logs: [QueueLog]
     }
@@ -73,7 +75,7 @@ enum WidgetProjection {
     #if DEBUG
     private(set) var projectionCount = 0
     #endif
-    init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind) }) {
+    init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind); WidgetCenter.shared.reloadTimelines(ofKind: "DailyCardWidget") }) {
         self.file = file; self.reload = reload
     }
     func publish(repository: StudyRepository, snapshot: HomeSnapshot, settings: StudySettings, now: Date,
@@ -86,7 +88,7 @@ enum WidgetProjection {
             let cardMap = Dictionary(cards.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
             let key = Key(counts: snapshot.globalCounts, next: snapshot.nextRefresh, start: snapshot.dayStart,
                           zone: calendar.timeZone.identifier, goal: settings.dailyGoal, calendar: calendar,
-                          settings: projected, cards: cardMap,
+                          settings: projected, revision: repository.mutationRevision, scope: try repository.homeScope(), cards: cardMap,
                           logs: logs.sorted {
                               if $0.cardID != $1.cardID { return $0.cardID.uuidString < $1.cardID.uuidString }
                               if $0.reviewedAt != $1.reviewedAt { return $0.reviewedAt < $1.reviewedAt }
@@ -101,6 +103,7 @@ enum WidgetProjection {
                     completions.append(completion); return
                 }
             }
+            let dailyCard = try repository.dailyWidgetCard(cards: cards, logs: logs, settings: settings, now: now)
             job?.cancel(); generation += 1
             let generation = generation
             inFlight = cacheable ? key : nil; inFlightAt = now
@@ -113,11 +116,13 @@ enum WidgetProjection {
                     try WidgetProjection.make(cards: cards, logs: logs, settings: projected, now: now, calendar: calendar)
                 }
                 do {
-                    let value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                    var value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
                     guard let self, !Task.isCancelled, self.generation == generation else { return }
+                    value.dailyCard = dailyCard
+                    value.dailyCardExpiresAt = min(value.expiresAt, snapshot.nextRefresh, StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now).end)
                     try self.file.write(value)
                     self.previous = cacheable ? key : nil
-                    self.previousInterval = DateInterval(start: value.generatedAt, end: value.expiresAt)
+                    self.previousInterval = DateInterval(start: value.generatedAt, end: value.dailyCardExpiresAt ?? value.expiresAt)
                     self.inFlight = nil; self.inFlightAt = nil
                     let callbacks = self.completions; self.completions = []
                     self.reload(); callbacks.forEach { $0(nil) }
@@ -135,5 +140,36 @@ enum WidgetProjection {
             previous = nil; previousInterval = nil
             completion(WidgetSnapshotFailure.unavailable.localizedDescription)
         }
+    }
+}
+
+
+extension StudyRepository {
+    // Same scope, quotas, bury rules and due ordering as the normal queue;
+    // UUID tie order replaces shuffle so redraws never choose a random card.
+    func dailyWidgetIDs(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, now: Date) throws -> [UUID] {
+        let eligible = try scopedQueueCards(homeScope(), cards: cards)
+        let builder = ReviewQueueBuilder(calendar: calendar, shuffled: { $0.sorted { $0.id.uuidString < $1.id.uuidString } })
+        let due = builder.queue(cards: eligible, logs: logs, settings: settings, mode: .review, touched: [], reviewStreak: 0, now: now)
+        return due.isEmpty ? builder.queue(cards: eligible, logs: logs, settings: settings, mode: .new, touched: [], reviewStreak: 0, now: now) : due
+    }
+    func dailyWidgetCard(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, now: Date) throws -> DailyWidgetCard? {
+        guard let id = try dailyWidgetIDs(cards: cards, logs: logs, settings: settings, now: now).first,
+              let item = try noteItems(cardID: id).first else { return nil }
+        let image = item.kind == .imageOcclusion || item.content.imageID != nil
+        return DailyWidgetCard(id: id, deck: String(item.deckName.prefix(120)),
+                               question: image ? "画像の問題を思い出そう" : String(item.content.question.prefix(500)), requiresApp: image)
+    }
+    func widgetCard(_ id: UUID, now: Date) throws -> NoteItem? {
+        let cards = try queueCards(), settings = try settings()
+        let logs = try todayQueueLogs(cards: cards, settings: settings, now: now)
+        guard try dailyWidgetIDs(cards: cards, logs: logs, settings: settings, now: now).contains(id) else { return nil }
+        return try noteItems(cardID: id).first
+    }
+    func startWidgetCard(_ id: UUID, now: Date) throws {
+        // Never replace an interrupted session or its Undo history from a widget.
+        guard try session() == nil else { throw CustomStudyError.sessionActive }
+        guard let item = try widgetCard(id, now: now) else { throw StudyError.noAvailableCards }
+        try start(mode: item.summary.state == "new" ? .new : .review, scope: homeScope(), responseMode: .cardDefault, preferredCardID: id, now: now)
     }
 }

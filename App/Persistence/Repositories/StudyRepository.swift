@@ -633,7 +633,7 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, preferredCardID: UUID? = nil, now: Date) throws {
         let interval = PerformanceProbe.begin("Repository.start")
         defer { PerformanceProbe.end(interval) }
         try transaction {
@@ -656,7 +656,7 @@ final class StudyRepository {
                     guard value.isFinite, (0...1).contains(value) else { self.reviewRankingFailureCount += 1; return nil }
                     return value
                 })
-            let available: [UUID]
+            var available: [UUID]
             if let customStudy {
                 guard customStudy.official, mode == .review else { throw StudyError.invalidContent }
                 let existing = try session(), existingCustom = try options().activeSessionProgress?.customStudy
@@ -667,6 +667,15 @@ final class StudyRepository {
             guard !available.isEmpty else {
                 if selectedResponse == .ordering { throw StudyError.noOrderingCards }
                 throw StudyError.noAvailableCards
+            }
+            if let preferredCardID {
+                guard available.contains(preferredCardID) else { throw StudyError.noAvailableCards }
+                // The first displayed card must also belong to the frozen review
+                // set. Keep its cap and all other candidates' relative order.
+                if mode == .review {
+                    available.removeAll { $0 == preferredCardID }
+                    available.insert(preferredCardID, at: 0)
+                }
             }
             if let existing = try session() { context.delete(existing) }
             try setScopeInTransaction(normalized)
@@ -685,7 +694,7 @@ final class StudyRepository {
             } else { context.insert(try ExtraPreferences(options: saved)) }
             // The validated queue already uses the new session's scope, mode,
             // response and timestamp. No card/log mutation occurred in between.
-            try selectCard(available.first, draft: draft, now: now)
+            try selectCard(preferredCardID ?? available.first, draft: draft, now: now)
         }
     }
     func startAnotherSession(now: Date) throws {
