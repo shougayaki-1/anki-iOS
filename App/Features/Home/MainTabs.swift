@@ -8,6 +8,7 @@ struct MainTabs: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var shortcutNavigation = ShortcutNavigation.shared
     @State private var shortcutDeck: ShortcutDeckDestination?
+    @State private var widgetCard: WidgetCardRoute?
     @State private var shortcutNotice: String?
 
     @State private var celebrationDestination: CelebrationAction?
@@ -93,12 +94,18 @@ struct MainTabs: View {
         .onOpenURL { url in
             guard let destination = WidgetDestination.parse(url) else { return }
             switch destination {
+            case let .card(id, answer):
+                guard !store.showingReview else { return }
+                widgetCard = WidgetCardRoute(id: id, answer: answer)
             case .home:
                 if store.showingReview { store.pause(); guard !store.showingReview else { return } }
                 store.selectedTab = 0; store.refreshHome()
             case .review: shortcutNavigation.submit(.study(.review))
             case .progress: shortcutNavigation.submit(.progress)
             }
+        }
+        .sheet(item: $widgetCard) { route in
+            WidgetCardPreview(store: store, route: route) { widgetCard = nil }
         }
         .fullScreenCover(isPresented: $store.showingReview, onDismiss: {
             if scenePhase == .active, store.celebrationRequested { store.presentCelebration() }
@@ -700,5 +707,69 @@ struct NoteSaveNoticeView: View {
                     clear()
                 } catch { } // A replaced notice cancels its old expiry task.
             }
+    }
+}
+
+
+private struct WidgetCardRoute: Identifiable, Equatable {
+    let id: UUID
+    let answer: Bool
+}
+private struct WidgetCardPreview: View {
+    @Bindable var store: StudyStore
+    let route: WidgetCardRoute
+    let close: () -> Void
+    @State private var item: NoteItem?
+    @State private var revealed = false
+    @State private var notice: String?
+    @State private var startStudy = false
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    if let item {
+                        Text(item.deckName).font(.subheadline).foregroundStyle(.secondary)
+                        Text(item.kind == .imageOcclusion ? "画像の問題は学習画面で確認できます" : item.content.question).font(.title2.bold())
+                        if item.kind != .imageOcclusion {
+                            Button(revealed ? "答えを隠す" : "答えを見る") { revealed.toggle() }
+                                .buttonStyle(SecondaryActionStyle())
+                            if revealed {
+                                Text(item.content.answer).font(.title3).textSelection(.enabled)
+                                Text("思い出すきっかけになりましたね").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Text("学習記録は、学習画面で評価したときに保存されます。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else { Text(notice ?? "カードを確認中…").foregroundStyle(.secondary) }
+                    if item != nil, let notice { Text(notice).foregroundStyle(.secondary) }
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(24)
+            }
+            .safeAreaInset(edge: .bottom) {
+                if item != nil {
+                    BottomActionArea {
+                        Button("このカードを正式に復習") {
+                            do {
+                                try store.repository.startWidgetCard(route.id, now: Date())
+                                store.refreshHome()
+                                startStudy = true
+                                close()
+                            } catch { notice = error.localizedDescription }
+                        }.buttonStyle(PrimaryActionStyle())
+                    }
+                }
+            }
+            .navigationTitle("今日の1枚").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("閉じる", action: close) } }
+            .task(id: route) {
+                do {
+                    item = try store.repository.widgetCard(route.id, now: Date())
+                    revealed = route.answer
+                    if item == nil { notice = "このカードは今の学習対象ではありません。ホームで最新のカードを確認してください。" }
+                } catch { notice = error.localizedDescription }
+            }
+        }
+        .onDisappear {
+            if startStudy { store.resume() }
+        }
     }
 }

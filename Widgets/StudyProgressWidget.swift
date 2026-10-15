@@ -77,11 +77,103 @@ struct StudyWidgetView: View {
         .accessibilityElement(children: .contain)
     }
 }
-@main struct StudyProgressWidget: Widget {
+struct StudyProgressWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: WidgetSnapshot.kind, provider: StudyWidgetProvider()) { StudyWidgetView(entry: $0) }
             .configurationDisplayName("復習と今日の進捗")
             .description("全デッキの保存済み復習予定と進捗を確認できます。問題文・答えは表示しません。更新はOSが制御します。")
             .supportedFamilies([.systemSmall, .systemMedium])
     }
+}
+
+struct DailyCardEntry: TimelineEntry {
+    let date: Date
+    let card: DailyWidgetCard?
+    let available: Bool
+}
+struct DailyCardProvider: TimelineProvider {
+    func placeholder(in context: Context) -> DailyCardEntry {
+        DailyCardEntry(date: Date(), card: DailyWidgetCard(id: UUID(), deck: "英語", question: "思い出してみよう", requiresApp: false), available: true)
+    }
+    func getSnapshot(in context: Context, completion: @escaping (DailyCardEntry) -> Void) {
+        completion(context.isPreview ? placeholder(in: context) : entry(at: Date()))
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<DailyCardEntry>) -> Void) {
+        let now = Date(), snapshot = WidgetSnapshotFile.shared().read()
+        let expiry = snapshot?.dailyCardExpiresAt ?? now.addingTimeInterval(3600)
+        completion(Timeline(entries: [entry(at: now), DailyCardEntry(date: max(expiry, now.addingTimeInterval(1)), card: nil, available: false)], policy: .after(max(expiry, now.addingTimeInterval(3600)))))
+    }
+    private func entry(at date: Date) -> DailyCardEntry {
+        let snapshot = WidgetSnapshotFile.shared().read()
+        let fresh = snapshot?.point(at: date) != nil && snapshot?.dailyCardExpiresAt.map { date < $0 } == true
+        return DailyCardEntry(date: date, card: fresh ? snapshot?.dailyCard : nil, available: fresh)
+    }
+}
+struct DailyCardView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: DailyCardEntry
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("今日の1枚").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                if family == .systemMedium, let card = entry.card {
+                    Spacer(minLength: 8)
+                    Text(card.deck).font(.caption2).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
+                }
+            }
+            if let card = entry.card {
+                if family != .systemMedium {
+                    Text(card.deck).font(.caption2).foregroundStyle(.secondary).lineLimit(1).privacySensitive()
+                }
+                Text(card.question).font(.system(family == .systemSmall ? .title3 : .title2, design: .rounded).weight(.semibold))
+                    .lineLimit(family == .systemSmall ? 3 : 2).minimumScaleFactor(0.85)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).privacySensitive()
+                if family == .systemMedium {
+                    HStack {
+                        Text("このカード、わかる？").font(.caption).foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Link(destination: card.url(answer: !card.requiresApp)) {
+                            Text(card.requiresApp ? "アプリで問題を見る" : "アプリで答えを見る")
+                                .font(.caption.bold()).frame(minHeight: 32)
+                        }.buttonStyle(.borderedProminent).tint(Color("PrimaryAction"))
+                    }
+                } else {
+                    Text("このカード、わかる？").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                Spacer(minLength: 0)
+                Label(entry.available ? "今の学習はひと区切り" : "アプリを開いて更新", systemImage: entry.available ? "checkmark.circle" : "rectangle.on.rectangle")
+                    .font(.headline)
+                Text(entry.available ? "次のカードはアプリで確認" : "今日のカードを用意しよう").font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        }
+        .containerBackground(for: .widget) { Color(.systemBackground) }
+        .widgetURL(entry.card?.url() ?? URL(string: "ankistudy://widget/home")!)
+    }
+}
+struct DailyCardWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "DailyCardWidget", provider: DailyCardProvider()) { DailyCardView(entry: $0) }
+            .configurationDisplayName("今日の1枚")
+            .description("問題を見て、頭の中で回答。答えはアプリで確認できます。閲覧だけでは学習記録は変わりません。")
+            .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+@main struct StudyWidgets: WidgetBundle {
+    var body: some Widget { StudyProgressWidget(); DailyCardWidget() }
+}
+
+#Preview("今日の1枚・Small", as: .systemSmall) {
+    DailyCardWidget()
+} timeline: {
+    DailyCardEntry(date: Date(), card: DailyWidgetCard(id: UUID(), deck: "英語 / 日常", question: "What does recall mean?", requiresApp: false), available: true)
+}
+#Preview("今日の1枚・Medium", as: .systemMedium) {
+    DailyCardWidget()
+} timeline: {
+    DailyCardEntry(date: Date(), card: DailyWidgetCard(id: UUID(), deck: "日本史", question: "江戸幕府を開いた人物は？", requiresApp: false), available: true)
+    DailyCardEntry(date: Date(), card: DailyWidgetCard(id: UUID(), deck: "長文のデッキ", question: String(repeating: "長い問題文の読みやすさを確認します。", count: 10), requiresApp: false), available: true)
+    DailyCardEntry(date: Date(), card: nil, available: true)
+    DailyCardEntry(date: Date(), card: nil, available: false)
 }

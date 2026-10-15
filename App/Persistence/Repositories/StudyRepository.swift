@@ -633,7 +633,7 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
-    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, now: Date) throws {
+    func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, preferredCardID: UUID? = nil, now: Date) throws {
         let interval = PerformanceProbe.begin("Repository.start")
         defer { PerformanceProbe.end(interval) }
         try transaction {
@@ -668,6 +668,7 @@ final class StudyRepository {
                 if selectedResponse == .ordering { throw StudyError.noOrderingCards }
                 throw StudyError.noAvailableCards
             }
+            if let preferredCardID, !available.contains(preferredCardID) { throw StudyError.noAvailableCards }
             if let existing = try session() { context.delete(existing) }
             try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
@@ -685,7 +686,7 @@ final class StudyRepository {
             } else { context.insert(try ExtraPreferences(options: saved)) }
             // The validated queue already uses the new session's scope, mode,
             // response and timestamp. No card/log mutation occurred in between.
-            try selectCard(available.first, draft: draft, now: now)
+            try selectCard(preferredCardID ?? available.first, draft: draft, now: now)
         }
     }
     func startAnotherSession(now: Date) throws {

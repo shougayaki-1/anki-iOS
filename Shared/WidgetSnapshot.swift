@@ -17,6 +17,8 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
     let dayStartHour: Int
     let dailyGoal: Int?
     let points: [WidgetPoint]
+    var dailyCard: DailyWidgetCard? = nil
+    var dailyCardExpiresAt: Date? = nil
 
     func valid() -> Bool {
         guard schemaVersion == 1, generatedAt.timeIntervalSince1970.isFinite, expiresAt.timeIntervalSince1970.isFinite,
@@ -24,6 +26,12 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
               TimeZone(identifier: timeZone) != nil, (0...23).contains(dayStartHour),
               dailyGoal == nil || (1...100_000).contains(dailyGoal!), !points.isEmpty, points.count <= 128,
               points.first?.date == generatedAt else { return false }
+        if let dailyCard {
+            guard dailyCard.question.count <= 500, dailyCard.deck.count <= 120 else { return false }
+        }
+        if let expiry = dailyCardExpiresAt {
+            guard expiry > generatedAt, expiry <= expiresAt else { return false }
+        }
         var previous: Date?
         for point in points {
             guard point.date.timeIntervalSince1970.isFinite, point.date >= generatedAt, point.date < expiresAt,
@@ -68,6 +76,7 @@ enum WidgetSnapshotFailure: LocalizedError {
 
 enum WidgetDestination: Equatable {
     case home, review, progress
+    case card(UUID, answer: Bool)
     static func parse(_ url: URL) -> Self? {
         guard let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
               parts.scheme == "ankistudy", parts.host == "widget", parts.query == nil,
@@ -76,7 +85,22 @@ enum WidgetDestination: Equatable {
         case "/home": return .home
         case "/review": return .review
         case "/progress": return .progress
-        default: return nil
+        default:
+            let path = parts.path.split(separator: "/")
+            guard (path.count == 2 || path.count == 3), path[0] == "card",
+                  let id = UUID(uuidString: String(path[1])), path.count == 2 || path[2] == "answer" else { return nil }
+            return .card(id, answer: path.count == 3)
         }
+    }
+}
+
+// Question-only projection. Answers never leave the application database.
+struct DailyWidgetCard: Codable, Equatable, Sendable {
+    let id: UUID
+    let deck: String
+    let question: String
+    let requiresApp: Bool
+    func url(answer: Bool = false) -> URL {
+        URL(string: "ankistudy://widget/card/\(id.uuidString)\(answer ? "/answer" : "")")!
     }
 }
