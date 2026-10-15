@@ -80,6 +80,8 @@ final class BackupRepositoryTests: XCTestCase {
             actual.media[index].relativePath = expected.media[index].relativePath
         }
         XCTAssertEqual(actual, expected)
+        XCTAssertEqual(try reopened.widgetStreakDays(now: now, settings: reopened.settings()),
+                       try source.widgetStreakDays(now: now, settings: source.settings()))
         XCTAssertEqual(try reopened.homeScope(), try source.homeScope())
         XCTAssertEqual(try reopened.scope(), try source.scope())
         XCTAssertEqual(try reopened.settings().hapticsMode, .rich)

@@ -3,6 +3,64 @@ import SwiftData
 @testable import AnkiIOS
 
 final class WidgetSnapshotTests: XCTestCase {
+    @MainActor func testStreakProjectionSavedRatingsUndoBoundaryZoneAndLegacySnapshot() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true))
+        repo.calendar = calendar
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 3, minute: 59))!
+        try repo.initialize(now: now)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        let settings = try repo.settings()
+        XCTAssertEqual(try repo.widgetStreakDays(now: now, settings: settings)[0].streak, 0)
+        try repo.start(mode: .new, now: now)
+        try repo.updateDraft(revealed: true, now: now)
+        XCTAssertEqual(try repo.widgetStreakDays(now: now, settings: settings)[0].cards, 0)
+        try repo.grade(.again, now: now)
+        let before = try BackupData.capture(repo)
+        let days = try repo.widgetStreakDays(now: now, settings: settings)
+        XCTAssertEqual(days[0].streak, 1); XCTAssertEqual(days[0].cards, 1)
+        XCTAssertEqual(days[1].streak, 1); XCTAssertEqual(days[1].cards, 0)
+        XCTAssertEqual(days[2].streak, 0)
+        XCTAssertEqual(try BackupData.capture(repo), before)
+        var snapshot = try WidgetProjection.make(cards: [], logs: [], settings: WidgetProjectionSettings(settings), now: now, calendar: calendar)
+        let legacy = try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(snapshot))
+        XCTAssertNil(legacy.streakDays); XCTAssertNotNil(legacy.point(at: now, timeZone: calendar.timeZone))
+        snapshot.streakDays = days
+        XCTAssertTrue(snapshot.valid())
+        XCTAssertEqual(snapshot.streak(at: now.addingTimeInterval(60), timeZone: calendar.timeZone)?.cards, 0)
+        XCTAssertNil(snapshot.streak(at: now, timeZone: TimeZone(identifier: "Asia/Tokyo")!))
+        XCTAssertNil(snapshot.streak(at: snapshot.expiresAt, timeZone: calendar.timeZone))
+        try repo.undo(now: now)
+        XCTAssertEqual(try repo.widgetStreakDays(now: now, settings: settings)[0].streak, 0)
+    }
+
+    @MainActor func testStreakSevenDayWindowMatchesCanonicalLongRunAndTimezone() throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), calendar: calendar)
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 5))!
+        try repo.initialize(now: now)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now)
+        let card = try XCTUnwrap(repo.cards().first), scheduler = try ReviewScheduler()
+        for offset in -10...0 {
+            let date = calendar.date(byAdding: .day, value: offset, to: now)!
+            let transition = try scheduler.review(repo.snapshot(card), grade: .good, now: date)
+            for sequence in 0..<3 {
+                repo.context.insert(StudyReviewLog(card: card, transition: transition, before: card.fsrsPayload,
+                    after: try JSONEncoder().encode(transition.after), mode: .mental, durationMs: 0, wasNew: false, sequence: sequence))
+            }
+        }
+        try repo.context.save()
+        for zone in ["GMT", "Asia/Tokyo", "America/Los_Angeles"] {
+            repo.calendar.timeZone = TimeZone(identifier: zone)!
+            for offset in 0...2 {
+                let date = calendar.date(byAdding: .day, value: offset, to: now)!
+                let actual = try repo.widgetStreakDays(now: date, settings: repo.settings())[0]
+                let expected = try repo.achievementProgress(now: date)
+                XCTAssertEqual(actual.streak, expected.currentStreak)
+                XCTAssertEqual(actual.cards, expected.uniqueCardsToday)
+                XCTAssertEqual(actual.studied, expected.studiedToday)
+            }
+        }
+    }
+
     @MainActor func testThreeThousandCardsDuplicateWidgetProjectionMeasurement() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }

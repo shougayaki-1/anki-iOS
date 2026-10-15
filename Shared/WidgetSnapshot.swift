@@ -17,6 +17,7 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
     let dayStartHour: Int
     let dailyGoal: Int?
     let points: [WidgetPoint]
+    var streakDays: [WidgetStreakDay]? = nil
     var dailyCard: DailyWidgetCard? = nil
     var dailyCardExpiresAt: Date? = nil
 
@@ -31,6 +32,11 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
         }
         if let expiry = dailyCardExpiresAt {
             guard expiry > generatedAt, expiry <= expiresAt else { return false }
+        }
+        if let streakDays {
+            guard (1...8).contains(streakDays.count), streakDays.allSatisfy({
+                $0.date.timeIntervalSince1970.isFinite && $0.streak >= 0 && $0.cards >= 0 && $0.recent.count == 7
+            }), zip(streakDays, streakDays.dropFirst()).allSatisfy({ $0.date < $1.date }) else { return false }
         }
         var previous: Date?
         for point in points {
@@ -102,5 +108,20 @@ struct DailyWidgetCard: Codable, Equatable, Sendable {
     let requiresApp: Bool
     func url(answer: Bool = false) -> URL {
         URL(string: "ankistudy://widget/card/\(id.uuidString)\(answer ? "/answer" : "")")!
+    }
+}
+
+// Eight compact study-day projections; no card IDs or history are shared.
+struct WidgetStreakDay: Codable, Equatable, Sendable {
+    let date: Date
+    let streak: Int
+    let cards: Int
+    let recent: [Bool] // oldest first, ending on this study day
+    var studied: Bool { cards > 0 }
+}
+extension WidgetSnapshot {
+    func streak(at date: Date, timeZone: TimeZone = .current) -> WidgetStreakDay? {
+        guard point(at: date, timeZone: timeZone) != nil else { return nil }
+        return streakDays?.last { $0.date <= date }
     }
 }
