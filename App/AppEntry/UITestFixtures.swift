@@ -263,6 +263,25 @@ enum UITestFixtures {
         try store.reload()
     }
 
+    @MainActor static func populateForecastWidget(_ repository: StudyRepository, now: Date) throws {
+        guard try repository.notes().isEmpty else { return }
+        let deck = try repository.decks()[0].id
+        let start = StudyDay(calendar: repository.calendar, startHour: 4).interval(containing: now).start
+        let scheduler = try ReviewScheduler()
+        for (offset, count) in [2, 8, 24, 5, 0, 12, 3].enumerated() {
+            for index in 0..<count {
+                let due = repository.calendar.date(byAdding: .day, value: offset, to: start)!.addingTimeInterval(60)
+                let previous = Set(try repository.cards().map(\.id))
+                try repository.createNote(NoteInput(deckID: deck, question: "What does recall mean?", answer: "思い出す"), now: now)
+                let card = try repository.cards().first { !previous.contains($0.id) }!
+                let transition = try scheduler.review(repository.snapshot(card), grade: .easy, now: now.addingTimeInterval(-30 * 86400))
+                try repository.transaction {
+                    card.fsrsPayload = try JSONEncoder().encode(transition.after)
+                    card.dueDate = offset == 0 && index == 0 ? start.addingTimeInterval(-86400) : due
+                }
+            }
+        }
+    }
     @MainActor static func populateDueNotification(_ repository: StudyRepository, now: Date) throws {
         guard try repository.notes().isEmpty else { return }
         let base = now.addingTimeInterval(-7200)

@@ -652,6 +652,9 @@ final class StudyRepository {
             fixedCards: fixed, paused: !foreground || draft.activeSince == nil || draft.cardID == nil))
     }
 
+    // Read-only cached payloads; no additional card/history fetch per candidate.
+    func widgetRankingPayloads() -> [UUID: Data] { queueStates.mapValues(\.payload) }
+
     func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, preferredCardID: UUID? = nil, now: Date) throws {
         let interval = PerformanceProbe.begin("Repository.start")
         defer { PerformanceProbe.end(interval) }

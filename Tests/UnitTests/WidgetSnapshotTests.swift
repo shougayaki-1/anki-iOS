@@ -131,6 +131,119 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(publisher.projectionCount, 3)
         XCTAssertTrue(try repo.logs().isEmpty)
     }
+    func testForecastSavedDeadlinesExcludeOverdueNewHiddenAndDuplicates() throws {
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 3, minute: 59))!
+        let start = StudyDay(calendar: calendar).interval(containing: now).start
+        func card(_ due: Date, state: String = "review", suspended: Bool = false, hidden: Date? = nil) -> QueueCard {
+            QueueCard(id: UUID(), state: state, due: due, createdAt: start, suspended: suspended, hiddenUntil: hidden)
+        }
+        let today = card(start), tomorrow = card(now.addingTimeInterval(60))
+        let cards = [card(start.addingTimeInterval(-1)), today, today, tomorrow,
+                     card(now, state: "new"), card(now, suspended: true), card(now, hidden: now.addingTimeInterval(60))]
+        let forecast = try ReviewForecast.widgetSchedule(cards: cards, now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(forecast.overdue, 1)
+        XCTAssertEqual(forecast.days.map(\.count), [1, 1, 0, 0, 0, 0, 0])
+        let after = try ReviewForecast.widgetSchedule(cards: cards, now: now.addingTimeInterval(60), calendar: calendar, startHour: 4)
+        XCTAssertEqual(after.days[0].date, tomorrow.due)
+        XCTAssertEqual(after.overdue, 3) // previous day + today's deadline + newly unhidden
+        var snapshot = try WidgetProjection.make(cards: [], logs: [], settings: WidgetProjectionSettings(StudySettings()), now: now, calendar: calendar)
+        snapshot.reviewForecast = forecast; snapshot.dailyCardExpiresAt = now.addingTimeInterval(60)
+        XCTAssertNotNil(snapshot.forecast(at: now, timeZone: calendar.timeZone))
+        XCTAssertNil(snapshot.forecast(at: now.addingTimeInterval(60), timeZone: calendar.timeZone))
+        XCTAssertNil(snapshot.forecast(at: now, timeZone: TimeZone(identifier: "Asia/Tokyo")!))
+        XCTAssertEqual(try JSONDecoder().decode(WidgetSnapshot.self, from: JSONEncoder().encode(snapshot)), snapshot)
+        let empty = try ReviewForecast.widgetSchedule(cards: [], now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(empty.days.map(\.count), Array(repeating: 0, count: 7))
+    }
+
+    func testForecastRankingUsesOfficialRiskOrderAndFallbackWithoutEarlyReview() throws {
+        let now = Date(), scheduler = try ReviewScheduler()
+        var payloads: [UUID: Data] = [:]
+        func card(days: Int) throws -> QueueCard {
+            let date = now.addingTimeInterval(-Double(days) * 86400)
+            let transition = try scheduler.review(scheduler.newCard(now: date), grade: .easy, now: date)
+            let id = UUID(); payloads[id] = try JSONEncoder().encode(transition.after)
+            return QueueCard(id: id, state: "review", due: now.addingTimeInterval(-60), createdAt: date, suspended: false)
+        }
+        let recent = try card(days: 5), old = try card(days: 50)
+        let future = QueueCard(id: UUID(), state: "review", due: now.addingTimeInterval(60), createdAt: now, suspended: false)
+        for cards in [[recent, old, future], [future, old, recent]] {
+            XCTAssertEqual(WidgetProjection.reviewCardID(cards: cards, logs: [], settings: StudySettings(), payloads: payloads, parameters: nil, now: now, calendar: calendar), old.id)
+        }
+        XCTAssertNil(WidgetProjection.reviewCardID(cards: [future], logs: [], settings: StudySettings(), payloads: payloads, parameters: nil, now: now, calendar: calendar))
+        let earliest = QueueCard(id: UUID(), state: "review", due: now.addingTimeInterval(-3600), createdAt: now, suspended: false)
+        XCTAssertEqual(WidgetProjection.reviewCardID(cards: [recent, earliest, old], logs: [], settings: StudySettings(), payloads: payloads, parameters: nil, now: now, calendar: calendar), earliest.id)
+    }
+
+    @MainActor func testForecastPublisherScopePauseEditGradeUndoAndReadOnly() async throws {
+        let repo = StudyRepository(container: try PersistenceController.makeStudyContainer(inMemory: true), calendar: calendar)
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 12))!
+        try repo.initialize(now: now)
+        let parent = try repo.decks()[0].id
+        let child = try repo.createDeck(name: "Child", parentID: parent, now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Selected", answer: "A", tagNames: ["target"]), now: now)
+        try repo.createNote(NoteInput(deckID: parent, question: "Excluded", answer: "B"), now: now)
+        let tag = try XCTUnwrap(repo.tags().first?.id)
+        let scheduler = try ReviewScheduler()
+        let saved = try scheduler.review(scheduler.newCard(now: now.addingTimeInterval(-30 * 86400)), grade: .easy, now: now.addingTimeInterval(-30 * 86400)).after
+        try repo.transaction {
+            for card in try repo.cards() { card.fsrsPayload = try JSONEncoder().encode(saved); card.dueDate = now.addingTimeInterval(-86400) }
+        }
+        try repo.applyHomeScope(LearningScope(deckID: parent, tagIDs: [tag]))
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = WidgetSnapshotFile(url: root.appendingPathComponent("widget.json"))
+        let publisher = WidgetSnapshotPublisher(file: file, reload: {})
+        func publish() async throws -> WidgetReviewForecast {
+            let before = try BackupData.capture(repo)
+            var finished = false
+            publisher.publish(repository: repo, snapshot: try repo.homeSnapshot(now: now), settings: try repo.settings(), now: now, force: false) {
+                XCTAssertNil($0); finished = true
+            }
+            for _ in 0..<200 where !finished { try await Task.sleep(for: .milliseconds(5)) }
+            XCTAssertTrue(finished)
+            XCTAssertEqual(try BackupData.capture(repo), before)
+            return try XCTUnwrap(file.read()?.forecast(at: now, timeZone: calendar.timeZone))
+        }
+        let first = try await publish(), id = try XCTUnwrap(first.card?.id)
+        XCTAssertEqual(first.overdue, 1); XCTAssertEqual(first.days.map(\.count), Array(repeating: 0, count: 7))
+        let noteID = try XCTUnwrap(repo.card(id)?.noteID)
+        try repo.updateNote(id: noteID, input: NoteInput(deckID: child, question: "Edited", answer: "A", tagNames: ["target"]), now: now)
+        let edited = try await publish(); XCTAssertEqual(edited.card?.question, "Edited"); XCTAssertEqual(edited.card?.id, id)
+        try repo.setStudyPaused(deckID: parent, paused: true, now: now)
+        let paused = try await publish(); XCTAssertNil(paused.card); XCTAssertEqual(paused.overdue, 0)
+        try repo.setStudyPaused(deckID: parent, paused: false, now: now)
+        try repo.startWidgetCard(id, now: now)
+        XCTAssertEqual(try repo.presentation(now: now)?.card?.cardID, id)
+        try repo.updateDraft(revealed: true, now: now); try repo.grade(.easy, now: now)
+        let graded = try await publish(); XCTAssertNil(graded.card); XCTAssertEqual(graded.overdue, 0)
+        try repo.undo(now: now)
+        let undone = try await publish(); XCTAssertEqual(undone.card?.id, id); XCTAssertEqual(undone.overdue, 1)
+        try repo.setSuspended(cardID: id, value: true, now: now)
+        let suspended = try await publish(); XCTAssertNil(suspended.card); XCTAssertEqual(suspended.overdue, 0)
+        try repo.setSuspended(cardID: id, value: false, now: now)
+        try repo.deleteNote(id: noteID)
+        let deleted = try await publish(); XCTAssertNil(deleted.card); XCTAssertEqual(deleted.overdue, 0)
+        XCTAssertNil(try repo.widgetCard(id, now: now))
+    }
+
+    func testForecastThreeThousandCardsTenThousandLogs() throws {
+        let now = Date(), start = StudyDay(calendar: calendar).interval(containing: now).start
+        let cards = (0..<3000).map { index in
+            QueueCard(id: UUID(), state: "review", due: start.addingTimeInterval(Double(index % 7) * 86400), createdAt: start, suspended: false)
+        }
+        let logs = (0..<10000).map { index in QueueLog(cardID: cards[index % cards.count].id, reviewedAt: now.addingTimeInterval(-Double(index)), wasNew: false) }
+        let scheduler = try ReviewScheduler(), learned = now.addingTimeInterval(-30 * 86400)
+        let payload = try JSONEncoder().encode(scheduler.review(scheduler.newCard(now: learned), grade: .easy, now: learned).after)
+        let payloads = Dictionary(uniqueKeysWithValues: cards.map { ($0.id, payload) })
+        let began = Date()
+        let forecast = try ReviewForecast.widgetSchedule(cards: cards, now: now, calendar: calendar, startHour: 4)
+        let selected = WidgetProjection.reviewCardID(cards: cards, logs: logs, settings: StudySettings(), payloads: payloads, parameters: nil, now: now, calendar: calendar)
+        XCTAssertEqual(forecast.days.map(\.count).reduce(0, +), 3000); XCTAssertEqual(forecast.overdue, 0)
+        XCTAssertNotNil(selected)
+        print("WIDGET_FORECAST cards=3000 logs=10000 ms=\(Date().timeIntervalSince(began) * 1000)")
+    }
+
     private var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!; return c }
     func testDueNewProgressAndStudyDayBoundaryUseSavedSchedules() throws {
         let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 3, minute: 59))!
