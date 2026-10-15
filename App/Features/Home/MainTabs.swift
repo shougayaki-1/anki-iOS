@@ -9,6 +9,7 @@ struct MainTabs: View {
     @State private var shortcutNavigation = ShortcutNavigation.shared
     @State private var shortcutDeck: ShortcutDeckDestination?
     @State private var widgetCard: WidgetCardRoute?
+    @State private var widgetNotice: NoteSaveNotice?
     @State private var shortcutNotice: String?
 
     @State private var celebrationDestination: CelebrationAction?
@@ -95,7 +96,10 @@ struct MainTabs: View {
             guard let destination = WidgetDestination.parse(url) else { return }
             switch destination {
             case let .card(id, answer):
-                guard !store.showingReview else { return }
+                guard !store.showingReview else {
+                    widgetNotice = NoteSaveNotice(message: "現在の学習を継続しています。このカードは学習を終了してから開いてください。")
+                    return
+                }
                 widgetCard = WidgetCardRoute(id: id, answer: answer)
             case .home:
                 if store.showingReview { store.pause(); guard !store.showingReview else { return } }
@@ -108,8 +112,18 @@ struct MainTabs: View {
             WidgetCardPreview(store: store, route: route) { widgetCard = nil }
         }
         .fullScreenCover(isPresented: $store.showingReview, onDismiss: {
+            widgetNotice = nil
             if scenePhase == .active, store.celebrationRequested { store.presentCelebration() }
-        }) { ReviewView(store: store) }
+        }) {
+            ReviewView(store: store)
+                .safeAreaInset(edge: .top) {
+                    if let notice = widgetNotice {
+                        NoteSaveNoticeView(notice: notice) {
+                            if widgetNotice?.id == notice.id { widgetNotice = nil }
+                        }
+                    }
+                }
+        }
         .fullScreenCover(item: $store.celebration, onDismiss: {
             guard let destination = celebrationDestination else { return }
             celebrationDestination = nil

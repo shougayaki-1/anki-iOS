@@ -148,6 +148,20 @@ final class DailyWidgetUITests: XCTestCase {
         answer.tap()
         XCTAssertTrue(app.staticTexts["思い出す"].waitForExistence(timeout: 10))
         shot("daily-widget-answer-link")
+        app.buttons["このカードを正式に復習"].tap()
+        XCTAssertTrue(app.staticTexts["reviewQuestion"].waitForExistence(timeout: 10))
+        let original = app.staticTexts["reviewQuestion"].label
+        // XCUIApplication.open relaunches the app. Use the actual widget Link
+        // instead to deliver a URL while the existing review stays alive.
+        XCUIDevice.shared.press(.home)
+        XCTAssertTrue(answer.waitForExistence(timeout: 10)); answer.tap()
+        let notice = app.descendants(matching: .any).matching(
+            NSPredicate(format: "label CONTAINS %@", "現在の学習を継続しています")
+        ).firstMatch
+        XCTAssertTrue(notice.waitForExistence(timeout: 3))
+        XCTAssertEqual(app.staticTexts["reviewQuestion"].label, original)
+        XCTAssertTrue(app.buttons["pauseStudy"].exists)
+        app.buttons["pauseStudy"].tap()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-widget-empty"]
         app.launch()
         XCUIDevice.shared.press(.home)

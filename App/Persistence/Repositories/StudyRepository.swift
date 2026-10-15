@@ -656,7 +656,7 @@ final class StudyRepository {
                     guard value.isFinite, (0...1).contains(value) else { self.reviewRankingFailureCount += 1; return nil }
                     return value
                 })
-            let available: [UUID]
+            var available: [UUID]
             if let customStudy {
                 guard customStudy.official, mode == .review else { throw StudyError.invalidContent }
                 let existing = try session(), existingCustom = try options().activeSessionProgress?.customStudy
@@ -668,7 +668,15 @@ final class StudyRepository {
                 if selectedResponse == .ordering { throw StudyError.noOrderingCards }
                 throw StudyError.noAvailableCards
             }
-            if let preferredCardID, !available.contains(preferredCardID) { throw StudyError.noAvailableCards }
+            if let preferredCardID {
+                guard available.contains(preferredCardID) else { throw StudyError.noAvailableCards }
+                // The first displayed card must also belong to the frozen review
+                // set. Keep its cap and all other candidates' relative order.
+                if mode == .review {
+                    available.removeAll { $0 == preferredCardID }
+                    available.insert(preferredCardID, at: 0)
+                }
+            }
             if let existing = try session() { context.delete(existing) }
             try setScopeInTransaction(normalized)
             let draft = SessionDraft(mode: mode, now: now)
