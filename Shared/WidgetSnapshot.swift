@@ -20,6 +20,7 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
     var streakDays: [WidgetStreakDay]? = nil
     var dailyCard: DailyWidgetCard? = nil
     var dailyCardExpiresAt: Date? = nil
+    var reviewForecast: WidgetReviewForecast? = nil
 
     func valid() -> Bool {
         guard schemaVersion == 1, generatedAt.timeIntervalSince1970.isFinite, expiresAt.timeIntervalSince1970.isFinite,
@@ -27,6 +28,11 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
               TimeZone(identifier: timeZone) != nil, (0...23).contains(dayStartHour),
               dailyGoal == nil || (1...100_000).contains(dailyGoal!), !points.isEmpty, points.count <= 128,
               points.first?.date == generatedAt else { return false }
+        if let forecast = reviewForecast {
+            guard forecast.days.count == 7, forecast.overdue >= 0, forecast.days.allSatisfy({ $0.count >= 0 && $0.date.timeIntervalSince1970.isFinite }),
+                  zip(forecast.days, forecast.days.dropFirst()).allSatisfy({ $0.date < $1.date }),
+                  forecast.card.map({ $0.question.count <= 500 && $0.deck.count <= 120 }) ?? true else { return false }
+        }
         if let dailyCard {
             guard dailyCard.question.count <= 500, dailyCard.deck.count <= 120 else { return false }
         }
@@ -123,5 +129,22 @@ extension WidgetSnapshot {
     func streak(at date: Date, timeZone: TimeZone = .current) -> WidgetStreakDay? {
         guard point(at: date, timeZone: timeZone) != nil else { return nil }
         return streakDays?.last { $0.date <= date }
+    }
+}
+
+struct WidgetForecastDay: Codable, Equatable, Sendable {
+    let date: Date
+    let count: Int
+}
+struct WidgetReviewForecast: Codable, Equatable, Sendable {
+    let days: [WidgetForecastDay]
+    let overdue: Int // saved deadline before the current study day's start
+    var card: DailyWidgetCard? = nil
+}
+extension WidgetSnapshot {
+    func forecast(at date: Date, timeZone: TimeZone = .current) -> WidgetReviewForecast? {
+        guard point(at: date, timeZone: timeZone) != nil,
+              let expiry = dailyCardExpiresAt, date < expiry else { return nil }
+        return reviewForecast
     }
 }

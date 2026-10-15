@@ -250,3 +250,23 @@ struct ForecastScenario: Identifiable, Sendable {
         }
     }
 }
+
+// Saved deadlines only: deliberately does not run the future-answer simulation.
+extension ReviewForecast {
+    static func widgetSchedule(cards: [QueueCard], now: Date, calendar: Calendar, startHour: Int) throws -> WidgetReviewForecast {
+        let day = StudyDay(calendar: calendar, startHour: startHour)
+        var periods: [ForecastDay] = [], interval = day.interval(containing: now)
+        for _ in 0..<7 {
+            periods.append(ForecastDay(start: interval.start, end: interval.end))
+            interval = day.interval(containing: interval.end)
+        }
+        var overdue = 0, seen = Set<UUID>()
+        for card in cards {
+            try Task.checkCancellation()
+            guard seen.insert(card.id).inserted, !card.suspended, !card.studyPaused, card.state != "new", !card.isHidden(at: now) else { continue }
+            if card.due < periods[0].start { overdue += 1 }
+            else if let index = scheduledIndex(due: card.due, days: periods) { periods[index].scheduled += 1 }
+        }
+        return WidgetReviewForecast(days: periods.map { WidgetForecastDay(date: $0.start, count: $0.scheduled) }, overdue: overdue)
+    }
+}

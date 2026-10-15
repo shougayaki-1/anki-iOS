@@ -143,7 +143,7 @@ struct AppRootView: View {
                 #endif
                 storageLocation = StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore)
                 recoveryMediaStore = mediaStore
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || (ProcessInfo.processInfo.arguments.contains("-study-test-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-daily-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget-empty"))) ? WidgetSnapshotPublisher(file: .shared()) : nil, liveActivities: .system())
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || (ProcessInfo.processInfo.arguments.contains("-study-test-forecast-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-daily-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget-empty"))) ? WidgetSnapshotPublisher(file: .shared()) : nil, liveActivities: .system())
                 #if DEBUG
                 if studyURL != nil, args.contains("-study-test-deck-update"), let store,
                    let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
@@ -173,6 +173,10 @@ struct AppRootView: View {
                             try repository.cards().first?.id = UUID(uuidString: "23000000-0000-0000-0000-000000000001")!
                         }
                     }
+                    try store.reload()
+                }
+                if studyURL != nil, args.contains("-study-test-forecast-widget"), let store {
+                    try UITestFixtures.populateForecastWidget(store.repository, now: store.clock())
                     try store.reload()
                 }
                 if studyURL != nil, args.contains("-study-test-widget"), let store {

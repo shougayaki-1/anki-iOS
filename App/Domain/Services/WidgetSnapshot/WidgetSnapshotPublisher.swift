@@ -75,7 +75,7 @@ enum WidgetProjection {
     #if DEBUG
     private(set) var projectionCount = 0
     #endif
-    init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind); WidgetCenter.shared.reloadTimelines(ofKind: "DailyCardWidget"); WidgetCenter.shared.reloadTimelines(ofKind: "StudyStreakWidget") }) {
+    init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind); WidgetCenter.shared.reloadTimelines(ofKind: "DailyCardWidget"); WidgetCenter.shared.reloadTimelines(ofKind: "StudyStreakWidget"); WidgetCenter.shared.reloadTimelines(ofKind: "ReviewForecastWidget") }) {
         self.file = file; self.reload = reload
     }
     func publish(repository: StudyRepository, snapshot: HomeSnapshot, settings: StudySettings, now: Date,
@@ -104,6 +104,9 @@ enum WidgetProjection {
                 }
             }
             let dailyCard = try repository.dailyWidgetCard(cards: cards, logs: logs, settings: settings, now: now)
+            let scopedCards = try repository.scopedQueueCards(repository.homeScope(), cards: cards)
+            let rankingPayloads = repository.widgetRankingPayloads()
+            let parameters = try repository.optimizationState().activeParameters
             let streakDays = try repository.widgetStreakDays(now: now, settings: settings)
             job?.cancel(); generation += 1
             let generation = generation
@@ -114,11 +117,16 @@ enum WidgetProjection {
             #endif
             job = Task { [weak self] in
                 let task = Task.detached(priority: .utility) {
-                    try WidgetProjection.make(cards: cards, logs: logs, settings: projected, now: now, calendar: calendar)
+                    var value = try WidgetProjection.make(cards: cards, logs: logs, settings: projected, now: now, calendar: calendar)
+                    value.reviewForecast = try ReviewForecast.widgetSchedule(cards: scopedCards, now: now, calendar: calendar, startHour: settings.dayStartHour)
+                    let id = WidgetProjection.reviewCardID(cards: scopedCards, logs: logs, settings: settings, payloads: rankingPayloads, parameters: parameters, now: now, calendar: calendar)
+                    return (value, id)
                 }
                 do {
-                    var value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                    let (projection, cardID) = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+                    var value = projection
                     guard let self, !Task.isCancelled, self.generation == generation else { return }
+                    if let cardID { value.reviewForecast?.card = try repository.widgetDisplayCard(cardID) }
                     value.streakDays = streakDays
                     value.dailyCard = dailyCard
                     value.dailyCardExpiresAt = min(value.expiresAt, snapshot.nextRefresh, StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now).end)
@@ -157,7 +165,11 @@ extension StudyRepository {
     }
     func dailyWidgetCard(cards: [QueueCard], logs: [QueueLog], settings: StudySettings, now: Date) throws -> DailyWidgetCard? {
         guard let id = try dailyWidgetIDs(cards: cards, logs: logs, settings: settings, now: now).first,
-              let item = try noteItems(cardID: id).first else { return nil }
+              let card = try widgetDisplayCard(id) else { return nil }
+        return card
+    }
+    func widgetDisplayCard(_ id: UUID) throws -> DailyWidgetCard? {
+        guard let item = try noteItems(cardID: id).first else { return nil }
         let image = item.kind == .imageOcclusion || item.content.imageID != nil
         return DailyWidgetCard(id: id, deck: String(item.deckName.prefix(120)),
                                question: image ? "画像の問題を思い出そう" : String(item.content.question.prefix(500)), requiresApp: image)
@@ -173,5 +185,22 @@ extension StudyRepository {
         guard try session() == nil else { throw CustomStudyError.sessionActive }
         guard let item = try widgetCard(id, now: now) else { throw StudyError.noAvailableCards }
         try start(mode: item.summary.state == "new" ? .new : .review, scope: homeScope(), responseMode: .cardDefault, preferredCardID: id, now: now)
+    }
+}
+
+extension WidgetProjection {
+    static func reviewCardID(cards: [QueueCard], logs: [QueueLog], settings: StudySettings,
+                             payloads: [UUID: Data], parameters: [Double]?, now: Date, calendar: Calendar) -> UUID? {
+        let scheduler = try? ReviewScheduler(parameters: parameters)
+        // Reuse the official forgetting-risk ordering, including short-step priority,
+        // deterministic ties and due-order slots for unavailable predictions.
+        return ReviewQueueBuilder(calendar: calendar).queue(cards: cards, logs: logs, settings: settings,
+            mode: .review, touched: [], reviewStreak: 0, now: now, policy: .forgettingRisk,
+            retrievability: { id in
+                guard let scheduler, let payload = payloads[id],
+                      let snapshot = try? JSONDecoder().decode(SchedulerSnapshot.self, from: payload),
+                      let prediction = try? scheduler.predictionState(snapshot), prediction.canRankReview else { return nil }
+                return scheduler.retrievability(prediction, now: now)
+            }).first
     }
 }

@@ -213,7 +213,7 @@ struct DailyCardWidget: Widget {
     }
 }
 @main struct StudyWidgets: WidgetBundle {
-    var body: some Widget { StudyProgressWidget(); DailyCardWidget(); StudyStreakWidget(); StudySessionActivity() }
+    var body: some Widget { StudyProgressWidget(); DailyCardWidget(); StudyStreakWidget(); ReviewForecastWidget(); StudySessionActivity() }
 }
 
 #Preview("今日の1枚・Small", as: .systemSmall) {
@@ -264,16 +264,7 @@ struct StreakWidgetView: View {
     @Environment(\.widgetFamily) private var family
     @Environment(\.colorScheme) private var colorScheme
     let entry: StreakEntry
-    private var primary: Color {
-        guard colorScheme == .dark else { return Color("PrimaryAction") }
-        // The shared action color is designed as a filled button background.
-        // Lift the same hue for small foreground symbols on dark widget surfaces.
-        let color = (UIColor(named: "PrimaryAction") ?? .systemBlue)
-            .resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return Color(red: Double(red * 0.65 + 0.35), green: Double(green * 0.65 + 0.35), blue: Double(blue * 0.65 + 0.35))
-    }
+    private var primary: Color { widgetPrimaryColor(colorScheme) }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let day = entry.day {
@@ -367,4 +358,123 @@ struct StudyStreakWidget: Widget {
     StreakEntry.sample
     StreakEntry(date: Date(), day: WidgetStreakDay(date: Date(), streak: 7, cards: 20, recent: [true, true, true, true, true, true, true]), goal: 20)
     StreakEntry(date: Date(), day: WidgetStreakDay(date: Date(), streak: 0, cards: 0, recent: [true, false, true, true, false, false, false]), goal: nil)
+}
+
+struct ForecastEntry: TimelineEntry {
+    let date: Date
+    let forecast: WidgetReviewForecast?
+}
+struct ForecastProvider: TimelineProvider {
+    func placeholder(in context: Context) -> ForecastEntry { .sample }
+    func getSnapshot(in context: Context, completion: @escaping (ForecastEntry) -> Void) {
+        let now = Date()
+        completion(context.isPreview ? .sample : ForecastEntry(date: now, forecast: WidgetSnapshotFile.shared().read()?.forecast(at: now)))
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<ForecastEntry>) -> Void) {
+        let now = Date(), snapshot = WidgetSnapshotFile.shared().read()
+        let expiry = max(snapshot?.dailyCardExpiresAt ?? now, now.addingTimeInterval(1))
+        completion(Timeline(entries: [ForecastEntry(date: now, forecast: snapshot?.forecast(at: now)),
+            ForecastEntry(date: expiry, forecast: nil)], policy: .after(max(expiry, now.addingTimeInterval(3600)))))
+    }
+}
+extension ForecastEntry {
+    static var sample: Self {
+        let now = Date(), start = Calendar.current.startOfDay(for: now)
+        return Self(date: now, forecast: WidgetReviewForecast(days: [2, 8, 24, 5, 0, 12, 3].enumerated().map {
+            WidgetForecastDay(date: Calendar.current.date(byAdding: .day, value: $0.offset, to: start)!, count: $0.element)
+        }, overdue: 6, card: DailyWidgetCard(id: UUID(), deck: "英語", question: "What does recall mean?", requiresApp: false)))
+    }
+}
+struct ForecastWidgetView: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let entry: ForecastEntry
+    private let home = URL(string: "ankistudy://widget/home")!
+    private let progress = URL(string: "ankistudy://widget/progress")!
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text("これからの復習").font(.subheadline.bold())
+                Spacer(minLength: 4)
+                if let forecast = entry.forecast, forecast.overdue > 0 {
+                    Text("期限超過 \(forecast.overdue)枚").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if let forecast = entry.forecast {
+                Link(destination: progress) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        chart(forecast)
+                        if let peak = forecast.days.max(by: { $0.count < $1.count }), peak.count > 0 {
+                            Text("\(peak.date.formatted(.dateTime.month().day().weekday(.wide)))に最多 \(peak.count)枚")
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        } else {
+                            Text("7日間の復習予定はありません").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }.contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Link(destination: forecast.card?.url() ?? home) {
+                    HStack(spacing: 5) {
+                        Image(systemName: forecast.card == nil ? "checkmark.circle" : "rectangle.on.rectangle")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(forecast.card == nil ? "今の復習はひと区切り" : "そろそろ復習したい1枚 ›").font(.caption.bold())
+                            if let card = forecast.card {
+                                Text(card.requiresApp ? "画像の問題はアプリで確認" : card.question)
+                                    .font(.caption2).lineLimit(1).privacySensitive()
+                            }
+                        }
+                        Spacer(minLength: 0)
+                    }.frame(maxWidth: .infinity, minHeight: 30, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain)
+                Text("保存済み期限・学習で予定は変わります").font(.system(size: 9)).foregroundStyle(.secondary)
+            } else {
+                Spacer(minLength: 0)
+                Text("アプリを開いて更新").font(.headline)
+                Text("最新の復習予定を確認しよう").font(.caption).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+        }
+        .containerBackground(for: .widget) { Color(.systemBackground) }
+        .widgetURL(home)
+    }
+    private func chart(_ forecast: WidgetReviewForecast) -> some View {
+        let peak = forecast.days.map(\.count).max() ?? 0
+        return HStack(alignment: .bottom, spacing: 5) {
+            ForEach(forecast.days, id: \.date) { day in
+                VStack(spacing: 2) {
+                    Text("\(day.count)").font(.system(size: 9, weight: day.count == peak ? .semibold : .regular)).monospacedDigit()
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(day.count == 0 ? Color.secondary.opacity(0.18) : widgetPrimaryColor(colorScheme).opacity(day.count == peak ? 1 : 0.65))
+                        // Square-root scale keeps small days visible beside a large peak.
+                        .frame(height: day.count == 0 ? 2 : 3 + 15 * sqrt(Double(day.count) / Double(max(peak, 1))))
+                        .frame(height: 18, alignment: .bottom)
+                    Text(day.date.formatted(.dateTime.day().weekday(.narrow)))
+                        .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+                }.frame(maxWidth: .infinity)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(day.date.formatted(.dateTime.month().day().weekday())), \(day.count)枚予定")
+            }
+        }
+    }
+}
+struct ReviewForecastWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "ReviewForecastWidget", provider: ForecastProvider()) { ForecastWidgetView(entry: $0) }
+            .configurationDisplayName("これからの復習")
+            .description("今の学習範囲の7日間の保存済み期限と、そろそろ復習したい1枚。FSRSの推定を利用します。更新時刻はOSが調整します。")
+            .supportedFamilies([.systemMedium])
+    }
+}
+#Preview("これからの復習", as: .systemMedium) { ReviewForecastWidget() } timeline: {
+    ForecastEntry.sample
+    ForecastEntry(date: Date(), forecast: nil)
+}
+
+private func widgetPrimaryColor(_ colorScheme: ColorScheme) -> Color {
+    guard colorScheme == .dark else { return Color("PrimaryAction") }
+    // The shared action color is designed as a filled button background.
+    // Lift the same hue for small foreground symbols on dark widget surfaces.
+    let color = (UIColor(named: "PrimaryAction") ?? .systemBlue)
+        .resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+    var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+    return Color(red: Double(red * 0.65 + 0.35), green: Double(green * 0.65 + 0.35), blue: Double(blue * 0.65 + 0.35))
 }
