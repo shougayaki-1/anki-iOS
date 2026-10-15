@@ -2,10 +2,113 @@ import XCTest
 import SwiftData
 import UserNotifications
 import UIKit
+import SwiftUI
 @testable import AnkiIOS
 
 @MainActor
 final class QualityRepositoryTests: XCTestCase {
+    func testGardenCommittedGrowthUndoFailureScopeAndRestart() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let store = try StudyStore(container: container, clock: { self.now })
+        let repo = store.repository, deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Garden", answer: "A"), now: now)
+        try store.reload()
+        func groups() async throws -> [MemoryGrowthGroup] {
+            try await StatisticsReader(container: container).load(now: now, calendar: .current, startHour: 4, scope: LearningScope(), revision: repo.mutationRevision).growth
+        }
+        store.start(.new); store.draft(revealed: true)
+        repo.save = { _ in throw Failure.save }
+        store.grade(.good)
+        XCTAssertTrue(store.gardenGrowth.isEmpty)
+        XCTAssertEqual(try repo.logs().count, 0)
+        repo.save = { try $0.save() }
+        store.grade(.good)
+        let grown = try await groups()
+        XCTAssertEqual(grown.map { $0.cards.count }, [0, 1, 0, 0])
+        let event = store.claimGardenGrowth(groups: grown)
+        XCTAssertEqual(event?.from, .seed); XCTAssertEqual(event?.to, .sprout)
+        XCTAssertNil(store.claimGardenGrowth(groups: grown)) // Reappearance / refresh.
+        let restarted = try StudyStore(container: container, clock: { self.now })
+        XCTAssertNil(restarted.claimGardenGrowth(groups: grown))
+        store.undo()
+        XCTAssertTrue(store.gardenGrowth.isEmpty)
+        XCTAssertEqual(try repo.logs().count, 0)
+        store.draft(revealed: true); store.grade(.good)
+        XCTAssertFalse(store.gardenGrowth.isEmpty)
+        store.statisticsScope = LearningScope(deckID: UUID())
+        XCTAssertTrue(store.gardenGrowth.isEmpty)
+        store.undo(); store.draft(revealed: true); store.grade(.good)
+        store.undo()
+        XCTAssertNil(store.claimGardenGrowth(groups: grown)) // Even a stale snapshot cannot replay Undo.
+        let undone = try await groups()
+        XCTAssertEqual(undone.map { $0.cards.count }, [1, 0, 0, 0])
+        try repo.transaction { try repo.cards()[0].isSuspended = true }
+        let excluded = try await groups()
+        XCTAssertEqual(excluded.flatMap(\.cards).count, 0)
+        try repo.transaction { try repo.cards()[0].isSuspended = false }
+        try repo.setStudyPaused(deckID: deck, paused: true, now: now)
+        let paused = try await groups()
+        XCTAssertEqual(paused.flatMap(\.cards).count, 0)
+    }
+
+    func testGardenLearningToReviewToFlowerAndRegression() async throws {
+        var date = now
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let store = try StudyStore(container: container, clock: { date })
+        let repo = store.repository, deck = try repo.decks()[0].id
+        try repo.createNote(NoteInput(deckID: deck, question: "Grow", answer: "A"), now: date)
+        try store.reload(); store.start(.new); store.draft(revealed: true); store.grade(.good)
+        XCTAssertEqual(store.gardenGrowth.last?.to, .sprout)
+        func answer(_ grade: ReviewGrade) throws {
+            date = try repo.cards()[0].dueDate.addingTimeInterval(1)
+            try repo.start(mode: .review, now: date)
+            try store.reload(); store.draft(revealed: true); store.grade(grade)
+        }
+        try answer(.good)
+        XCTAssertEqual(store.gardenGrowth.last?.from, .sprout)
+        XCTAssertEqual(store.gardenGrowth.last?.to, .plant)
+        for _ in 0..<5 {
+            if store.gardenGrowth.last?.to == .flower { break }
+            try answer(.easy)
+        }
+        XCTAssertEqual(store.gardenGrowth.last?.from, .plant)
+        XCTAssertEqual(store.gardenGrowth.last?.to, .flower)
+        let report = try await StatisticsReader(container: container).load(now: date, calendar: .current, startHour: 4, scope: LearningScope(), revision: repo.mutationRevision)
+        XCTAssertEqual(store.claimGardenGrowth(groups: report.growth)?.to, .flower)
+        try answer(.again)
+        XCTAssertTrue(store.gardenGrowth.isEmpty) // No punishment or stale earlier growth.
+    }
+
+    func testGardenScopeAndRenderingAt3000Cards() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let store = try StudyStore(container: container, clock: { self.now })
+        try UITestFixtures.populateGarden(store, scenario: "scale")
+        let repo = store.repository, reader = StatisticsReader(container: container)
+        let start = ProcessInfo.processInfo.systemUptime
+        let report = try await reader.load(now: now, calendar: .current, startHour: 4, scope: LearningScope(), revision: repo.mutationRevision)
+        let loaded = ProcessInfo.processInfo.systemUptime
+        XCTAssertEqual(report.growth.map { $0.cards.count }, [600, 600, 900, 900])
+        let counts = report.growth.map { $0.cards.count }
+        for _ in 0..<20 {
+            let renderer = ImageRenderer(content: MemoryGardenScene(counts: counts).frame(width: 312, height: 180))
+            XCTAssertNotNil(renderer.uiImage)
+        }
+        let rendered = ProcessInfo.processInfo.systemUptime
+        let empty = try await reader.load(now: now, calendar: .current, startHour: 4, scope: LearningScope(tagIDs: [UUID()]), revision: repo.mutationRevision)
+        XCTAssertEqual(empty.growth.flatMap(\.cards).count, 0)
+        let deck = try repo.decks()[0].id
+        let filtered = try await reader.load(now: now, calendar: .current, startHour: 4, scope: LearningScope(deckID: deck), revision: repo.mutationRevision)
+        XCTAssertEqual(filtered.growth.map { $0.cards.count }, counts)
+        let child = try repo.createDeck(name: "Garden child", parentID: deck, now: now)
+        try repo.createNote(NoteInput(deckID: child, question: "Tagged", answer: "A", tagNames: ["Garden"]), now: now)
+        let tagID = try XCTUnwrap(repo.tags().first).id
+        let tagged = try await reader.load(now: now, calendar: .current, startHour: 4, scope: LearningScope(deckID: deck, tagIDs: [tagID]), revision: repo.mutationRevision)
+        XCTAssertEqual(tagged.growth.map { $0.cards.count }, [1, 0, 0, 0])
+        XCTAssertEqual(tagged.growth.flatMap(\.cards).map(\.title), ["Tagged"])
+
+        print(String(format: "GARDEN_3000 aggregate_ms=%.2f render20_ms=%.2f specimens=40", (loaded-start)*1000, (rendered-loaded)*1000))
+    }
+
     func testReleasedStoreDoesNotRunDeferredNotificationReads() async throws {
         let center = NotificationServiceTests.Center()
         var store: StudyStore? = try StudyStore(

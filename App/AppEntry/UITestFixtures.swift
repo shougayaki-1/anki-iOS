@@ -52,6 +52,32 @@ enum UITestFixtures {
         try store.reload()
     }
 
+    @MainActor static func populateGarden(_ store: StudyStore, scenario: String) throws {
+        let repo = store.repository, now = store.clock()
+        guard try repo.notes().isEmpty else { return }
+        let deck = try repo.decks()[0].id, scheduler = try ReviewScheduler()
+        let past = now.addingTimeInterval(-60 * 86400)
+        let seed = try scheduler.newCard(now: past)
+        let sprout = try scheduler.review(seed, grade: .good, now: past).after
+        let plant = try scheduler.review(seed, grade: .easy, now: past).after
+        let flower = try scheduler.review(plant, grade: .easy, now: now.addingTimeInterval(-30 * 86400)).after
+        let amounts = scenario == "growth" ? [1, 0, 0, 0] : scenario == "empty" ? [0, 0, 0, 0] : scenario == "mature" ? [2, 2, 4, 32] : scenario == "scale" ? [600, 600, 900, 900] : [8, 8, 12, 12]
+        let snapshots = [seed, sprout, plant, flower]
+        try repo.transaction {
+            for stage in GardenStage.allCases {
+                let payload = try JSONEncoder().encode(snapshots[stage.rawValue])
+                for index in 0..<amounts[stage.rawValue] {
+                    let input = NoteInput(deckID: deck, question: "\(stage.title)の記憶 \(index + 1)", answer: "学習サンプル", tagNames: [])
+                    let note = Note(input: input, content: try JSONEncoder().encode(TextContent(question: input.question, answer: input.answer, explanation: "")), now: past)
+                    repo.context.insert(note)
+                    let card = StudyCard(noteID: note.id, variantKey: "basic:front", payload: payload, now: past)
+                    card.dueDate = now; repo.context.insert(card)
+                }
+            }
+        }
+        try store.reload()
+    }
+
     @MainActor static func populateDashboard(_ store: StudyStore) throws {
         let repo = store.repository, now = store.clock()
         guard try repo.notes().isEmpty else { return }

@@ -29,7 +29,7 @@ struct BackupRestoreOutcome: Equatable {
 
 @MainActor @Observable
 final class StudyStore {
-    var repository: StudyRepository
+    var repository: StudyRepository { didSet { gardenGrowth.removeAll() } }
     let storageLocation: StudyStorageLocation
     var snapshotPolicy = SnapshotPolicy()
     var snapshots: [LocalSnapshot] = []
@@ -142,7 +142,43 @@ final class StudyStore {
     var statistics: StudyStatistics?
     var statisticsLoading = false
     var statisticsError: String?
-    var statisticsScope = LearningScope()
+    var statisticsScope = LearningScope() {
+        didSet { if oldValue != statisticsScope { gardenGrowth.removeAll() } }
+    }
+    // Only this process's successfully saved answers are eligible. Never restore
+    // delivery from counts, history, timestamps or achievement milestones.
+    @ObservationIgnored private(set) var gardenGrowth: [GardenGrowth] = []
+
+    func claimGardenGrowth(groups: [MemoryGrowthGroup]) -> GardenGrowth? {
+        let candidates = gardenGrowth
+        gardenGrowth.removeAll() // Claim before display; reopening cannot replay.
+        for event in candidates.reversed() {
+            guard groups.contains(where: { $0.stage == event.to && $0.cards.contains(where: { $0.id == event.cardID }) }) else { continue }
+            let id = event.logID, cardID = event.cardID
+            // Verify the source still exists and this is still the exact saved
+            // after-state. Undo, later ratings and replacement cannot fake growth.
+            guard let log = try? repository.context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.id == id })).first,
+                  let card = try? repository.context.fetch(FetchDescriptor<StudyCard>(predicate: #Predicate { $0.id == cardID })).first,
+                  log.fsrsAfter == event.payload, card.fsrsPayload == event.payload else { continue }
+            return event
+        }
+        return nil
+    }
+
+    private func captureGardenGrowth() {
+        guard let id = try? repository.session()?.undoLogID,
+              let log = try? repository.context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.id == id })).first else { return }
+        gardenGrowth.removeAll { $0.cardID == log.cardID }
+        guard let scheduler = try? ReviewScheduler(),
+              let before = try? JSONDecoder().decode(SchedulerSnapshot.self, from: log.fsrsBefore),
+              let after = try? JSONDecoder().decode(SchedulerSnapshot.self, from: log.fsrsAfter),
+              let old = try? scheduler.summary(before), let new = try? scheduler.summary(after) else { return }
+        let from = GardenStage.classify(state: old.state, stability: old.stability)
+        let to = GardenStage.classify(state: new.state, stability: new.stability)
+        guard to.rawValue > from.rawValue else { return }
+        gardenGrowth.append(GardenGrowth(logID: id, cardID: log.cardID, from: from, to: to, payload: log.fsrsAfter))
+        if gardenGrowth.count > 32 { gardenGrowth.removeFirst() }
+    }
     @ObservationIgnored private var statisticsReader: StatisticsReader
     @ObservationIgnored private var statisticsTask: Task<Void, Never>?
     @ObservationIgnored private var statisticsGeneration = 0
@@ -602,8 +638,9 @@ final class StudyStore {
             let previouslyComplete = review?.sessionProgress?.isComplete == true
             do { try repository.grade(grade, now: clock()) }
             catch { failure = "評価を保存できませんでした。評価は確定されていません。\n" + error.localizedDescription; return }
+            captureGardenGrowth()
             do { try refreshStudy() }
-            catch { review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
+            catch { gardenGrowth.removeAll(); review = nil; showingReview = false; failure = "評価は保存済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
             // The notification has already been persisted. Avoid loading all review
             // history on every answer merely to update an unobtrusive home badge.
             pendingCelebrationCount = (try? repository.options().achievements?.filter { $0.displayedAt == nil }.count) ?? 0
@@ -621,6 +658,7 @@ final class StudyStore {
             achievementNotice = nil
             do { try repository.undo(now: clock()) }
             catch { failure = "評価を取り消せませんでした。学習状態は変更されていません。\n" + error.localizedDescription; return }
+            gardenGrowth.removeAll()
             do { try refreshStudy() }
             catch { review = nil; showingReview = false; failure = "評価は取り消し済みですが画面を更新できません。再表示してください。\n" + error.localizedDescription; return }
             refreshPendingCelebrations()

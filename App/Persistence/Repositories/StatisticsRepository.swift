@@ -166,15 +166,13 @@ actor StatisticsReader {
                               difficulty: card.difficulty, retrievability: probability)
         }
         let active = material.cards.filter { included($0.deckID, $0.tagIDs) && !$0.isSuspended }
-        let mature = memoryCards.filter { MatureCards.contains(state: $0.state, stability: $0.stability, suspended: false) }
-        let matureIDs = Set(mature.map(\.id))
-        report.growth = [
-            MemoryGrowthGroup(id: "未学習", explanation: "FSRSがNew状態のカードです。まだ正式な自己評価をしていません。", cards: active.filter { $0.state.isNew }.map {
-                MemoryCard(state: "new", id: $0.id, title: $0.title, stability: $0.stability, difficulty: $0.difficulty, retrievability: 0)
-            }),
-            MemoryGrowthGroup(id: "学習・復習中", explanation: "学習中・再学習中、および長期定着の条件に達していないReview状態です。", cards: memoryCards.filter { !matureIDs.contains($0.id) }),
-            MemoryGrowthGroup(id: "長期定着", explanation: "Review状態かつStability 21日以上。FSRSによる推定で、永久記憶の保証ではありません。", cards: mature)
-        ]
+        // Include every eligible card, even if a probability is unavailable.
+        // Classification depends only on saved state and Stability.
+        let probabilities = Dictionary(uniqueKeysWithValues: memoryCards.map { ($0.id, $0.retrievability) })
+        report.growth = MemoryGrowthGroup.garden(cards: active.map {
+            MemoryCard(state: $0.state.state, id: $0.id, title: $0.title, stability: $0.stability,
+                       difficulty: $0.difficulty, retrievability: probabilities[$0.id] ?? 0)
+        })
         let studyDay = StudyDay(calendar: calendar, startHour: startHour)
         report.scheduledDays = (0..<30).map { offset in
             let date = calendar.date(byAdding: .day, value: offset, to: now)!

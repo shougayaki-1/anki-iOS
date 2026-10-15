@@ -169,51 +169,6 @@ struct LearningSummarySection: View {
     }
 }
 
-struct MemoryGrowthSection: View {
-    let store: StudyStore
-    let groups: [MemoryGrowthGroup]
-    private let colors: [Color] = [.gray, .teal, .green]
-    private var total: Int { groups.reduce(0) { $0 + $1.cards.count } }
-    var body: some View {
-        DashboardCard(title: "記憶が育っています", subtitle: "現在のカード · 選択中の対象") {
-            HStack(alignment: .firstTextBaseline) {
-                Text("\(groups.last?.cards.count ?? 0)").font(.system(size: 36, weight: .bold, design: .rounded)).foregroundStyle(.green)
-                Text("枚が長期定着（推定）").font(.subheadline)
-            }
-            GeometryReader { geometry in
-                HStack(spacing: 2) {
-                    ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                        if !group.cards.isEmpty {
-                            RoundedRectangle(cornerRadius: 4).fill(colors[index])
-                                .frame(width: max(0, (geometry.size.width - 4) * Double(group.cards.count) / Double(max(1, total))))
-                        }
-                    }
-                }
-            }.frame(height: 14).accessibilityHidden(true)
-            ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                NavigationLink {
-                    List {
-                        Section { Text(group.explanation); Text("停止カード・休止デッキは除外。期限超過も現在のFSRS状態で分類します。") }
-                        Section { NavigationLink("対象カード \(group.cards.count)枚") { MemoryEvidenceCardsView(store: store, ids: group.cards.map(\.id), cards: group.cards) } }
-                    }.navigationTitle(group.id)
-                } label: {
-                    HStack {
-                        Circle().fill(colors[index]).frame(width: 8, height: 8)
-                        Text(group.id).foregroundStyle(.primary)
-                        Spacer()
-                        Text("\(group.cards.count)枚").bold().foregroundStyle(.primary).fixedSize()
-                        Text(total == 0 ? "—" : (Double(group.cards.count) / Double(total)).formatted(.percent.precision(.fractionLength(0))))
-                            .font(.caption).foregroundStyle(.secondary).frame(minWidth: 36, alignment: .trailing).fixedSize()
-                        Image(systemName: "chevron.right").font(.caption)
-                    }.font(.subheadline).frame(minHeight: 44).contentShape(Rectangle())
-                }.accessibilityIdentifier("growth-" + group.id)
-            }
-            Text(total == 0 ? "対象のカードがありません。" : "停止・休止を除く\(total)枚。長期定着は永久記憶の保証ではありません。分類をタップすると定義と対象カードを確認できます。")
-                .font(.caption).foregroundStyle(.secondary)
-        }
-    }
-}
-
 struct StudyCalendarSection: View {
     let store: StudyStore
     let stats: StudyStatistics
