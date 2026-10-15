@@ -210,12 +210,22 @@ extension StreakEntry {
 }
 struct StreakWidgetView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.colorScheme) private var colorScheme
     let entry: StreakEntry
-    private let primary = Color("PrimaryAction")
+    private var primary: Color {
+        guard colorScheme == .dark else { return Color("PrimaryAction") }
+        // The shared action color is designed as a filled button background.
+        // Lift the same hue for small foreground symbols on dark widget surfaces.
+        let color = (UIColor(named: "PrimaryAction") ?? .systemBlue)
+            .resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return Color(red: Double(red * 0.65 + 0.35), green: Double(green * 0.65 + 0.35), blue: Double(blue * 0.65 + 0.35))
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let day = entry.day {
-                HStack(alignment: .center, spacing: 16) {
+                HStack(alignment: .center, spacing: 12) {
                     VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 5) {
                             Image(systemName: day.studied ? "flame.fill" : "flame")
@@ -227,10 +237,11 @@ struct StreakWidgetView: View {
                             Text("日").font(.subheadline.weight(.semibold))
                         }.lineLimit(1)
                         if family == .systemMedium {
-                            Text(day.studied ? "今日も積み重ねたね" : (day.streak > 0 ? "昨日までの積み重ね" : "今日の1枚から"))
+                            Text(day.studied ? "今日も学習済み" : (day.streak > 0 ? "昨日まで継続中" : "今日の1枚から"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
+                    .frame(width: family == .systemMedium ? 98 : nil, alignment: .leading)
                     if family == .systemMedium {
                         Spacer(minLength: 0)
                         week(day)
@@ -269,15 +280,17 @@ struct StreakWidgetView: View {
         .widgetURL(URL(string: entry.day?.studied == true ? "ankistudy://widget/progress" : "ankistudy://widget/home"))
     }
     private func week(_ day: WidgetStreakDay) -> some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 3) {
             ForEach(0..<7, id: \.self) { index in
                 let date = Calendar.current.date(byAdding: .day, value: index - 6, to: day.date) ?? day.date
                 VStack(spacing: 5) {
                     Text(index == 6 ? "今日" : date.formatted(.dateTime.weekday(.narrow))).font(.system(size: 11, weight: index == 6 ? .bold : .regular))
                     Image(systemName: day.recent[index] ? "checkmark.circle.fill" : "circle")
                         .font(.system(size: 16)).foregroundStyle(day.recent[index] ? primary : Color.secondary.opacity(0.4))
-                    Text(date.formatted(.dateTime.day())).font(.system(size: 11)).monospacedDigit()
+                    Text("\(Calendar.current.component(.day, from: date))").font(.system(size: 11)).monospacedDigit()
                 }
+                .frame(width: 22)
+                .lineLimit(1)
                 .foregroundStyle(.secondary)
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("\(date.formatted(.dateTime.month().day()))、\(day.recent[index] ? "学習済み" : "未学習")")

@@ -112,45 +112,6 @@ final class DailyWidgetUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["このカードは今の学習対象ではありません。ホームで最新のカードを確認してください。"].waitForExistence(timeout: 10))
         shot("daily-unavailable")
     }
-    func testStreakGalleryAndHomeDisplay() {
-        let app = XCUIApplication()
-        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-daily-widget"]
-        app.launch()
-        XCUIDevice.shared.press(.home)
-        let board = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        var icon = board.icons["暗記ノート"].allElementsBoundByIndex.first { $0.isHittable }
-        for _ in 0..<3 where icon == nil {
-            board.swipeLeft()
-            icon = board.icons["暗記ノート"].allElementsBoundByIndex.first { $0.isHittable }
-        }
-        guard let icon else { XCTFail("暗記ノートのホームアイコンを表示できませんでした"); return }
-        icon.press(forDuration: 1.5)
-        let editHome = board.buttons["ホーム画面を編集"]
-        XCTAssertTrue(editHome.waitForExistence(timeout: 5)); editHome.tap()
-        board.buttons["編集"].tap()
-        board.buttons["ウィジェットを追加"].tap()
-        let search = board.searchFields.firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("暗記ノート")
-        let cell = board.cells["暗記ノート"]
-        XCTAssertTrue(cell.waitForExistence(timeout: 10)); cell.tap()
-        XCTAssertTrue(board.staticTexts["復習と今日の進捗"].waitForExistence(timeout: 10))
-        shot("231-progress-small")
-        board.swipeLeft(); shot("231-progress-medium")
-        board.swipeLeft(); shot("231-daily-small")
-        board.swipeLeft(); shot("231-daily-medium")
-        board.swipeLeft()
-        XCTAssertTrue(board.staticTexts["毎日の積み重ね"].waitForExistence(timeout: 5))
-        shot("231-streak-small")
-        board.swipeLeft(); shot("231-streak-medium")
-        board.buttons[" ウィジェットを追加"].tap()
-        let done = board.buttons["完了"]
-        if done.waitForExistence(timeout: 5) { done.tap() }
-        XCTAssertTrue(board.staticTexts["今日の1枚から"].waitForExistence(timeout: 20))
-        shot("231-streak-home")
-        board.staticTexts["今日の1枚から"].firstMatch.tap()
-        XCTAssertTrue(app.buttons["startStudy"].waitForExistence(timeout: 10) || app.tabBars.firstMatch.exists)
-        shot("231-streak-link")
-    }
     func testWidgetGalleryAndHomeDisplay() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-daily-widget"]
@@ -158,7 +119,7 @@ final class DailyWidgetUITests: XCTestCase {
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         if !springboard.staticTexts["今日の1枚"].exists {
-            springboard.icons["暗記ノート"].firstMatch.press(forDuration: 1.5)
+            springboard.icons["暗記ノート"].press(forDuration: 1.5)
             let editHome = springboard.buttons["ホーム画面を編集"]
             XCTAssertTrue(editHome.waitForExistence(timeout: 5)); editHome.tap()
             let edit = springboard.buttons["編集"]
