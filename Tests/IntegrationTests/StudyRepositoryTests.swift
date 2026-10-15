@@ -3208,3 +3208,48 @@ extension StudyRepositoryTests {
         catch is CancellationError { }
     }
 }
+
+extension StudyRepositoryTests {
+    func testForecastComparisonLimitsEligibilityBoundaryAndReadOnly() throws {
+        let repo = try fixture(), deck = try repo.decks()[0].id
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
+        let beforeFour = calendar.date(from: DateComponents(year: 2026, month: 10, day: 15, hour: 3, minute: 59))!
+        let empty = try ForecastScenario.compare(data: BackupData.capture(repo), deckID: nil, now: beforeFour, calendar: calendar)
+        XCTAssertTrue(empty.allSatisfy { $0.forecast.projectedAnswers == 0 && $0.estimatedMinutes == nil })
+        for i in 0..<6 {
+            try repo.createNote(NoteInput(deckID: deck, question: "Compare \(i)", answer: "A", reverseEnabled: true), now: beforeFour)
+        }
+        try repo.saveDeckLearning(DeckLearningOverride(deckID: deck, newLimit: 2, retention: 0.9))
+        try repo.start(mode: .new, now: beforeFour)
+        let before = try BackupData.capture(repo).canonical()
+        for (limit, expected) in [(0, [0]), (1, [1, 0]), (5, [5, 2, 0])] {
+            var data = before
+            data.preferences[0].dailyNewLimit = limit
+            let scenarios = try ForecastScenario.compare(data: data, deckID: nil, now: beforeFour, calendar: calendar)
+            XCTAssertEqual(scenarios.map(\.newLimit), expected)
+            for scenario in scenarios {
+                let forecast = scenario.forecast
+                XCTAssertEqual(forecast, try ReviewForecast.calculate(data: data, deckID: nil, days: 7, now: beforeFour, calendar: calendar, newLimit: scenario.newLimit))
+                XCTAssertTrue(forecast.days.allSatisfy { $0.newCards <= min(2, scenario.newLimit) })
+                XCTAssertNil(scenario.estimatedMinutes)
+                XCTAssertEqual(calendar.component(.hour, from: forecast.days[0].start), 4)
+                XCTAssertEqual(calendar.component(.day, from: forecast.days[0].start), 14)
+                XCTAssertEqual(scenario.peakAnswers, forecast.days.map(\.projectedAnswers).max())
+                if limit == 1 { XCTAssertLessThanOrEqual(forecast.days[0].newCards, 1) }
+            }
+            let afterFour = try ForecastScenario.compare(data: data, deckID: nil, now: beforeFour.addingTimeInterval(60), calendar: calendar)
+            XCTAssertEqual(calendar.component(.day, from: afterFour[0].forecast.days[0].start), 15)
+            data.decks[0].isStudyPaused = true
+            XCTAssertTrue(try ForecastScenario.compare(data: data, deckID: nil, now: beforeFour, calendar: calendar).allSatisfy { $0.forecast.projectedAnswers == 0 })
+        }
+        var siblings = before
+        siblings.preferences[0].dailyNewLimit = 20
+        var options = try JSONDecoder().decode(StudyOptions.self, from: siblings.options[0].payload)
+        options.deckLearning = nil; options.siblingBuryEnabled = true
+        siblings.options[0].payload = try JSONEncoder().encode(options)
+        let buried = try ForecastScenario.compare(data: siblings, deckID: deck, now: beforeFour, calendar: calendar)
+        XCTAssertEqual(buried[0].forecast.days[0].newCards, 6) // One of each pair, not both siblings.
+        XCTAssertEqual(try BackupData.capture(repo).canonical(), before) // Includes active session and settings.
+    }
+}

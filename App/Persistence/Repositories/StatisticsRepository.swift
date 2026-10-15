@@ -417,6 +417,36 @@ actor ExamPlanReader {
     private let container: ModelContainer
     init(container: ModelContainer) { self.container = container }
 
+    private static func capture(_ container: ModelContainer) throws -> BackupData {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        var snapshot = BackupData()
+        snapshot.decks = try context.fetch(FetchDescriptor<Deck>()).map(BackupDeck.init)
+        try Task.checkCancellation()
+        snapshot.notes = try context.fetch(FetchDescriptor<Note>()).map(BackupNote.init)
+        try Task.checkCancellation()
+        snapshot.cards = try context.fetch(FetchDescriptor<StudyCard>()).map(BackupStudyCard.init)
+        try Task.checkCancellation()
+        snapshot.logs = try context.fetch(FetchDescriptor<StudyReviewLog>()).map(BackupStudyReviewLog.init)
+        try Task.checkCancellation()
+        snapshot.preferences = try context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
+        snapshot.options = try context.fetch(FetchDescriptor<ExtraPreferences>()).map(BackupExtraPreferences.init)
+        snapshot.tags = try context.fetch(FetchDescriptor<Tag>()).map(BackupTag.init)
+        return snapshot
+    }
+
+    func loadForecast(deckID: UUID?, days: Int, now: Date, calendar: Calendar) throws -> ForecastLoad {
+        let onMain = Thread.isMainThread, start = ProcessInfo.processInfo.systemUptime
+        let data = try Self.capture(container)
+        let captured = ProcessInfo.processInfo.systemUptime
+        let report = try ReviewForecast.calculate(data: data, deckID: deckID, days: days, now: now, calendar: calendar)
+        let scenarios = try ForecastScenario.compare(data: data, deckID: deckID, now: now, calendar: calendar,
+                                                     current: days == 7 ? report : nil)
+        try Task.checkCancellation()
+        return ForecastLoad(report: report, scenarios: scenarios, captureSeconds: captured - start,
+                            calculationSeconds: ProcessInfo.processInfo.systemUptime - captured, capturedOnMainThread: onMain)
+    }
+
     func load(planID: UUID, now: Date, calendar: Calendar) throws -> ExamPlanLoad {
         try Task.checkCancellation()
         let capturedOnMainThread = Thread.isMainThread
@@ -424,21 +454,7 @@ actor ExamPlanReader {
         let readInterval = PerformanceProbe.begin("ExamPlan.read")
         let data: BackupData
         do {
-            let context = ModelContext(container)
-            context.autosaveEnabled = false
-            var snapshot = BackupData()
-            snapshot.decks = try context.fetch(FetchDescriptor<Deck>()).map(BackupDeck.init)
-            try Task.checkCancellation()
-            snapshot.notes = try context.fetch(FetchDescriptor<Note>()).map(BackupNote.init)
-            try Task.checkCancellation()
-            snapshot.cards = try context.fetch(FetchDescriptor<StudyCard>()).map(BackupStudyCard.init)
-            try Task.checkCancellation()
-            snapshot.logs = try context.fetch(FetchDescriptor<StudyReviewLog>()).map(BackupStudyReviewLog.init)
-            try Task.checkCancellation()
-            snapshot.preferences = try context.fetch(FetchDescriptor<StudyPreferences>()).map(BackupStudyPreferences.init)
-            snapshot.options = try context.fetch(FetchDescriptor<ExtraPreferences>()).map(BackupExtraPreferences.init)
-            snapshot.tags = try context.fetch(FetchDescriptor<Tag>()).map(BackupTag.init)
-            data = snapshot
+            data = try Self.capture(container)
         } catch { PerformanceProbe.end(readInterval); throw error }
         PerformanceProbe.end(readInterval)
         let captureSeconds = ProcessInfo.processInfo.systemUptime - start
@@ -460,4 +476,12 @@ actor ExamPlanReader {
                             calculationSeconds: ProcessInfo.processInfo.systemUptime - calculateStart,
                             cardCount: data.cards.count, logCount: data.logs.count, capturedOnMainThread: capturedOnMainThread)
     }
+}
+
+struct ForecastLoad: Sendable {
+    let report: ReviewForecast
+    let scenarios: [ForecastScenario]
+    let captureSeconds: Double
+    let calculationSeconds: Double
+    let capturedOnMainThread: Bool
 }

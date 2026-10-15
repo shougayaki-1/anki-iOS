@@ -1,6 +1,30 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testForecastComparisonPeriodDeckAndScreenshot() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]
+        app.launch()
+        let open = app.buttons["openReviewForecast"]
+        XCTAssertTrue(open.waitForExistence(timeout: 20))
+        for _ in 0..<8 where !open.isHittable { app.swipeUp() }
+        open.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScenario-10"].waitForExistence(timeout: 15))
+        attach(app, name: "issue188-comparison-current-half-zero")
+        app.swipeUp()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScenario-0"].exists)
+        attach(app, name: "issue188-comparison-zero")
+        app.swipeDown(); app.swipeDown()
+        app.segmentedControls["forecastPeriod"].buttons["30日"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScenario-10"].waitForExistence(timeout: 15))
+        app.buttons["forecastDeck"].tap()
+        app.buttons["マイデッキ"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScenario-10"].waitForExistence(timeout: 15))
+        app.buttons["refreshForecast"].tap()
+        XCTAssertTrue(app.descendants(matching: .any)["forecastScenario-10"].waitForExistence(timeout: 15))
+        app.terminate()
+    }
+
     func testInsightEvidenceNavigationAndSnapshots() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]
