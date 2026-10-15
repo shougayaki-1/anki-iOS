@@ -633,6 +633,25 @@ final class StudyRepository {
         return SessionAnswerProgress(answered: answered, limit: saved.answerLimit)
     }
 
+    // Use the persisted model identity, never the singleton draft key or log count.
+    // Replacement sessions (including after restore) cannot revive an old link.
+    func activitySessionID() throws -> String? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return try session().map { try encoder.encode($0.persistentModelID).base64EncodedString() }
+    }
+
+    func activitySnapshot(now: Date, foreground: Bool) throws -> StudyActivitySnapshot? {
+        guard let draft = try session(), let id = try activitySessionID(),
+              let display = try presentation(now: now), let progress = display.sessionProgress,
+              !progress.isComplete, display.emptyState?.reason != .complete else { return nil }
+        let fixed = try options().activeSessionProgress?.reviewSetLimit != nil
+        return StudyActivitySnapshot(sessionID: id, state: StudyActivityState(
+            mode: display.mode == .new ? "新規" : display.mode == .review ? "復習" : "新規・復習",
+            answered: progress.answered, total: progress.limit > 0 ? progress.limit : nil,
+            fixedCards: fixed, paused: !foreground || draft.activeSince == nil || draft.cardID == nil))
+    }
+
     func start(mode: StudyMode, scope: LearningScope = LearningScope(), answerLimit: Int? = nil, responseMode: SessionResponseMode? = nil, policy: ReviewOrderPolicy = .traditional, customStudy: CustomStudyCondition? = nil, customCardIDs: [UUID]? = nil, preferredCardID: UUID? = nil, now: Date) throws {
         let interval = PerformanceProbe.begin("Repository.start")
         defer { PerformanceProbe.end(interval) }
@@ -955,15 +974,7 @@ final class StudyRepository {
             OrderingAnswer.reason(kind: $0.kind, answer: $0.content.answer) ?? (ordering == nil ? OrderingError.invalidDraft.localizedDescription : nil)
         } : nil
         let sessionAnswerProgress = try sessionProgress()
-        let savedProgress = try options().activeSessionProgress
-        let visibleAnswerTotal: Int? = sessionAnswerProgress.flatMap { progress in
-            guard progress.limit > 0 else { return nil }
-            // Only the one-pass review set has a finite, frozen target count.
-            // New, mixed and legacy sessions retain their actual-question estimate.
-            if savedProgress?.reviewSetLimit != nil || progress.isComplete { return progress.limit }
-            if item == nil { return max(1, progress.answered) }
-            return min(progress.limit, max(savedProgress?.initialEligibleCount ?? progress.limit, progress.answered + 1))
-        }
+        let visibleAnswerTotal = sessionAnswerProgress.flatMap { $0.limit > 0 ? $0.limit : nil }
         return ReviewPresentation(card: item, mode: mode,
                                   responseMode: requested == .ordering && reason != nil ? .mental : requested,
                                   typedDraft: draft.typedDraft, answerRevealed: draft.answerRevealed,
