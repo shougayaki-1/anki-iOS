@@ -324,7 +324,7 @@ final class StudyStore {
         } catch { homeCards = nil; homeFailure = error.localizedDescription }
     }
     private func publishWidget(_ snapshot: HomeSnapshot, force: Bool, cards: [QueueCard]? = nil, logs: [QueueLog]? = nil) {
-        widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force, cards: cards, logs: logs) { [weak self] message in
+        widgetSnapshots?.publish(repository: repository, snapshot: snapshot, settings: settings, now: clock(), force: force, reader: statisticsReader, cards: cards, logs: logs) { [weak self] message in
             self?.widgetFailure = message
         }
     }

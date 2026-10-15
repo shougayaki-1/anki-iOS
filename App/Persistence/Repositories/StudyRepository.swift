@@ -1102,17 +1102,13 @@ extension StudyRepository {
     // First rating of a day only: probe occupied days, never load the whole history
     // into the synchronous grade/queue hot path.
     private func consecutiveAchievementDays(now: Date, startHour: Int) throws -> Int {
-        let day = StudyDay(calendar: calendar, startHour: startHour)
-        var interval = day.interval(containing: now), count = 0
-        while true {
+        try AchievementProgress.consecutiveDays(now: now, calendar: calendar, startHour: startHour) { interval in
             let start = interval.start, end = interval.end
             var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
                 $0.reviewedAt >= start && $0.reviewedAt < end && $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4
             })
             fetch.fetchLimit = 1
-            guard try !context.fetch(fetch).isEmpty else { return count }
-            count += 1
-            interval = day.interval(containing: calendar.date(byAdding: .day, value: -1, to: interval.start)!)
+            return try !context.fetch(fetch).isEmpty
         }
     }
 

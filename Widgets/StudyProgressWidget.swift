@@ -161,7 +161,7 @@ struct DailyCardWidget: Widget {
     }
 }
 @main struct StudyWidgets: WidgetBundle {
-    var body: some Widget { StudyProgressWidget(); DailyCardWidget() }
+    var body: some Widget { StudyProgressWidget(); DailyCardWidget(); StudyStreakWidget() }
 }
 
 #Preview("今日の1枚・Small", as: .systemSmall) {
@@ -177,3 +177,111 @@ struct DailyCardWidget: Widget {
     DailyCardEntry(date: Date(), card: nil, available: true)
     DailyCardEntry(date: Date(), card: nil, available: false)
 }
+
+struct StreakEntry: TimelineEntry {
+    let date: Date
+    let progress: WidgetStreakPoint?
+    let goal: Int?
+}
+struct StreakProvider: TimelineProvider {
+    func placeholder(in context: Context) -> StreakEntry { Self.sample }
+    func getSnapshot(in context: Context, completion: @escaping (StreakEntry) -> Void) {
+        completion(context.isPreview ? Self.sample : entry(Date(), WidgetSnapshotFile.shared().read()))
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<StreakEntry>) -> Void) {
+        let now = Date(), snapshot = WidgetSnapshotFile.shared().read()
+        let dates = [now] + (snapshot?.streak?.map(\.date).filter { $0 > now } ?? []) + (snapshot.map { [$0.expiresAt] } ?? [])
+        completion(Timeline(entries: dates.sorted().map { entry($0, snapshot) }, policy: .after(now.addingTimeInterval(3600))))
+    }
+    private func entry(_ date: Date, _ snapshot: WidgetSnapshot?) -> StreakEntry {
+        StreakEntry(date: date, progress: snapshot?.streakPoint(at: date), goal: snapshot?.dailyGoal)
+    }
+    static var sample: StreakEntry {
+        let now = Date(), calendar = Calendar.current
+        return StreakEntry(date: now, progress: WidgetStreakPoint(date: now, days: 7, studiedToday: true, uniqueCards: 12, hasHistory: true, milestone: true,
+            week: (-6...0).map { WidgetStudyDay(date: calendar.date(byAdding: .day, value: $0, to: now)!, studied: true) }), goal: 20)
+    }
+}
+struct StreakWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+    let entry: StreakEntry
+    private let primary = Color("PrimaryAction")
+    private var reached: Bool { entry.goal.map { (entry.progress?.uniqueCards ?? 0) >= $0 } ?? false }
+    private var message: String {
+        guard let p = entry.progress else { return "アプリを開いて更新" }
+        if reached { return "今日の目標を達成しました" }
+        if p.milestone { return "今日で\(p.days)日連続" }
+        if p.studiedToday { return p.days == 1 ? "今日の一歩を記録" : "今日も学習しました" }
+        if !p.hasHistory { return "最初の一歩を、今日から" }
+        return p.days > 0 ? "今日も少し覚えよう" : "また今日から始めよう"
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 5) {
+                Image(systemName: entry.progress?.milestone == true ? "flame.circle.fill" : "flame.fill").foregroundStyle(primary)
+                Text("学習の積み重ね").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                if reached { Image(systemName: "checkmark.seal.fill").foregroundStyle(primary) }
+                if family == .systemMedium { Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary) }
+            }
+            if let p = entry.progress {
+                HStack(alignment: .center, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: .firstTextBaseline, spacing: 3) {
+                            Text("\(p.days)").font(.system(size: family == .systemSmall ? 40 : 36, weight: .bold, design: .rounded))
+                            Text("日").font(.headline)
+                        }
+                        Text(p.days > 0 ? (p.studiedToday ? "連続で学習" : "昨日まで連続") : "今日からの一歩").font(.caption2).foregroundStyle(.secondary)
+                    }.fixedSize(horizontal: true, vertical: false)
+                    if family == .systemMedium {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("直近7日 · 右端が今日").font(.caption2).foregroundStyle(.secondary)
+                            HStack(spacing: 0) {
+                                ForEach(p.week, id: \.date) { day in
+                                    VStack(spacing: 4) {
+                                        Text(day.date, format: .dateTime.weekday(.narrow)).font(.caption2)
+                                        ZStack {
+                                            Circle().fill(day.studied ? primary : Color.clear)
+                                            Image(systemName: day.studied ? "checkmark" : "circle")
+                                                .font(.system(size: day.studied ? 9 : 16, weight: .semibold))
+                                                .foregroundStyle(day.studied ? Color.white : Color.secondary.opacity(0.6))
+                                        }.frame(width: 17, height: 17)
+                                        Text(day.date, format: .dateTime.day()).font(.system(size: 9)).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity)
+                                    .accessibilityLabel("\(day.date.formatted(date: .abbreviated, time: .omitted))、\(day.studied ? "学習済み" : "未学習")")
+                                }
+                            }
+                        }
+                    }
+                }.privacySensitive()
+                Text(message).font(.caption).lineLimit(1).minimumScaleFactor(0.85).privacySensitive()
+                if family == .systemMedium, let goal = entry.goal {
+                    ProgressView(value: Double(min(p.uniqueCards, goal)), total: Double(goal)) {
+                        Text("今日の目標  \(p.uniqueCards) / \(goal)枚").font(.caption2)
+                    }.tint(primary).privacySensitive()
+                }
+                if family == .systemSmall {
+                    Spacer(minLength: 0)
+                    Text(p.studiedToday ? "記録を見る ›" : "アプリで学習する ›").font(.caption2.weight(.semibold)).foregroundStyle(.primary)
+                }
+            } else {
+                Spacer()
+                Text(message).font(.headline)
+                Text("学習の記録をここに").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+        }
+        .containerBackground(for: .widget) { Color(.systemBackground) }
+        .widgetURL(URL(string: entry.progress?.studiedToday == true ? "ankistudy://widget/progress" : "ankistudy://widget/home"))
+    }
+}
+struct StudyStreakWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "StudyStreakWidget", provider: StreakProvider()) { StreakWidgetView(entry: $0) }
+            .configurationDisplayName("連続学習と今日の目標")
+            .description("日々の積み重ねと直近7日の学習、今日の目標を確認できます。更新時刻はiOSが管理します。")
+            .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+#Preview("連続学習・Small", as: .systemSmall) { StudyStreakWidget() } timeline: { StreakProvider.sample }
+#Preview("連続学習・Medium", as: .systemMedium) { StudyStreakWidget() } timeline: { StreakProvider.sample }

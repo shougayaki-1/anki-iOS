@@ -143,7 +143,7 @@ struct AppRootView: View {
                 #endif
                 storageLocation = StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore)
                 recoveryMediaStore = mediaStore
-                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || (ProcessInfo.processInfo.arguments.contains("-study-test-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-daily-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget-empty"))) ? WidgetSnapshotPublisher(file: .shared()) : nil)
+                store = try StudyStore(container: PersistenceController.makeStudyContainer(storeURL: studyURL, mediaStore: mediaStore), mediaStore: mediaStore, storageLocation: StudyStorageLocation(canonicalStore: studyURL ?? StudyStorageLocation.defaultStore), notifications: notifications, widgetSnapshots: (studyURL == nil || (ProcessInfo.processInfo.arguments.contains("-study-test-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-daily-widget") || ProcessInfo.processInfo.arguments.contains("-study-test-widget-empty") || ProcessInfo.processInfo.arguments.contains("-study-test-streak-widget"))) ? WidgetSnapshotPublisher(file: .shared()) : nil)
                 #if DEBUG
                 if studyURL != nil, args.contains("-study-test-deck-update"), let store,
                    let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
@@ -164,6 +164,23 @@ struct AppRootView: View {
                 }
                 if studyURL != nil, let index = args.firstIndex(of: "-study-test-recommendation"), args.count > index + 1, let store {
                     try UITestFixtures.populateHomeRecommendation(store, scenario: args[index + 1])
+                }
+                if studyURL != nil, args.contains("-study-test-streak-widget"), let store {
+                    let repo = store.repository, now = store.clock()
+                    if try repo.notes().isEmpty {
+                        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "毎日の小さな一歩", answer: "積み重ね"), now: now.addingTimeInterval(-7 * 86400))
+                        var settings = try repo.settings(); settings.dailyGoal = 2
+                        try repo.updateSettings(settings)
+                        try repo.start(mode: .new, answerLimit: 0, now: now.addingTimeInterval(-6 * 86400))
+                        for offset in -6...0 {
+                            let date = now.addingTimeInterval(Double(offset) * 86400)
+                            if offset > -6 { try repo.resume(now: date) }
+                            try repo.updateDraft(revealed: true, now: date)
+                            try repo.grade(.again, now: date)
+                        }
+                        try repo.setSessionActive(false, now: now)
+                    }
+                    try store.reload()
                 }
                 if studyURL != nil, args.contains("-study-test-daily-widget"), let store {
                     if try store.repository.notes().isEmpty {

@@ -385,6 +385,18 @@ struct AchievementProgress {
     let studiedToday: Bool
     let uniqueCardsToday: Int
 
+    // Shared occupied-day probe used by achievement saves and the read-only widget projection.
+    static func consecutiveDays(now: Date, calendar: Calendar, startHour: Int,
+                                hasStudy: (DateInterval) throws -> Bool) rethrows -> Int {
+        let day = StudyDay(calendar: calendar, startHour: startHour)
+        var interval = day.interval(containing: now), count = 0
+        while try hasStudy(interval) {
+            count += 1
+            interval = day.interval(containing: calendar.date(byAdding: .day, value: -1, to: interval.start)!)
+        }
+        return count
+    }
+
     static func dayKey(_ date: Date, calendar: Calendar, startHour: Int) -> String {
         let start = StudyDay(calendar: calendar, startHour: startHour).interval(containing: date).start
         let parts = calendar.dateComponents([.year, .month, .day], from: start)

@@ -87,6 +87,9 @@ final class BackupRepositoryTests: XCTestCase {
         XCTAssertEqual(try reopened.session()?.typedDraft, "未確定の回答")
         XCTAssertTrue(try reopened.noteItems().allSatisfy { $0.sourceContent.hint == "共通の手がかり\n二行目" })
         XCTAssertEqual(try reopened.editorDraft(key: "new")?.hint, "下書きヒント")
+        let sourceWidget = try await StatisticsReader(container: source.context.container).widgetStreak(now: now, calendar: source.calendar, startHour: source.settings().dayStartHour)
+        let restoredWidget = try await StatisticsReader(container: reopened.context.container).widgetStreak(now: now, calendar: source.calendar, startHour: reopened.settings().dayStartHour)
+        XCTAssertEqual(restoredWidget, sourceWidget)
         let previous = try XCTUnwrap(reopened.logs().last)
         let cardID = previous.cardID, before = previous.fsrsBefore
         try reopened.undo(now: now.addingTimeInterval(10))

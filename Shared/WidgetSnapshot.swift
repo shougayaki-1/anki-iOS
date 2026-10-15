@@ -17,6 +17,7 @@ struct WidgetSnapshot: Codable, Equatable, Sendable {
     let dayStartHour: Int
     let dailyGoal: Int?
     let points: [WidgetPoint]
+    var streak: [WidgetStreakPoint]? = nil
     var dailyCard: DailyWidgetCard? = nil
     var dailyCardExpiresAt: Date? = nil
 
@@ -102,5 +103,31 @@ struct DailyWidgetCard: Codable, Equatable, Sendable {
     let requiresApp: Bool
     func url(answer: Bool = false) -> URL {
         URL(string: "ankistudy://widget/card/\(id.uuidString)\(answer ? "/answer" : "")")!
+    }
+}
+
+// Fully evaluated in the app; the extension only selects a dated value.
+struct WidgetStudyDay: Codable, Equatable, Sendable {
+    let date: Date
+    let studied: Bool
+}
+struct WidgetStreakPoint: Codable, Equatable, Sendable {
+    let date: Date
+    let days: Int
+    let studiedToday: Bool
+    let uniqueCards: Int
+    let hasHistory: Bool
+    let milestone: Bool
+    let week: [WidgetStudyDay]
+}
+extension WidgetSnapshot {
+    func streakPoint(at date: Date, timeZone: TimeZone = .current) -> WidgetStreakPoint? {
+        guard point(at: date, timeZone: timeZone) != nil, let streak,
+              !streak.isEmpty, streak.count <= 8, streak.first?.date == generatedAt,
+              zip(streak, streak.dropFirst()).allSatisfy({ $0.date < $1.date }),
+              streak.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && (0...300_000).contains($0.days) && (0...300_000).contains($0.uniqueCards) && $0.week.count == 7
+                  && $0.week.allSatisfy { $0.date.timeIntervalSince1970.isFinite }
+                  && zip($0.week, $0.week.dropFirst()).allSatisfy { $0.date < $1.date } }) else { return nil }
+        return streak.last { $0.date <= date }
     }
 }

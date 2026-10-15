@@ -198,6 +198,57 @@ actor StatisticsReader {
         return report
     }
 
+    // Bounded occupied-day probes reuse achievement semantics without decoding FSRS
+    // or fetching all ReviewLogs just to refresh a widget. Work stays on this actor.
+    func widgetStreak(now: Date, calendar: Calendar, startHour: Int) throws -> [WidgetStreakPoint] {
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let day = StudyDay(calendar: calendar, startHour: startHour)
+        let today = day.interval(containing: now)
+        func hasStudy(_ interval: DateInterval) throws -> Bool {
+            try Task.checkCancellation()
+            let start = interval.start, end = interval.end
+            var fetch = FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+                $0.reviewedAt >= start && $0.reviewedAt < end && $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4
+            })
+            fetch.fetchLimit = 1
+            return try !context.fetch(fetch).isEmpty
+        }
+        let start = today.start
+        let logs = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+            $0.reviewedAt >= start && $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4
+        }))
+        let todayProgress = AchievementProgress.calculate(logs: logs.map { ($0.cardID, $0.reviewedAt) },
+            now: now, calendar: calendar, startHour: startHour)
+        let studied = todayProgress.studiedToday
+        let streakDate = studied ? now : calendar.date(byAdding: .day, value: -1, to: today.start)!
+        let current = try AchievementProgress.consecutiveDays(now: streakDate, calendar: calendar, startHour: startHour, hasStudy: hasStudy)
+        var any = FetchDescriptor<StudyReviewLog>(predicate: #Predicate { $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4 })
+        any.fetchLimit = 1
+        let hasHistory = try !context.fetch(any).isEmpty
+        var occupied: [Date: Bool] = [:]
+        for offset in -6...0 {
+            let interval = day.interval(containing: calendar.date(byAdding: .day, value: offset, to: today.start)!)
+            occupied[interval.start] = try hasStudy(interval)
+        }
+        let unique = todayProgress.uniqueCardsToday
+        return (0..<8).map { offset in
+            let interval = day.interval(containing: calendar.date(byAdding: .day, value: offset, to: today.start)!)
+            let week = (-6...0).map { delta in
+                let date = day.interval(containing: calendar.date(byAdding: .day, value: delta, to: interval.start)!).start
+                return WidgetStudyDay(date: date, studied: occupied[date] == true)
+            }
+            // No future ratings are assumed. Yesterday's run survives one boundary only.
+            let days = offset == 0 || (offset == 1 && studied) ? current : 0
+            return WidgetStreakPoint(date: offset == 0 ? now : interval.start, days: days,
+                studiedToday: offset == 0 && studied,
+                uniqueCards: offset == 0 ? unique : 0,
+                hasHistory: hasHistory,
+                milestone: offset == 0 && studied && AchievementProgress.streakMilestones.contains(days) && days > 1,
+                week: week)
+        }
+    }
+
     private func achievements(material: Material, now: Date, calendar: Calendar,
                               startHour: Int, day: Date) throws -> AchievementStatistics {
         if let entry = achievementReport, entry.calendar == calendar, entry.startHour == startHour,

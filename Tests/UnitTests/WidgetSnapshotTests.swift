@@ -73,6 +73,59 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertEqual(publisher.projectionCount, 3)
         XCTAssertTrue(try repo.logs().isEmpty)
     }
+    @MainActor func testStreakProjectionUsesAchievementsAndClearsAtStudyBoundaries() async throws {
+        let container = try PersistenceController.makeStudyContainer(inMemory: true)
+        let repo = StudyRepository(container: container, calendar: calendar)
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 3, minute: 59))!
+        try repo.initialize(now: now)
+        let reader = StatisticsReader(container: container)
+        let empty = try await reader.widgetStreak(now: now, calendar: calendar, startHour: 4)
+        XCTAssertFalse(empty[0].hasHistory)
+        try repo.createNote(NoteInput(deckID: repo.decks()[0].id, question: "Q", answer: "A"), now: now.addingTimeInterval(-8 * 86400))
+        try repo.start(mode: .new, answerLimit: 0, now: now.addingTimeInterval(-6 * 86400))
+        for offset in -6...0 {
+            let date = now.addingTimeInterval(Double(offset) * 86400)
+            if offset > -6 { try repo.resume(now: date) }
+            try repo.updateDraft(revealed: true, now: date)
+            try repo.grade(.again, now: date)
+            let first = try await reader.widgetStreak(now: date, calendar: calendar, startHour: 4)
+            XCTAssertEqual(first[0].days, offset + 7)
+            XCTAssertEqual(first[0].uniqueCards, 1)
+        }
+        let values = try await reader.widgetStreak(now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(values[0].days, 7)
+        XCTAssertTrue(values[0].milestone)
+        XCTAssertTrue(values[0].week.allSatisfy(\.studied))
+        XCTAssertEqual(values[0].uniqueCards, 1)
+        XCTAssertEqual(values[1].date.timeIntervalSince(now), 60)
+        XCTAssertEqual(values[1].days, 7)
+        XCTAssertFalse(values[1].studiedToday)
+        XCTAssertEqual(values[1].uniqueCards, 0)
+        XCTAssertEqual(values[2].days, 0)
+        XCTAssertTrue(values[2].hasHistory)
+        try repo.undo(now: now)
+        let undone = try await reader.widgetStreak(now: now, calendar: calendar, startHour: 4)
+        XCTAssertEqual(undone[0].days, 6)
+        XCTAssertFalse(undone[0].studiedToday)
+        XCTAssertEqual(undone[1].days, 0)
+        for zoneID in ["Asia/Tokyo", "America/Los_Angeles"] {
+            var changed = calendar; changed.timeZone = TimeZone(identifier: zoneID)!
+            let shifted = try await reader.widgetStreak(now: now, calendar: changed, startHour: 4)
+            let canonical = try AchievementProgress.calculate(logs: repo.logs().map { ($0.cardID, $0.reviewedAt) }, now: now, calendar: changed, startHour: 4)
+            XCTAssertEqual(shifted[0].days, canonical.currentStreak)
+            XCTAssertEqual(shifted[0].uniqueCards, canonical.uniqueCardsToday)
+            XCTAssertEqual(shifted[0].studiedToday, canonical.studiedToday)
+        }
+        let zone = TimeZone(identifier: "Asia/Tokyo")!
+        var snapshot = WidgetSnapshot(generatedAt: now, expiresAt: now.addingTimeInterval(8 * 86400), timeZone: calendar.timeZone.identifier,
+            dayStartHour: 4, dailyGoal: nil, points: [WidgetPoint(date: now, due: 0, newAvailable: 0, learnedToday: 1, answersToday: 1)])
+        let oldBytes = try JSONEncoder().encode(snapshot)
+        XCTAssertNil(try JSONDecoder().decode(WidgetSnapshot.self, from: oldBytes).streak)
+        snapshot.streak = values
+        XCTAssertNil(snapshot.streakPoint(at: now, timeZone: zone))
+        XCTAssertEqual(snapshot.streakPoint(at: values[1].date, timeZone: calendar.timeZone)?.uniqueCards, 0)
+        XCTAssertNil(snapshot.streakPoint(at: snapshot.expiresAt, timeZone: calendar.timeZone))
+    }
     private var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!; return c }
     func testDueNewProgressAndStudyDayBoundaryUseSavedSchedules() throws {
         let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 11, hour: 3, minute: 59))!

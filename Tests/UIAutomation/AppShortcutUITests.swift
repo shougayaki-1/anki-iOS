@@ -169,3 +169,48 @@ final class DailyWidgetUITests: XCTestCase {
         shot("daily-widget-empty")
     }
 }
+
+final class StreakWidgetUITests: XCTestCase {
+    func testStreakGalleryHomeAndRecordLink() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-streak-widget"]
+        app.launch()
+        XCUIDevice.shared.press(.home)
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let existing = springboard.staticTexts.matching(identifier: "学習の積み重ね").allElementsBoundByIndex.first { $0.isHittable }
+        let icon = springboard.icons.matching(identifier: "暗記ノート").allElementsBoundByIndex.first { $0.isHittable }
+        guard let target = existing ?? icon else { XCTFail("Visible widget or app icon missing"); return }
+        target.press(forDuration: 1.5)
+        let editHome = springboard.buttons["ホーム画面を編集"]
+        XCTAssertTrue(editHome.waitForExistence(timeout: 5)); editHome.tap()
+        springboard.buttons["編集"].tap()
+        springboard.buttons["ウィジェットを追加"].tap()
+        let search = springboard.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 10)); search.tap(); search.typeText("暗記ノート")
+        let appCell = springboard.cells["暗記ノート"]
+        XCTAssertTrue(appCell.waitForExistence(timeout: 10)); appCell.tap()
+        XCTAssertTrue(springboard.staticTexts["復習と今日の進捗"].waitForExistence(timeout: 10))
+        shot("regression-progress-small")
+        springboard.swipeLeft(); shot("regression-progress-medium")
+        springboard.swipeLeft(); shot("regression-daily-small")
+        springboard.swipeLeft(); shot("regression-daily-medium")
+        springboard.swipeLeft()
+        XCTAssertTrue(springboard.staticTexts["連続学習と今日の目標"].waitForExistence(timeout: 10))
+        shot("streak-small")
+        springboard.swipeLeft(); shot("streak-medium")
+        springboard.swipeRight()
+        springboard.buttons[" ウィジェットを追加"].tap()
+        let done = springboard.buttons["完了"]
+        if done.waitForExistence(timeout: 5) { done.tap() }
+        XCTAssertTrue(springboard.staticTexts["学習の積み重ね"].firstMatch.waitForExistence(timeout: 15))
+        shot("streak-home")
+        springboard.staticTexts["学習の積み重ね"].firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["積み重ねた学習"].firstMatch.waitForExistence(timeout: 10))
+        shot("streak-record-link")
+        XCUIDevice.shared.press(.home)
+    }
+    private func shot(_ name: String) {
+        let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+    }
+}
