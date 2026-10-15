@@ -1402,3 +1402,30 @@ private actor CustomStudyHistoryReader {
         return ids
     }
 }
+
+
+extension StudyRepository {
+    func widgetStreakDays(now: Date, settings: StudySettings) throws -> [WidgetStreakDay] {
+        let day = StudyDay(calendar: calendar, startHour: settings.dayStartHour)
+        let today = day.interval(containing: now).start
+        let start = calendar.date(byAdding: .day, value: -6, to: today)!
+        // Only seven days of logs, plus the existing occupied-day probes for
+        // the unbounded streak. Never fetch all cards or all review history.
+        let recent = try context.fetch(FetchDescriptor<StudyReviewLog>(predicate: #Predicate {
+            $0.reviewedAt >= start && $0.reviewedAt <= now && $0.grade >= 1 && $0.grade <= 4
+        })).map { (cardID: $0.cardID, date: $0.reviewedAt) }
+        let progress = AchievementProgress.calculate(logs: recent, now: now, calendar: calendar, startHour: settings.dayStartHour)
+        let anchor = progress.studiedToday ? now : today.addingTimeInterval(-1)
+        let streak = try consecutiveAchievementDays(now: anchor, startHour: settings.dayStartHour)
+        let occupied = Set(recent.map { day.interval(containing: $0.date).start })
+        return (0..<8).map { offset in
+            let date = day.interval(containing: calendar.date(byAdding: .day, value: offset, to: today)!).start
+            let markers = (-6...0).map { delta in
+                occupied.contains(day.interval(containing: calendar.date(byAdding: .day, value: delta, to: date)!).start)
+            }
+            return WidgetStreakDay(date: date,
+                streak: offset == 0 ? streak : (offset == 1 && progress.studiedToday ? streak : 0),
+                cards: offset == 0 ? progress.uniqueCardsToday : 0, recent: markers)
+        }
+    }
+}

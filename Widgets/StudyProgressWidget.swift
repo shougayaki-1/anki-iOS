@@ -161,7 +161,7 @@ struct DailyCardWidget: Widget {
     }
 }
 @main struct StudyWidgets: WidgetBundle {
-    var body: some Widget { StudyProgressWidget(); DailyCardWidget() }
+    var body: some Widget { StudyProgressWidget(); DailyCardWidget(); StudyStreakWidget() }
 }
 
 #Preview("今日の1枚・Small", as: .systemSmall) {
@@ -176,4 +176,143 @@ struct DailyCardWidget: Widget {
     DailyCardEntry(date: Date(), card: DailyWidgetCard(id: UUID(), deck: "長文のデッキ", question: String(repeating: "長い問題文の読みやすさを確認します。", count: 10), requiresApp: false), available: true)
     DailyCardEntry(date: Date(), card: nil, available: true)
     DailyCardEntry(date: Date(), card: nil, available: false)
+}
+
+
+struct StreakEntry: TimelineEntry {
+    let date: Date
+    let day: WidgetStreakDay?
+    let goal: Int?
+}
+struct StreakProvider: TimelineProvider {
+    func placeholder(in context: Context) -> StreakEntry { .sample }
+    func getSnapshot(in context: Context, completion: @escaping (StreakEntry) -> Void) {
+        completion(context.isPreview ? .sample : entry(Date(), WidgetSnapshotFile.shared().read()))
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<StreakEntry>) -> Void) {
+        let now = Date(), snapshot = WidgetSnapshotFile.shared().read()
+        guard let snapshot, snapshot.streak(at: now) != nil else {
+            completion(Timeline(entries: [entry(now, nil)], policy: .after(now.addingTimeInterval(3600))))
+            return
+        }
+        let dates = [now] + (snapshot.streakDays ?? []).map(\.date).filter { $0 > now && $0 < snapshot.expiresAt } + [snapshot.expiresAt]
+        completion(Timeline(entries: dates.map { entry($0, snapshot) }, policy: .after(snapshot.expiresAt)))
+    }
+    private func entry(_ date: Date, _ snapshot: WidgetSnapshot?) -> StreakEntry {
+        StreakEntry(date: date, day: snapshot?.streak(at: date), goal: snapshot?.dailyGoal)
+    }
+}
+extension StreakEntry {
+    static var sample: Self {
+        Self(date: Date(), day: WidgetStreakDay(date: Calendar.current.startOfDay(for: Date()), streak: 7, cards: 12,
+            recent: [true, true, true, true, true, true, true]), goal: 20)
+    }
+}
+struct StreakWidgetView: View {
+    @Environment(\.widgetFamily) private var family
+    @Environment(\.colorScheme) private var colorScheme
+    let entry: StreakEntry
+    private var primary: Color {
+        guard colorScheme == .dark else { return Color("PrimaryAction") }
+        // The shared action color is designed as a filled button background.
+        // Lift the same hue for small foreground symbols on dark widget surfaces.
+        let color = (UIColor(named: "PrimaryAction") ?? .systemBlue)
+            .resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
+        color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+        return Color(red: Double(red * 0.65 + 0.35), green: Double(green * 0.65 + 0.35), blue: Double(blue * 0.65 + 0.35))
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let day = entry.day {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Image(systemName: day.studied ? "flame.fill" : "flame")
+                                .foregroundStyle(day.studied ? primary : .secondary)
+                            Text("連続学習").foregroundStyle(.secondary)
+                        }.font(.caption.weight(.semibold))
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text("\(day.streak)").font(.system(size: family == .systemSmall ? 44 : 36, weight: .bold, design: .rounded)).minimumScaleFactor(0.6)
+                            Text("日").font(.subheadline.weight(.semibold))
+                        }.lineLimit(1)
+                        if family == .systemMedium {
+                            Text(day.studied ? "今日も学習済み" : (day.streak > 0 ? "昨日まで継続中" : "今日の1枚から"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: family == .systemMedium ? 98 : nil, alignment: .leading)
+                    if family == .systemMedium {
+                        Spacer(minLength: 0)
+                        week(day)
+                    }
+                }
+                Spacer(minLength: 0)
+                if family == .systemSmall {
+                    Label(day.studied ? "今日は学習済み" : "今日の1枚から", systemImage: day.studied ? "checkmark.circle.fill" : "plus.circle")
+                        .font(.caption.weight(.semibold)).foregroundStyle(day.studied ? primary : .primary)
+                    Text(day.studied ? "記録を見る ›" : (day.streak > 0 ? "昨日まで継続中" : "アプリで学習 ›")).font(.caption).foregroundStyle(.secondary)
+                } else if let goal = entry.goal {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack {
+                            Label(day.cards >= goal ? "今日の目標を達成" : "今日の目標", systemImage: day.cards >= goal ? "checkmark.seal.fill" : "circle.dotted")
+                            Spacer(minLength: 4)
+                            Text("\(day.cards) / \(goal)枚").monospacedDigit()
+                        }.font(.caption.weight(.semibold))
+                        ProgressView(value: Double(min(day.cards, goal)), total: Double(goal)).tint(primary)
+                    }
+                } else {
+                    HStack {
+                        Label(day.studied ? "今日は学習済み" : "今日の1枚から", systemImage: day.studied ? "checkmark.circle.fill" : "plus.circle")
+                        Spacer()
+                        Text("今日 \(day.cards)枚")
+                    }.font(.caption.weight(.semibold))
+                }
+            } else {
+                Label("毎日の積み重ね", systemImage: "flame").font(.headline).foregroundStyle(primary)
+                Spacer(minLength: 0)
+                Text("アプリを開いて更新").font(.subheadline.weight(.semibold))
+                Text("最新の学習記録を確認しよう").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .privacySensitive()
+        .containerBackground(for: .widget) { Color(.systemBackground) }
+        .widgetURL(URL(string: entry.day?.studied == true ? "ankistudy://widget/progress" : "ankistudy://widget/home"))
+    }
+    private func week(_ day: WidgetStreakDay) -> some View {
+        HStack(spacing: 3) {
+            ForEach(0..<7, id: \.self) { index in
+                let date = Calendar.current.date(byAdding: .day, value: index - 6, to: day.date) ?? day.date
+                VStack(spacing: 5) {
+                    Text(index == 6 ? "今日" : date.formatted(.dateTime.weekday(.narrow))).font(.system(size: 11, weight: index == 6 ? .bold : .regular))
+                    Image(systemName: day.recent[index] ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 16)).foregroundStyle(day.recent[index] ? primary : Color.secondary.opacity(0.4))
+                    Text("\(Calendar.current.component(.day, from: date))").font(.system(size: 11)).monospacedDigit()
+                }
+                .frame(width: 22)
+                .lineLimit(1)
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("\(date.formatted(.dateTime.month().day()))、\(day.recent[index] ? "学習済み" : "未学習")")
+            }
+        }
+    }
+}
+struct StudyStreakWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "StudyStreakWidget", provider: StreakProvider()) { StreakWidgetView(entry: $0) }
+            .configurationDisplayName("毎日の積み重ね")
+            .description("連続学習と直近7日、今日の目標をひと目で。保存済みの学習記録を表示します。更新時刻はOSが調整します。")
+            .supportedFamilies([.systemSmall, .systemMedium])
+    }
+}
+#Preview("Streak・Small", as: .systemSmall) { StudyStreakWidget() } timeline: {
+    StreakEntry.sample
+    StreakEntry(date: Date(), day: WidgetStreakDay(date: Date(), streak: 6, cards: 0, recent: [true, true, true, true, true, true, false]), goal: 20)
+    StreakEntry(date: Date(), day: nil, goal: nil)
+}
+#Preview("Streak・Medium", as: .systemMedium) { StudyStreakWidget() } timeline: {
+    StreakEntry.sample
+    StreakEntry(date: Date(), day: WidgetStreakDay(date: Date(), streak: 7, cards: 20, recent: [true, true, true, true, true, true, true]), goal: 20)
+    StreakEntry(date: Date(), day: WidgetStreakDay(date: Date(), streak: 0, cards: 0, recent: [true, false, true, true, false, false, false]), goal: nil)
 }

@@ -75,7 +75,7 @@ enum WidgetProjection {
     #if DEBUG
     private(set) var projectionCount = 0
     #endif
-    init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind); WidgetCenter.shared.reloadTimelines(ofKind: "DailyCardWidget") }) {
+    init(file: WidgetSnapshotFile, reload: @escaping () -> Void = { WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.kind); WidgetCenter.shared.reloadTimelines(ofKind: "DailyCardWidget"); WidgetCenter.shared.reloadTimelines(ofKind: "StudyStreakWidget") }) {
         self.file = file; self.reload = reload
     }
     func publish(repository: StudyRepository, snapshot: HomeSnapshot, settings: StudySettings, now: Date,
@@ -104,6 +104,7 @@ enum WidgetProjection {
                 }
             }
             let dailyCard = try repository.dailyWidgetCard(cards: cards, logs: logs, settings: settings, now: now)
+            let streakDays = try repository.widgetStreakDays(now: now, settings: settings)
             job?.cancel(); generation += 1
             let generation = generation
             inFlight = cacheable ? key : nil; inFlightAt = now
@@ -118,6 +119,7 @@ enum WidgetProjection {
                 do {
                     var value = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
                     guard let self, !Task.isCancelled, self.generation == generation else { return }
+                    value.streakDays = streakDays
                     value.dailyCard = dailyCard
                     value.dailyCardExpiresAt = min(value.expiresAt, snapshot.nextRefresh, StudyDay(calendar: calendar, startHour: settings.dayStartHour).interval(containing: now).end)
                     try self.file.write(value)
