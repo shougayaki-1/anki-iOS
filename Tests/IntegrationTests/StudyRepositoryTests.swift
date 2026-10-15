@@ -3525,3 +3525,45 @@ extension StudyRepositoryTests {
         XCTAssertNil(store.failure)
     }
 }
+
+
+extension StudyRepositoryTests {
+    func testTypedDraftPreservesFixedCardAndAnswerLimitProgressClassification() throws {
+        for mode in [StudyMode.review, .new] {
+            let repo = try mode == .review ? dueReviewFixture(5) : fixture()
+            if mode == .new { for _ in 0..<5 { try create(repo, mode: .typing) } }
+            let store = try StudyStore(container: repo.context.container, clock: { self.now })
+            store.start(mode)
+            store.draft(mode: .typing)
+            let sessionID = try XCTUnwrap(store.repository.activitySessionID())
+            let fixed = mode == .review
+            func assertProgress(file: StaticString = #filePath, line: UInt = #line) {
+                XCTAssertEqual(store.review?.sessionProgressUsesCards, fixed, file: file, line: line)
+                XCTAssertEqual(store.review?.sessionProgressHeadline, fixed ? "残り5枚" : "上限まであと20回答", file: file, line: line)
+                XCTAssertEqual(store.review?.sessionProgressLabel, fixed ? "今回 0 / 5枚" : "0回答 / 上限20回答", file: file, line: line)
+            }
+            assertProgress()
+            store.draft(text: "あ") // Immediate buffer -> applyPendingTypedDraft reconstruction.
+            XCTAssertEqual(store.review?.typedDraft, "あ")
+            assertProgress()
+            try store.reload() // Pending input is reapplied to a fresh presentation.
+            assertProgress()
+            store.repository.save = { _ in throw Failure.save }
+            XCTAssertFalse(store.flushTypedDraft()) // Failed save also reapplies the buffer.
+            XCTAssertEqual(store.review?.typedDraft, "あ")
+            assertProgress()
+            store.repository.save = { try $0.save() }
+            XCTAssertTrue(store.flushTypedDraft())
+            XCTAssertEqual(try store.repository.session()?.typedDraft, "あ")
+            assertProgress()
+            store.draft() // The separate draft(...) presentation reconstruction.
+            assertProgress()
+            store.pause(); store.resume()
+            XCTAssertEqual(store.review?.typedDraft, "あ")
+            assertProgress()
+            XCTAssertEqual(try store.repository.activitySessionID(), sessionID)
+            XCTAssertEqual(try store.repository.sessionProgress()?.answered, 0)
+            XCTAssertTrue(try store.repository.logs().isEmpty)
+        }
+    }
+}

@@ -715,7 +715,8 @@ final class StudyStore {
                                            typedDraft: text ?? old.typedDraft, answerRevealed: revealed ?? old.answerRevealed,
                                            canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering, orderingUnavailable: old.orderingUnavailable,
                                            emptyState: old.emptyState, sessionProgress: old.sessionProgress,
-                                           visibleAnswerTotal: old.visibleAnswerTotal)
+                                           visibleAnswerTotal: old.visibleAnswerTotal,
+                                           sessionProgressUsesCards: old.sessionProgressUsesCards)
             }
             if revealed == true && !wasRevealed && !swipePrepared { haptics.play(.reveal, mode: settings.hapticsMode) }
         } catch { failure = error.localizedDescription }
@@ -747,7 +748,8 @@ final class StudyStore {
                                    typedDraft: pending.text, answerRevealed: old.answerRevealed,
                                    canUndo: old.canUndo, nextShortDue: old.nextShortDue, ordering: old.ordering,
                                    orderingUnavailable: old.orderingUnavailable, emptyState: old.emptyState,
-                                   sessionProgress: old.sessionProgress, visibleAnswerTotal: old.visibleAnswerTotal)
+                                   sessionProgress: old.sessionProgress, visibleAnswerTotal: old.visibleAnswerTotal,
+                                   sessionProgressUsesCards: old.sessionProgressUsesCards)
     }
     @discardableResult
     func flushTypedDraft() -> Bool {
