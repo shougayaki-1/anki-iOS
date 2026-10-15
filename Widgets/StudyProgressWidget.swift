@@ -111,8 +111,21 @@ struct DailyCardProvider: TimelineProvider {
 }
 struct DailyCardView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.showsWidgetContainerBackground) private var showsBackground
     let entry: DailyCardEntry
     var body: some View {
+        Group {
+            // Background removal also occurs outside StandBy; this layout fits those contexts too.
+            if family == .systemSmall && !showsBackground {
+                DailyCardGlanceView(entry: entry)
+            } else {
+                homeContent
+            }
+        }
+        .containerBackground(for: .widget) { Color(.systemBackground) }
+        .widgetURL(entry.card?.url() ?? URL(string: "ankistudy://widget/home")!)
+    }
+    private var homeContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("今日の1枚").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
@@ -148,8 +161,47 @@ struct DailyCardView: View {
                 Spacer(minLength: 0)
             }
         }
-        .containerBackground(for: .widget) { Color(.systemBackground) }
-        .widgetURL(entry.card?.url() ?? URL(string: "ankistudy://widget/home")!)
+    }
+}
+
+// A question-only presentation. The provider, selection and navigation remain shared.
+struct DailyCardGlanceView: View {
+    let entry: DailyCardEntry
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("今日の1枚").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if let card = entry.card {
+                ViewThatFits(in: .vertical) {
+                    if !card.requiresApp {
+                        question(card.question, size: 28)
+                        question(card.question, size: 24)
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Image(systemName: card.requiresApp ? "photo" : "text.alignleft")
+                            .font(.title2)
+                        Text("アプリで問題を見る")
+                            .font(.title3.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                .privacySensitive()
+                Text("タップして確認").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Spacer(minLength: 0)
+                Label(entry.available ? "今の学習はひと区切り" : "アプリを開いて更新",
+                      systemImage: entry.available ? "checkmark.circle" : "arrow.clockwise")
+                    .font(.title3.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+        }
+        .foregroundStyle(.primary)
+    }
+    private func question(_ text: String, size: CGFloat) -> some View {
+        Text(text)
+            .font(.system(size: size, weight: .semibold, design: .rounded))
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 struct DailyCardWidget: Widget {
