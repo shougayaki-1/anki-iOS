@@ -521,11 +521,42 @@ struct AchievementStatistics {
     }
 }
 
+struct GardenGrowth {
+    let logID: UUID
+    let cardID: UUID
+    let from: GardenStage
+    let to: GardenStage
+    let payload: Data
+}
+
+// Presentation classification shares MatureCards; no time-dependent FSRS estimates.
+enum GardenStage: Int, CaseIterable, Identifiable {
+    case seed, sprout, plant, flower
+    var id: Int { rawValue }
+    var title: String { ["種", "芽", "若い植物", "花"][rawValue] }
+    var definition: String {
+        ["未学習 · New", "学習中・再学習中", "Review · Stability 21日未満", "長期定着 · Review · Stability 21日以上"][rawValue]
+    }
+    static func classify(state: String, stability: Double) -> Self {
+        if state == "new" { return .seed }
+        if state == "learning" || state == "relearning" { return .sprout }
+        return MatureCards.contains(state: state, stability: stability, suspended: false) ? .flower : .plant
+    }
+}
+
 // Exhaustive, disjoint current-card categories; maturation has one shared owner.
 struct MemoryGrowthGroup: Identifiable {
-    let id: String
-    let explanation: String
+    let stage: GardenStage
+    var id: String { stage.title }
+    var explanation: String { stage.definition }
     let cards: [MemoryCard]
+
+    static func garden(cards: [MemoryCard]) -> [Self] {
+        let grouped = Dictionary(grouping: cards) { GardenStage.classify(state: $0.state, stability: $0.stability) }
+        return GardenStage.allCases.map { stage in
+            Self(stage: stage, cards: grouped[stage] ?? [])
+        }
+    }
 }
 
 

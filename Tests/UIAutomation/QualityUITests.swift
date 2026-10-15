@@ -1,6 +1,69 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testGardenRealSavedGrowthVideo() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-garden", "growth"]
+        app.launch()
+        XCTAssertTrue(app.buttons["start-new"].waitForExistence(timeout: 15))
+        app.buttons["start-new"].tap()
+        XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
+        app.buttons["revealAnswer"].tap(); app.buttons["grade-3"].tap()
+        app.buttons["pauseStudy"].tap()
+        app.tabBars.buttons["記録"].tap()
+        XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 15))
+        let scene = app.descendants(matching: .any)["memoryGarden"].firstMatch
+        for _ in 0..<14 {
+            if scene.exists, scene.frame.minY >= 70, scene.frame.maxY < app.frame.height - 100 { break }
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.72)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.58)))
+        }
+        XCTAssertTrue(app.staticTexts["gardenGrowthStatus"].waitForExistence(timeout: 5))
+        attach(app, name: "issue104-real-growth")
+        app.buttons["garden-芽"].tap()
+        app.buttons["gardenCards"].tap()
+        XCTAssertTrue(app.navigationBars["根拠のカード"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertFalse(app.staticTexts["gardenGrowthStatus"].exists)
+        app.terminate()
+    }
+
+    func testGardenVisualArtifactsAndNavigation() {
+        let app = XCUIApplication()
+        func launch(_ scenario: String, extra: [String] = []) {
+            app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-garden", scenario, "-study-test-shortcut", "progress"] + extra
+            app.launch()
+            XCTAssertTrue(app.buttons["dashboardSummary"].waitForExistence(timeout: 20))
+            for _ in 0..<6 where !app.buttons["garden-花"].isHittable { app.swipeUp(velocity: .slow) }
+            if scenario != "empty" {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.35)).press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.48)))
+            }
+        }
+        launch("mixed")
+        attach(app, name: "issue104-mixed")
+        app.buttons["garden-花"].tap()
+        attach(app, name: "issue104-selected")
+        app.buttons["gardenCards"].tap()
+        XCTAssertTrue(app.navigationBars["根拠のカード"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "花の記憶")).firstMatch.exists)
+        attach(app, name: "issue104-card-list")
+        app.terminate()
+        launch("mixed", extra: ["-study-test-dark"])
+        attach(app, name: "issue104-dark")
+        app.terminate()
+        launch("mature")
+        attach(app, name: "issue104-mature")
+        app.terminate()
+        launch("empty")
+        attach(app, name: "issue104-empty")
+        app.terminate()
+        launch("scale", extra: ["-study-test-reduce-motion"])
+        attach(app, name: "issue104-3000-reduce-motion")
+        app.buttons["garden-芽"].tap()
+        app.buttons["gardenCards"].tap()
+        XCTAssertTrue(app.navigationBars["根拠のカード"].waitForExistence(timeout: 5))
+        app.terminate()
+    }
+
     func testForecastComparisonPeriodDeckAndScreenshot() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-dashboard", "-study-test-shortcut", "progress"]
@@ -57,11 +120,12 @@ final class QualityUITests: XCTestCase {
             for _ in 0..<12 where !element.isHittable { app.swipeUp(velocity: .slow) }
             XCTAssertTrue(element.isHittable)
         }
-        let growth = app.buttons["growth-長期定着"]
+        let growth = app.buttons["garden-花"]
         reveal(growth)
         attach(app, name: "issue100-growth")
         growth.tap()
-        XCTAssertTrue(app.navigationBars["長期定着"].waitForExistence(timeout: 5))
+        app.buttons["gardenCards"].tap()
+        XCTAssertTrue(app.navigationBars["根拠のカード"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.firstMatch.tap()
         let day = app.buttons["calendarDay-2"]
         reveal(day); day.tap()

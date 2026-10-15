@@ -149,6 +149,10 @@ struct AppRootView: View {
                    let index = args.firstIndex(of: "-study-test-store"), args.count > index + 1 {
                     try UITestFixtures.populateDeckUpdate(store, name: args[index + 1])
                 }
+                if studyURL != nil, let index = args.firstIndex(of: "-study-test-garden"), args.count > index + 1, let store,
+                   let name = args.firstIndex(of: "-study-test-store"), args.count > name + 1, UUID(uuidString: args[name + 1]) != nil {
+                    try UITestFixtures.populateGarden(store, scenario: args[index + 1])
+                }
                 if studyURL != nil, args.contains("-study-test-dashboard"), let store {
                     try UITestFixtures.populateDashboard(store)
                 }

@@ -2,6 +2,25 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testGardenClassificationBoundaryAndBoundedDensity() {
+        let states: [(String, Double, GardenStage)] = [("new", 99, .seed), ("learning", 99, .sprout), ("relearning", 99, .sprout), ("review", 20.999, .plant), ("review", 21, .flower), ("review", 100, .flower)]
+        let cards = states.map { MemoryCard(state: $0.0, id: UUID(), title: "Q", stability: $0.1, difficulty: 5, retrievability: 0.9) }
+        XCTAssertEqual(cards.map { GardenStage.classify(state: $0.state, stability: $0.stability) }, states.map { $0.2 })
+        let groups = MemoryGrowthGroup.garden(cards: cards)
+        XCTAssertEqual(groups.map { $0.cards.count }, [1, 2, 1, 2])
+        XCTAssertEqual(Set(groups.flatMap { $0.cards.map(\.id) }), Set(cards.map(\.id)))
+        XCTAssertEqual(MemoryGrowthGroup.garden(cards: []).map { $0.cards.count }, [0, 0, 0, 0])
+        XCTAssertTrue(MemoryGardenScene.specimens(counts: [0, 0, 0, 0]).isEmpty)
+        XCTAssertEqual(MemoryGardenScene.specimens(counts: [1, 0, 0, 0]), [.seed])
+        let start = ProcessInfo.processInfo.systemUptime
+        for _ in 0..<1000 {
+            let plants = MemoryGardenScene.specimens(counts: [600, 600, 900, 900])
+            XCTAssertEqual(plants.count, 40)
+            XCTAssertEqual(GardenStage.allCases.map { stage in plants.filter { $0 == stage }.count }, [8, 8, 12, 12])
+        }
+        print("GARDEN_LAYOUT 3000 cards, 1000 layouts ms=\((ProcessInfo.processInfo.systemUptime - start) * 1000), specimens=40")
+    }
+
     private var insightCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Asia/Tokyo")!
