@@ -6,3 +6,11 @@ DerivedData/
 xcuserdata/
 *.xcresult
 
+
+# Local distribution artifacts and signing material
+*.xcarchive/
+*.ipa
+*.dSYM/
+*.mobileprovision
+*.p12
+*.p8
