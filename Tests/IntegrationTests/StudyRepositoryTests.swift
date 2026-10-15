@@ -1239,6 +1239,10 @@ final class StudyRepositoryTests: XCTestCase {
             for _ in 0..<8 { try create(repo) }
             try repo.start(mode: mode, answerLimit: 20, now: now)
             XCTAssertEqual(try repo.presentation(now: now)?.visibleAnswerTotal, 20)
+            let initial = try XCTUnwrap(repo.presentation(now: now))
+            XCTAssertFalse(initial.sessionProgressUsesCards)
+            XCTAssertEqual(initial.sessionProgressHeadline, "上限まであと20回答")
+            XCTAssertEqual(initial.sessionProgressLabel, "0回答 / 上限20回答")
             for _ in 0..<8 { try revealAndGrade(repo, grade: .easy, date: now) }
             let finished = try XCTUnwrap(repo.presentation(now: now))
             XCTAssertNil(finished.card)
@@ -1246,6 +1250,9 @@ final class StudyRepositoryTests: XCTestCase {
             XCTAssertEqual(finished.sessionProgress?.limit, 20)
             XCTAssertEqual(finished.visibleAnswerTotal, 20)
             XCTAssertEqual(finished.emptyState?.reason, .complete)
+            XCTAssertEqual(finished.sessionProgressHeadline, "8回答を記録")
+            XCTAssertEqual(finished.sessionProgressLabel, "8回答 / 上限20回答")
+            XCTAssertFalse(finished.sessionProgressAccessibilityValue.contains("残り"))
         }
     }
 
@@ -1272,6 +1279,8 @@ final class StudyRepositoryTests: XCTestCase {
         XCTAssertNil(finished.card)
         XCTAssertEqual(finished.emptyState?.reason, .complete)
         XCTAssertEqual(try repo.logs().count, 20)
+        XCTAssertEqual(finished.sessionProgressHeadline, "上限の20回答に到達")
+        XCTAssertEqual(finished.emptyState?.title, "上限の20回答に達しました")
         XCTAssertTrue(finished.canUndo)
         try repo.undo(now: now)
         XCTAssertEqual(try repo.presentation(now: now)?.sessionProgress?.remaining, 1)
@@ -3373,6 +3382,10 @@ extension StudyRepositoryTests {
         XCTAssertTrue(initial.state.fixedCards)
         XCTAssertEqual(initial.state.total, 3)
         XCTAssertEqual(initial.state.progress, "0 / 3枚")
+        let fixedDisplay = try XCTUnwrap(repo.presentation(now: now))
+        XCTAssertTrue(fixedDisplay.sessionProgressUsesCards)
+        XCTAssertEqual(fixedDisplay.sessionProgressHeadline, "残り3枚")
+        XCTAssertEqual(fixedDisplay.sessionProgressLabel, "今回 0 / 3枚")
         try revealAndGrade(repo, grade: .again, date: now)
         XCTAssertEqual(try repo.activitySnapshot(now: now, foreground: true)?.state.answered, 1)
         let reopened = StudyRepository(container: repo.context.container)
@@ -3394,6 +3407,9 @@ extension StudyRepositoryTests {
         XCTAssertNil(repeated.state.total)
         XCTAssertFalse(repeated.state.fixedCards)
         XCTAssertEqual(repeated.state.progress, "2回答")
+        let unlimitedDisplay = try XCTUnwrap(fresh.presentation(now: due))
+        XCTAssertEqual(unlimitedDisplay.sessionProgressHeadline, "今回2回答を記録")
+        XCTAssertEqual(unlimitedDisplay.sessionProgressLabel, "2回答")
         XCTAssertEqual(repeated.state.answered, try fresh.sessionProgress()?.answered)
     }
 

@@ -12,13 +12,13 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-1"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 1 / 5問")
+        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 1 / 5枚")
         attach(app, "Issue233-session-progress")
         app.buttons["pauseStudy"].tap()
         XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 10))
         app.buttons["resumeStudy"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 1 / 5問")
+        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 1 / 5枚")
         XCUIDevice.shared.press(.home)
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         XCTAssertTrue(springboard.wait(for: .runningForeground, timeout: 10))
@@ -28,7 +28,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["resumeStudy"].waitForExistence(timeout: 15))
         app.buttons["resumeStudy"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 1 / 5問")
+        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 1 / 5枚")
         app.buttons["pauseStudy"].tap()
         app.tabBars.buttons["設定"].tap()
         let toggle = app.switches["liveActivityEnabled"]
@@ -44,7 +44,7 @@ final class StudyUITests: XCTestCase {
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
         app.buttons["revealAnswer"].tap(); app.buttons["grade-1"].tap()
         XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
-        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 2 / 5問")
+        XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 2 / 5枚")
         app.terminate()
     }
 
@@ -58,18 +58,18 @@ final class StudyUITests: XCTestCase {
             var questions = Set<String>()
             for index in 0..<5 {
                 XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
-                XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 \(index) / 5問")
+                XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 \(index) / 5枚")
                 questions.insert(app.staticTexts["reviewQuestion"].label)
                 app.buttons["revealAnswer"].tap()
                 app.buttons["grade-1"].tap()
             }
             XCTAssertEqual(questions.count, 5)
             XCTAssertTrue(app.staticTexts["reviewEmptyTitle"].waitForExistence(timeout: 10))
-            XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の5問を完了しました")
-            XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 5 / 5問")
+            XCTAssertEqual(app.staticTexts["reviewEmptyTitle"].label, "今回の5枚を完了しました")
+            XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 5 / 5枚")
             app.buttons["undoReview"].tap()
             XCTAssertTrue(app.buttons["revealAnswer"].waitForExistence(timeout: 10))
-            XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 4 / 5問")
+            XCTAssertEqual(app.staticTexts["sessionProgress"].label, "今回 4 / 5枚")
             app.terminate()
         }
     }
@@ -622,14 +622,14 @@ final class StudyUITests: XCTestCase {
         app.buttons["start-new"].tap()
         let remaining = app.staticTexts["remainingQuestions"]
         XCTAssertTrue(remaining.waitForExistence(timeout: 10))
-        XCTAssertEqual(remaining.label, "残り20問")
+        XCTAssertEqual(remaining.label, "上限まであと20回答")
         XCTAssertTrue(app.progressIndicators["sessionProgressBar"].exists)
         XCTAssertFalse(app.staticTexts["reviewGoalProgress"].exists)
         app.buttons["revealAnswer"].tap()
         app.buttons["grade-4"].tap()
-        XCTAssertEqual(remaining.label, "残り19問")
+        XCTAssertEqual(remaining.label, "上限まであと19回答")
         app.buttons["undoReview"].tap()
-        XCTAssertEqual(remaining.label, "残り20問")
+        XCTAssertEqual(remaining.label, "上限まであと20回答")
     }
 
     func testSharedHintsAllFormatsReverseExceptionAndCardReset() {

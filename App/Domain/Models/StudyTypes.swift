@@ -237,6 +237,32 @@ struct ReviewPresentation {
     var sessionProgress: SessionAnswerProgress? = nil
     // Current display denominator; the configured answer limit remains unchanged.
     var visibleAnswerTotal: Int? = nil
+    // Classification of the persisted #212 snapshot; never infer cards from mode alone.
+    var sessionProgressUsesCards = false
+
+    var sessionProgressHeadline: String {
+        guard let progress = sessionProgress else { return "" }
+        if progress.limit == 0 { return "今回\(progress.answered)回答を記録" }
+        if progress.isComplete {
+            return sessionProgressUsesCards ? "今回の\(progress.limit)枚を完了" : "上限の\(progress.limit)回答に到達"
+        }
+        if card == nil {
+            return sessionProgressUsesCards ? "\(progress.answered)枚を学習済み" : "\(progress.answered)回答を記録"
+        }
+        return sessionProgressUsesCards ? "残り\(progress.remaining ?? 0)枚" : "上限まであと\(progress.remaining ?? 0)回答"
+    }
+
+    var sessionProgressLabel: String {
+        guard let progress = sessionProgress else { return "" }
+        if progress.limit == 0 { return "\(progress.answered)回答" }
+        return sessionProgressUsesCards ? "今回 \(progress.answered) / \(progress.limit)枚" : "\(progress.answered)回答 / 上限\(progress.limit)回答"
+    }
+
+    var sessionProgressAccessibilityValue: String {
+        guard let progress = sessionProgress else { return "" }
+        let completed = sessionProgressUsesCards ? "\(progress.answered)枚学習済み" : "\(progress.answered)回答済み"
+        return "\(completed)、\(sessionProgressHeadline)"
+    }
 }
 
 // Count confirmed answers in this session, not the number of unique cards studied today.
