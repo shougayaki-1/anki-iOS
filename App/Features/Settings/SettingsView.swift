@@ -29,6 +29,10 @@ struct SettingsView: View {
                     Text("カードと学習履歴は端末内に保存します。機種変更の前にバックアップを書き出してください。")
                         .font(.footnote).foregroundStyle(Color("SecondaryText"))
                 }
+                Section("サポート・プライバシー") {
+                    Link("サポート", destination: URL(string: "https://anki.shoug.org/")!)
+                    Link("プライバシーポリシー", destination: URL(string: "https://anki.shoug.org/privacy")!)
+                }
                 StudySettingsSection(store: store)
                 Section("Live Activity") {
                     Toggle("学習の進捗を表示", isOn: Binding(get: { store.liveActivityEnabled }, set: { store.setLiveActivityEnabled($0) }))
