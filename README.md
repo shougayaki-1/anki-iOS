@@ -19,6 +19,12 @@ SwiftUI / SwiftData / FSRS-6 をベースに、ローカルファーストな間
 - 復習が必要な日のみ、ローカル通知でリマインド
 - サーバー・アカウント不要。端末内に保存し、バックアップ／復元に対応
 
+## 公式Webサイト
+
+[暗記ノート公式サイト](https://anki.shoug.org/) · [サポート](https://anki.shoug.org/support) · [プライバシーポリシー](https://anki.shoug.org/privacy)
+
+Webサイトは独立リポジトリで管理しています。[移行と旧ファイルの整理方針](docs/release/web-site-migration.md)を参照してください。
+
 ## 開発
 
 機能実装時は **[docs/requirements.md](docs/requirements.md)** を仕様の正本として扱ってください。
