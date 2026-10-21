@@ -111,6 +111,36 @@ enum UITestFixtures {
         try store.reload()
     }
 
+    @MainActor static func populateAchievementHistory(_ store: StudyStore, scenario: String) throws {
+        let repo = store.repository, now = store.clock()
+        guard try repo.options().achievements == nil else { return }
+        var records: [AchievementRecord] = []
+        func append(_ kind: AchievementKind, value: Int, threshold: Int = 0, offset: Int) {
+            let date = Calendar.current.date(byAdding: .day, value: offset, to: now)!
+            records.append(AchievementRecord(id: UUID().uuidString, kind: kind,
+                studyDay: AchievementProgress.dayKey(date, calendar: .current, startHour: 4),
+                threshold: threshold, value: value, occurredAt: date, sourceLogID: UUID(),
+                timeZoneID: TimeZone.current.identifier, startHour: 4, displayedAt: date))
+        }
+        // Already displayed records survive a broken streak; current progress stays at zero.
+        if scenario != "empty" {
+            for day in 1...10 {
+                let offset = day - 13
+                append(.firstStudyToday, value: 1, offset: offset)
+                append(.streakAdvanced, value: day, threshold: AchievementProgress.streakMilestones.contains(day) ? day : 0, offset: offset)
+                if day >= 7 { append(.dailyGoalReached, value: 20, threshold: 20, offset: offset) }
+                if day == 10 { append(.matureMilestone, value: 50, threshold: 50, offset: offset) }
+            }
+        }
+        try repo.transaction {
+            var options = try repo.options(); options.achievements = records
+            try repo.writeOptionsInTransaction(options)
+        }
+        store.selectedTab = 2
+        store.showingAchievementHistory = true
+        try store.reload()
+    }
+
     @MainActor static func populateCelebrationFlow(_ store: StudyStore) throws {
         guard try store.repository.notes().isEmpty else { return }
         let deck = try store.repository.decks()[0].id
@@ -146,10 +176,10 @@ enum UITestFixtures {
         return CelebrationSummary(events: events, days: days)!
     }
 
-    @MainActor static func configureAccessibilityScene(largeText: Bool = true) {
+    @MainActor static func configureAccessibilityScene(largeText: Bool = true, dark: Bool = true) {
         for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
             if largeText { scene.traitOverrides.preferredContentSizeCategory = .accessibilityExtraExtraExtraLarge }
-            scene.traitOverrides.userInterfaceStyle = .dark
+            scene.traitOverrides.userInterfaceStyle = dark ? .dark : .light
         }
     }
     @MainActor static func populateLibraryTree(_ repository: StudyRepository, now: Date) throws {

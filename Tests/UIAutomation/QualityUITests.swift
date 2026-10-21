@@ -1,6 +1,42 @@
 import XCTest
 
 final class QualityUITests: XCTestCase {
+    func testAchievementHistoryTimelineAndEmptyState() {
+        let app = XCUIApplication()
+        func capture(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+        }
+        for dark in [false, true] {
+            app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-achievement-history", "mixed"]
+                + [dark ? "-study-test-dark" : "-study-test-light"]
+            app.launch()
+            XCTAssertTrue(app.staticTexts["獲得した節目"].waitForExistence(timeout: 20))
+            XCTAssertTrue(app.staticTexts["0日"].firstMatch.exists)
+            XCTAssertTrue(app.staticTexts["長期定着（推定）50枚"].exists)
+            capture(dark ? "achievement-history-dark" : "achievement-history-light")
+            app.buttons["獲得した節目を見る"].tap()
+            XCTAssertTrue(app.staticTexts["7日連続達成"].exists)
+            XCTAssertFalse(app.staticTexts["10日連続達成"].exists)
+            app.buttons["獲得した節目を見る"].tap()
+            app.buttons.matching(NSPredicate(format: "label == %@", "ほか3件の達成")).firstMatch.tap()
+            XCTAssertTrue(app.staticTexts["10日連続達成"].exists)
+            capture(dark ? "achievement-history-details-dark" : "achievement-history-details-light")
+            for _ in 0..<8 { app.swipeUp() }
+            let help = app.buttons["達成履歴の見方"]
+            XCTAssertTrue(help.exists)
+            help.tap()
+            app.swipeUp()
+            XCTAssertTrue(app.staticTexts["長期定着はReview状態かつStabilityが21日以上のFSRS推定で、永久記憶を保証しません。"].isHittable)
+            capture(dark ? "achievement-history-bottom-dark" : "achievement-history-bottom-light")
+            app.terminate()
+        }
+        app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-achievement-history", "empty", "-study-test-light"]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["これからの達成がここに残ります。"].waitForExistence(timeout: 20))
+        capture("achievement-history-empty")
+    }
+
     func testGardenRealSavedGrowthVideo() {
         let app = XCUIApplication()
         app.launchArguments = ["-study-test-store", UUID().uuidString, "-study-test-garden", "growth"]

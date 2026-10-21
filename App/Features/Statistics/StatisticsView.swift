@@ -473,21 +473,175 @@ struct MemoryEvidenceCardsView: View {
     }
 }
 
+// Display-only grouping: stored studyDay is authoritative, including its original boundary.
+struct AchievementHistoryProjection {
+    struct Day: Identifiable {
+        let id: String
+        let records: [AchievementRecord]
+        var primary: AchievementRecord { records[0] }
+    }
+    let days: [Day]
+    let badges: [AchievementRecord]
+
+    init(records: [AchievementRecord]) {
+        days = Dictionary(grouping: records, by: \.studyDay).map { day, records in
+            Day(id: day, records: records.sorted {
+                let a = CelebrationSummary.priority(AchievementEvent(record: $0))
+                let b = CelebrationSummary.priority(AchievementEvent(record: $1))
+                if a != b { return a > b }
+                if $0.occurredAt != $1.occurredAt { return $0.occurredAt > $1.occurredAt }
+                return $0.id < $1.id
+            })
+        }.sorted { $0.id > $1.id }
+        var earned = Set<String>()
+        badges = days.flatMap(\.records).filter { record in
+            guard Self.isMilestone(record) else { return false }
+            let value = record.kind == .streakAdvanced ? record.value : record.threshold
+            return earned.insert("\(record.kind.rawValue)-\(value)").inserted
+        }
+    }
+
+    static func isMilestone(_ record: AchievementRecord) -> Bool {
+        switch record.kind {
+        case .streakAdvanced:
+            return record.value > 1 && AchievementProgress.streakMilestones.contains(record.value)
+        case .matureMilestone:
+            return AchievementProgress.matureMilestones.contains(record.threshold)
+        default: return false
+        }
+    }
+
+    static func symbol(_ record: AchievementRecord) -> String {
+        switch record.kind {
+        case .firstStudyToday: return "checkmark"
+        case .streakAdvanced: return isMilestone(record) ? "medal.fill" : "flame"
+        case .dailyGoalReached: return "target"
+        case .matureMilestone: return "leaf.fill"
+        }
+    }
+}
+
 struct AchievementHistoryView: View {
     @Bindable var store: StudyStore
+    @State private var projection = AchievementHistoryProjection(records: [])
+
     var body: some View {
         List {
-            if store.statisticsLoading { ProgressView("達成履歴を読み込み中") }
-            if let error = store.statisticsError { Text(error); Button("再試行") { store.refreshStatistics() } }
-            if !store.statisticsLoading && store.achievementHistory.isEmpty { Text("これからの達成がここに残ります。") }
-            ForEach(store.achievementHistory) { record in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(record.title)
-                    Text(record.studyDay).font(.caption).foregroundStyle(.secondary)
+            if store.statisticsLoading {
+                ProgressView("達成履歴を読み込み中")
+            } else if let error = store.statisticsError {
+                Text(error)
+                Button("再試行") { store.refreshStatistics() }
+            } else {
+                summary
+                if projection.days.isEmpty {
+                    ContentUnavailableView("これからの達成がここに残ります。", systemImage: "medal",
+                        description: Text("学習した日の足あとを、ここで振り返れます。"))
+                } else {
+                    Section("日付別の達成") {
+                        ForEach(projection.days) { day in
+                            AchievementDayRow(day: day)
+                                .listRowSeparator(.hidden)
+                        }
+                    }
                 }
             }
-            Text("達成時の記録です。現在の実績はUndo・カードの変更で変わります。長期定着はReview状態かつStabilityが21日以上のFSRS推定で、永久記憶を保証しません。")
+            Section {
+                DisclosureGroup("達成履歴の見方") {
+                    Text("達成時の記録です。現在の実績はUndo・カードの変更で変わります。獲得した節目は過去の記録で、現在の連続学習日数とは異なります。")
+                    Text("日付は記録時の学習日（通常は午前4時区切り）です。学習日の開始時刻やタイムゾーンを変更しても、過去の記録の日付は変わりません。")
+                    Text("長期定着はReview状態かつStabilityが21日以上のFSRS推定で、永久記憶を保証しません。")
+                }
                 .font(.footnote).foregroundStyle(.secondary)
-        }.navigationTitle("達成履歴")
+                .accessibilityIdentifier("achievementHistoryHelp")
+            }
+        }
+        .navigationTitle("達成履歴")
+        .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: store.achievementHistory, initial: true) { _, records in
+            projection = AchievementHistoryProjection(records: records)
+        }
+    }
+
+    private var summary: some View {
+        Section {
+            HStack(alignment: .top, spacing: 12) {
+                if let progress = store.achievementProgress {
+                    metric("現在の連続", value: "\(progress.currentStreak)日")
+                    metric("過去最長", value: "\(progress.longestStreak)日")
+                }
+                metric("獲得した節目", value: "\(projection.badges.count)種類")
+            }
+            .padding(.vertical, 4)
+            .accessibilityIdentifier("achievementHistorySummary")
+            if !projection.badges.isEmpty {
+                DisclosureGroup("獲得した節目を見る") {
+                    ForEach(projection.badges) { record in
+                        Label {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(record.title).font(.subheadline)
+                                Text("記録日 \(record.studyDay)").font(.caption).foregroundStyle(.secondary)
+                            }
+                        } icon: {
+                            Image(systemName: AchievementHistoryProjection.symbol(record)).foregroundStyle(Color.orange)
+                        }
+                    }
+                }
+                .font(.subheadline)
+            }
+        } header: {
+            Text("全デッキの実績")
+        }
+    }
+
+    private func metric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(value).font(.title3.bold()).foregroundStyle(Color.accentColor)
+            Text(title).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct AchievementDayRow: View {
+    let day: AchievementHistoryProjection.Day
+    private var special: Bool { AchievementHistoryProjection.isMilestone(day.primary) }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(spacing: 8) {
+                Image(systemName: AchievementHistoryProjection.symbol(day.primary))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(special ? Color.orange : Color.accentColor)
+                    .frame(width: 32, height: 32)
+                    .background((special ? Color.orange : Color.accentColor).opacity(0.1), in: Circle())
+                Rectangle().fill(Color.secondary.opacity(0.18)).frame(width: 1)
+            }
+            .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(day.id).font(.caption).foregroundStyle(.secondary)
+                Text(day.primary.title)
+                    .font(special ? .headline : .subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                if special {
+                    Text("節目の達成").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                }
+                if day.records.count > 1 {
+                    DisclosureGroup("ほか\(day.records.count - 1)件の達成") {
+                        ForEach(Array(day.records.dropFirst())) { record in
+                            Label(record.title, systemImage: AchievementHistoryProjection.symbol(record))
+                                .font(.subheadline).padding(.vertical, 4)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .font(.subheadline)
+                    .accessibilityIdentifier("achievementDetails-\(day.id)")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.bottom, 12)
+        }
+        .accessibilityIdentifier("achievementDay-\(day.id)")
     }
 }

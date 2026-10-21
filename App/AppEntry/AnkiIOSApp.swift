@@ -108,6 +108,7 @@ struct AppRootView: View {
             #if DEBUG
             if ProcessInfo.processInfo.arguments.contains("-study-test-accessibility") { UITestFixtures.configureAccessibilityScene() }
             else if ProcessInfo.processInfo.arguments.contains("-study-test-dark") { UITestFixtures.configureAccessibilityScene(largeText: false) }
+            else if ProcessInfo.processInfo.arguments.contains("-study-test-light") { UITestFixtures.configureAccessibilityScene(largeText: false, dark: false) }
             #endif
             // Each UI test gets its own on-disk store, reused across process restarts.
             var storeURL: URL?
@@ -152,6 +153,10 @@ struct AppRootView: View {
                 if studyURL != nil, let index = args.firstIndex(of: "-study-test-garden"), args.count > index + 1, let store,
                    let name = args.firstIndex(of: "-study-test-store"), args.count > name + 1, UUID(uuidString: args[name + 1]) != nil {
                     try UITestFixtures.populateGarden(store, scenario: args[index + 1])
+                }
+                if studyURL != nil, let index = args.firstIndex(of: "-study-test-achievement-history"), args.count > index + 1, let store,
+                   let name = args.firstIndex(of: "-study-test-store"), args.count > name + 1, UUID(uuidString: args[name + 1]) != nil {
+                    try UITestFixtures.populateAchievementHistory(store, scenario: args[index + 1])
                 }
                 if studyURL != nil, args.contains("-study-test-dashboard"), let store {
                     try UITestFixtures.populateDashboard(store)
