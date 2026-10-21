@@ -2,6 +2,49 @@ import XCTest
 @testable import AnkiIOS
 
 final class StatisticsTests: XCTestCase {
+    func testAchievementHistoryGroupsStoredDaysAndPreservesEveryEvent() {
+        let date = insightNow
+        func record(_ id: String, _ kind: AchievementKind, _ value: Int, day: String = "2026-10-13", threshold: Int = 0) -> AchievementRecord {
+            AchievementRecord(id: id, kind: kind, studyDay: day, threshold: threshold, value: value,
+                occurredAt: date, sourceLogID: UUID(), timeZoneID: "Asia/Tokyo", startHour: 4)
+        }
+        // Equal timestamps on different stored days must never be regrouped by occurredAt.
+        let records = [record("first", .firstStudyToday, 1), record("normal", .streakAdvanced, 10),
+            record("goal", .dailyGoalReached, 20, threshold: 20), record("seven", .streakAdvanced, 7),
+            record("mature", .matureMilestone, 50, threshold: 50),
+            record("older", .streakAdvanced, 7, day: "2026-10-12"),
+            record("unknown", .matureMilestone, 25, day: "2026-10-11", threshold: 25)]
+        let result = AchievementHistoryProjection(records: records)
+        XCTAssertEqual(result.days.map(\.id), ["2026-10-13", "2026-10-12", "2026-10-11"])
+        XCTAssertEqual(result.days[0].records.map(\.id), ["seven", "mature", "goal", "normal", "first"])
+        XCTAssertEqual(Set(result.days.flatMap(\.records).map(\.id)), Set(records.map(\.id)))
+        XCTAssertEqual(result.badges.map(\.id), ["seven", "mature"])
+        XCTAssertFalse(AchievementHistoryProjection.isMilestone(records[1]))
+        XCTAssertFalse(AchievementHistoryProjection.isMilestone(records[6]))
+        XCTAssertEqual(AchievementHistoryProjection(records: [records[0]]).days[0].primary.id, "first")
+        XCTAssertTrue(AchievementHistoryProjection(records: []).days.isEmpty)
+        XCTAssertTrue(AchievementHistoryProjection(records: []).badges.isEmpty)
+        XCTAssertEqual(AchievementHistoryProjection(records: records.reversed()).days[0].records, result.days[0].records)
+    }
+
+    func testAchievementHistoryManyDaysAndFourAMBoundary() {
+        let calendar = insightCalendar
+        let boundary = calendar.date(from: DateComponents(year: 2026, month: 10, day: 14, hour: 4))!
+        let dates = [boundary.addingTimeInterval(-1), boundary]
+        let records = (0..<500).map { index in
+            let date = index < 2 ? dates[index] : calendar.date(byAdding: .day, value: -index, to: boundary)!
+            return AchievementRecord(id: "event-\(index)", kind: .firstStudyToday,
+                studyDay: AchievementProgress.dayKey(date, calendar: calendar, startHour: 4), threshold: 1,
+                value: 1, occurredAt: date, sourceLogID: UUID(), timeZoneID: "Asia/Tokyo", startHour: 4)
+        }
+        let result = AchievementHistoryProjection(records: records)
+        XCTAssertEqual(result.days.count, 500)
+        XCTAssertEqual(result.days[0].id, "2026-10-14")
+        XCTAssertEqual(result.days[1].id, "2026-10-13")
+        XCTAssertEqual(result.days.flatMap(\.records).count, records.count)
+        XCTAssertTrue(result.badges.isEmpty)
+    }
+
     func testGardenClassificationBoundaryAndBoundedDensity() {
         let states: [(String, Double, GardenStage)] = [("new", 99, .seed), ("learning", 99, .sprout), ("relearning", 99, .sprout), ("review", 20.999, .plant), ("review", 21, .flower), ("review", 100, .flower)]
         let cards = states.map { MemoryCard(state: $0.0, id: UUID(), title: "Q", stability: $0.1, difficulty: 5, retrievability: 0.9) }
